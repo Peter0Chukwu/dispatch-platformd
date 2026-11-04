@@ -11,6 +11,7 @@ import { Prisma, Prisma as PrismaNamespace } from '@prisma/client';
 import { PrismaService } from '../infra/prisma/prisma.service';
 import { AppError } from '../common/errors/app-error';
 import { PricingService, type Quote } from '../pricing/pricing.service';
+import { DispatchService } from '../dispatch/dispatch.service';
 
 const hashOtp = (value: string) => createHash('sha256').update(value).digest('hex');
 
@@ -139,6 +140,7 @@ export class DeliveriesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly pricing: PricingService,
+    private readonly dispatch: DispatchService,
   ) {}
 
   /** Price preview. No writes — safe to call on every pin drag. */
@@ -261,6 +263,21 @@ export class DeliveriesService {
     this.logger.log(
       `Delivery ${delivery.reference} created for ${formatNaira(delivery.chargeKobo)} (${quote.distanceKm} km)`,
     );
+
+    // Hand it to the offer engine immediately. A booking that silently sits
+    // unassigned because dispatch threw would be the worst outcome for the
+    // customer, so a dispatch failure is logged rather than thrown. The delivery
+    // stays PENDING, and `DispatchService.offerWaitingDeliveries` picks it up the
+    // next time a rider comes online (and from the scheduled sweep in Phase 6).
+    // rather than failing the booking the customer just paid for.
+    try {
+      const offers = await this.dispatch.offerDelivery(delivery.id);
+      this.logger.log(`Delivery ${delivery.reference} offered to ${offers} rider(s)`);
+    } catch (error) {
+      this.logger.error(
+        `Could not offer delivery ${delivery.reference}: ${(error as Error).message}`,
+      );
+    }
 
     return toDeliveryDto({ ...delivery, status: delivery.status as DeliveryStatus });
   }

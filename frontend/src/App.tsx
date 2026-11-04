@@ -12,6 +12,10 @@ import BookDeliveryPage from './pages/customer/BookDeliveryPage';
 import DeliveriesPage from './pages/customer/DeliveriesPage';
 import DeliveryDetailPage from './pages/customer/DeliveryDetailPage';
 import RiderHome from './pages/rider/RiderHome';
+import RiderOffersPage from './pages/rider/OffersPage';
+import RiderActiveJobPage from './pages/rider/ActiveJobPage';
+import RiderEarningsPage from './pages/rider/EarningsPage';
+import RiderDocumentsPage from './pages/rider/DocumentsPage';
 import AdminHome from './pages/admin/AdminHome';
 import { RedirectIfAuthenticated, RequireAuth, RequirePermission } from './routes/guards';
 import PortalPlaceholder from './pages/PortalPlaceholder';
@@ -43,9 +47,10 @@ export default function App() {
       {/* Rider portal */}
       <Route path="/rider" element={<RequireAuth audience="RIDER" />}>
         <Route index element={<RiderHome />} />
-        <Route path="offers" element={<PortalPlaceholder portal="Rider" phase="Phase 4" scope={['Delivery offers with countdown']} />} />
-        <Route path="active" element={<PortalPlaceholder portal="Rider" phase="Phase 4" scope={['Delivery workflow and proof of delivery']} />} />
-        <Route path="earnings" element={<PortalPlaceholder portal="Rider" phase="Phase 4" scope={['Earnings, commission and withdrawals']} />} />
+        <Route path="offers" element={<RiderOffersPage />} />
+        <Route path="active" element={<RiderActiveJobPage />} />
+        <Route path="earnings" element={<RiderEarningsPage />} />
+        <Route path="documents" element={<RiderDocumentsPage />} />
       </Route>
 
       {/* Admin portal */}

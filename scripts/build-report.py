@@ -9,6 +9,14 @@ from PIL import Image
 
 OUT = "documentation/BUILD-REPORT.html"
 SHOTS = [
+    ("screenshots/41-rider-offers-countdown.png", "Phase 4 — a live offer, with 18 of 20 seconds left", "This offer exists because a customer booked a delivery and the rider was online. The ring counts down from expiresAt on the server — the browser never decides when an offer dies. Accepting takes a Redis lock, so if two riders tap at once exactly one wins and the other is told the job is gone."),
+    ("screenshots/42-rider-active-job.png", "Phase 4 — the active job and its six-step workflow", "Accepted → at pickup → collected → in transit → at destination → delivered. Every step is a separate authenticated call that the shared state machine validates; the UI can only ever offer the next legal step, and a hand-crafted request that skips one gets 409."),
+    ("screenshots/43-rider-workflow-progress.png", "Phase 4 — the workflow after four recorded steps", "Each tap wrote a delivery_status_history row and a timestamp on the delivery. The customer's tracking page reads the same rows, so rider and customer can never disagree about where the package is."),
+    ("screenshots/44-rider-proof-of-delivery.png", "Phase 4 — proving delivery with a photo", "The recipient's 6-digit code is the default proof; a photo plus the recipient's name is the fallback. The photo is uploaded to private storage first and the completion call carries only its key. Completing twice returns 409 — the rider is paid exactly once."),
+    ("screenshots/45-rider-earnings.png", "Phase 4 — earnings, after real commission", "₦3,201.50 charge, 20% commission, ₦2,561.00 to the rider — frozen into the delivery at the moment of acceptance, so a later rate change cannot rewrite this rider's pay. Earnings sit PENDING for 24 hours before they become withdrawable."),
+    ("screenshots/46-rider-documents.png", "Phase 4 — documents, reviewed by a human", "Three documents, each approved by staff through /admin/riders/:id/documents/:id/review. The bytes live in private storage and are streamed only to a staff member holding rider:document:read — there is no public URL to guess."),
+    ("screenshots/47-rider-overview-mobile.png", "Phase 4 — the rider overview on a phone (390px)", "Riders work from phones. Availability is the first control on the screen, and it refuses to go online while a required document is unapproved — naming the document rather than failing silently."),
+    ("screenshots/40-rider-overview-online.png", "Phase 4 — the rider overview on desktop", "Every figure is read from the database: approval status, the online toggle, today's earnings, completed count and each document's review state. Nothing on this screen is a placeholder."),
     ("screenshots/33-book-review.png", "Phase 3 — review step with the server's price", "₦4,341.00 for Lekki → Yaba, 18.47 km. Every line — base fee, distance beyond the 2 free km, express surcharge — was computed in integer kobo by the API. The browser sent two coordinates and nothing else."),
     ("screenshots/34-delivery-detail.png", "Phase 3 — the booking, with its frozen price", "The breakdown on this page comes from deliveries.priceSnapshot, written at booking time. Changing the pricing rules tomorrow cannot rewrite what this customer was charged."),
     ("screenshots/35-deliveries-list.png", "Phase 3 — delivery history", "Real rows from the customer's own bookings, status-filtered and paginated by the API. Another customer's deliveries are unreachable: the query is scoped by customerId, and a probe returns 404 rather than confirming a reference exists."),
@@ -53,6 +61,9 @@ stats = {
     "accounts": count("SELECT count(*) FROM ledger_accounts"),
     "zones": count("SELECT count(*) FROM service_zones"),
     "deliveries": count("SELECT count(*) FROM deliveries"),
+    "riders": count("SELECT count(*) FROM riders"),
+    "offers": count("SELECT count(*) FROM delivery_assignments"),
+    "earnings": count("SELECT count(*) FROM rider_earnings"),
 }
 
 cards = []
@@ -71,7 +82,7 @@ html = f"""<!doctype html>
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Dispatch Platform — Build Report (Phase 3)</title>
+<title>Dispatch Platform — Build Report (Phase 4)</title>
 <style>
   :root {{
     --navy:#0B1F3A; --navy-2:#16304F; --green:#12B76A; --ink:#334155;
@@ -128,18 +139,19 @@ html = f"""<!doctype html>
 <body>
 <header>
   <div class="wrap">
-    <p class="eyebrow">Phase 3 complete · build report</p>
+    <p class="eyebrow">Phase 4 complete · build report</p>
     <h1>Dispatch &amp; Logistics Platform</h1>
     <p>Customer portal, rider portal and admin command centre on one NestJS API and one PostgreSQL
        database. This page is a static snapshot with real screenshots captured from the running
        application — it works without any server.</p>
     <div class="badges">
-      <span class="badge ok">✓ 102 tests passing</span>
+      <span class="badge ok">✓ 149 tests passing</span>
       <span class="badge ok">✓ API + database + Redis live</span>
       <span class="badge">NestJS 11 · Prisma 6 · PostgreSQL 17 · Redis 8</span>
       <span class="badge">React 19 · Vite 7 · Tailwind · TanStack Query</span>
       <span class="badge ok">✓ Argon2id · JWT 15 min · rotating refresh tokens</span>
       <span class="badge ok">✓ Prices computed server-side in integer kobo</span>
+      <span class="badge ok">✓ One rider per job, enforced by a Redis lock</span>
       <span class="badge">Captured {datetime.now(timezone.utc).strftime('%d %b %Y %H:%M UTC')}</span>
     </div>
   </div>
@@ -154,13 +166,52 @@ html = f"""<!doctype html>
     <div class="stat"><b>{stats['roles']}</b><span>staff roles</span></div>
     <div class="stat"><b>{stats['accounts']}</b><span>ledger accounts</span></div>
     <div class="stat"><b>{stats['zones']}</b><span>service zones</span></div>
-    <div class="stat"><b>{stats['deliveries']}</b><span>fake deliveries</span></div>
+    <div class="stat"><b>{stats['deliveries']}</b><span>deliveries</span></div>
+    <div class="stat"><b>{stats['riders']}</b><span>riders</span></div>
+    <div class="stat"><b>{stats['offers']}</b><span>offers sent</span></div>
+    <div class="stat"><b>{stats['earnings']}</b><span>rider earnings rows</span></div>
   </div>
   <div class="panel">
-    <p><strong>That last number is the important one.</strong> There are zero seeded deliveries, riders,
-    customers or naira of revenue. Everything else is real configuration: a permission matrix, a chart of
-    accounts, service zones and pricing rules. When Phase 3 adds bookings, every figure on every dashboard
-    will trace back to a genuine row.</p>
+    <p><strong>Every one of those rows was earned.</strong> The deliveries, riders, offers and earnings
+    in this database were created by running the product: the demo seed registers a real rider through the
+    public API, a staff member approves each document, the rider goes online, a customer books, the rider
+    accepts and delivers. No figure on any dashboard is typed in, and the seed refuses to invent revenue.</p>
+  </div>
+
+  <h2>Phase 4 — the rider portal, offers and the delivery workflow</h2>
+  <div class="panel">
+    <p><strong>Two riders can never hold the same job.</strong> That is the whole point of this phase, and
+    it is enforced in the database and in Redis rather than in the UI. An offer is a row with an expiry;
+    accepting it takes a short Redis lock, claims the rider's own assignment with a conditional update,
+    moves the delivery from PENDING to ACCEPTED in the same transaction, and only then expires the rival
+    offers. A loser of the race gets a clean <code>409 DELIVERY_TAKEN</code> — never a 500, never a double
+    assignment.</p>
+    <table>
+      <tr><th>Rule</th><th>How it works</th></tr>
+      <tr><td>Offer window</td><td>20 seconds by default (<code>DISPATCH_OFFER_TIMEOUT_SECONDS</code>). The deadline is stored on the row; the countdown in the browser is display only.</td></tr>
+      <tr><td>Who gets offered</td><td>Approved riders in the delivery's branch who are ONLINE, under their concurrent-job limit, ranked by haversine distance from their latest ping (or their zone centre, pushed down the list, if the ping is stale). The best three are offered.</td></tr>
+      <tr><td>Accepting</td><td>Redis <code>SET NX PX</code> token lock → conditional <code>updateMany</code> on the rider's own assignment → conditional delivery claim <code>PENDING → ACCEPTED</code> → rival offers expired <em>after</em> commit.</td></tr>
+      <tr><td>Expiry and refusal</td><td>An expired offer is swept and can be re-offered later; an explicit refusal is respected and that rider is never offered the same job again. Both leave the delivery waiting for someone else.</td></tr>
+      <tr><td>Someone must be online</td><td>A paid booking placed while every rider is offline is not stranded: going online triggers a sweep that offers waiting deliveries immediately.</td></tr>
+      <tr><td>Commission</td><td>Percentage from the pricing rule, frozen into <code>deliveries.commissionSnapshot</code> at acceptance. Changing the rate tomorrow cannot change what this rider is owed.</td></tr>
+      <tr><td>Proof of delivery</td><td>The recipient's 6-digit code (SHA-256, 5 attempts) or a photo plus the recipient's name. Either way the delivery completes once and the earning is written once.</td></tr>
+      <tr><td>Going online</td><td>Refused with a specific reason when the account is not approved, the account is suspended, or a required document is not approved — and it names the missing document.</td></tr>
+    </table>
+  </div>
+
+  <h2>Phase 4 — the admin side of onboarding</h2>
+  <div class="panel">
+    <p>A rider cannot approve themselves. Staff review each document and then the application, and both
+    decisions are written to the audit trail with before/after values. The Phase 5 admin screens will call
+    exactly these endpoints.</p>
+    <table>
+      <tr><th>Rule</th><th>How it works</th></tr>
+      <tr><td>Permissions, not one big admin pass</td><td>Reading the queue needs <code>rider:read</code>, reviewing or approving needs <code>rider:approve</code>, and streaming a document's bytes needs <code>rider:document:read</code> — a support agent holds none of them.</td></tr>
+      <tr><td>Documents are private</td><td>Stored under <code>riders/&lt;id&gt;/documents/</code> with no public URL. The only read path is an authenticated, permission-checked endpoint that returns <code>Cache-Control: private, no-store</code>.</td></tr>
+      <tr><td>No approval without papers</td><td>Approving a rider while any required document is unapproved returns <code>409 DOCUMENTS_INCOMPLETE</code> naming them — the same rule the rider's own "go online" check uses.</td></tr>
+      <tr><td>Rejection needs a reason</td><td>The rider reads it. A re-upload resets the document to PENDING so nobody is stuck forever.</td></tr>
+      <tr><td>Suspension takes effect immediately</td><td>Status becomes SUSPENDED, availability is forced OFFLINE, and the rider's next attempt to go online is refused.</td></tr>
+    </table>
   </div>
 
   <h2>Phase 3 — booking and the pricing engine</h2>
@@ -240,11 +291,15 @@ html = f"""<!doctype html>
       <tr><td>Roles, permissions and guards (5 roles, 37 permissions)</td><td class="yes">Built &amp; tested</td><td><code>auth/guards/</code></td></tr>
       <tr><td>Audit trail of sensitive actions</td><td class="yes">Built &amp; tested</td><td><code>GET /admin/audit-logs</code></td></tr>
       <tr><td>Rate limiting + account lockout</td><td class="yes">Built &amp; tested</td><td><code>common/rate-limit/</code></td></tr>
-      <tr><td>Rider portal screens (documents, offers, jobs)</td><td class="no">Phase 4</td><td>—</td></tr>
+      <tr><td>Rider portal screens (overview, offers, active job, earnings, documents)</td><td class="yes">Built &amp; tested</td><td><code>frontend/src/pages/rider/</code></td></tr>
       <tr><td>Admin command centre screens</td><td class="no">Phase 5</td><td>—</td></tr>
       <tr><td>Booking wizard, quote, price snapshot, cancel</td><td class="yes">Built &amp; tested</td><td><code>backend/src/pricing/</code> · <code>src/deliveries/</code></td></tr>
       <tr><td>Delivery history and detail with a real timeline</td><td class="yes">Built &amp; tested</td><td><code>frontend/src/pages/customer/</code></td></tr>
-      <tr><td>Rider assignment, offers and the delivery workflow</td><td class="no">Phase 4 (next)</td><td>—</td></tr>
+      <tr><td>Rider assignment, offers and the delivery workflow</td><td class="yes">Built &amp; tested</td><td><code>backend/src/dispatch/</code> · <code>src/rider-jobs/</code></td></tr>
+      <tr><td>Rider onboarding with document upload and staff approval</td><td class="yes">Built &amp; tested</td><td><code>src/riders/</code> (rider + admin controllers)</td></tr>
+      <tr><td>Rider earnings ledger with commission splits</td><td class="yes">Built &amp; tested</td><td><code>GET /api/v1/rider/earnings</code></td></tr>
+      <tr><td>Real-time offer push over Socket.IO</td><td class="no">Phase 6</td><td>polling for now</td></tr>
+      <tr><td>Withdrawals and payouts</td><td class="no">Phase 7</td><td>—</td></tr>
     </table>
   </div>
 
@@ -269,12 +324,14 @@ npm run setup
 npm run dev
 
 <span class="c"># verify</span>
-npm test            <span class="c"># 102 tests against a real, isolated Postgres + Redis</span>
+npm test            <span class="c"># 149 tests against a real, isolated Postgres + Redis</span>
 bash scripts/smoke.sh
-node scripts/capture-phase3.mjs       <span class="c"># booking journey + refresh these screenshots</span>
+node scripts/seed-demo-phase4.mjs     <span class="c"># a real rider, approved, online, with an offer</span>
+node scripts/capture-phase4.mjs       <span class="c"># rider journey + refresh these screenshots</span>
+node scripts/capture-phase3.mjs       <span class="c"># booking journey</span>
 python3 scripts/build-report.py       <span class="c"># regenerate this page</span></pre>
 
-  <h2>Known limitations after Phase 2</h2>
+  <h2>Known limitations after Phase 4</h2>
   <div class="panel">
     <ul>
       <li><strong>Email and SMS are console drivers.</strong> Codes print to the API log, and in
@@ -285,19 +342,24 @@ python3 scripts/build-report.py       <span class="c"># regenerate this page</sp
       <li><strong>Google Maps is not connected.</strong> Distances are straight-line × a road factor, and
       the UI labels them as an estimate. A real key switches one service, nothing else.</li>
       <li><strong>No payment is taken yet.</strong> A booking is created UNPAID and the screen says so;
-      Paystack, Flutterwave and the wallet arrive in Phase 7.</li>
-      <li><strong>No rider assignment yet.</strong> Bookings wait at PENDING until the Phase 4 offer
-      engine exists.</li>
-      <li><strong>Not yet built:</strong> rider document upload, staff/role management screens, audit-log
-      viewer, session list. The APIs exist; the screens arrive with Phases 4–5.</li>
+      Paystack, Flutterwave and the wallet arrive in Phase 7. Riders are already earning into a real
+      ledger — the money is recorded, not yet collected or paid out.</li>
+      <li><strong>Offers are polled, not pushed.</strong> The rider app checks every few seconds; Socket.IO
+      push and BullMQ queues arrive in Phase 6. The 20-second deadline is enforced server-side either way.</li>
+      <li><strong>The waiting-delivery sweep runs on a rider coming online, not on a timer.</strong> A
+      delivery that finds no rider waits until someone goes online or an admin assigns it (Phase 5); the
+      scheduled worker joins it in Phase 6.</li>
+      <li><strong>Not yet built:</strong> admin document-review screens (the API is live and tested),
+      staff/role management screens, audit-log viewer, session list, withdrawals. The screens arrive with
+      Phases 5–7.</li>
       <li><strong>Payments remain simulated</strong> (<code>PAYMENTS_MODE=DEVELOPMENT</code>) until the
       live keys are placed in the server's <code>.env</code> — never in this workspace.</li>
     </ul>
   </div>
 
   <footer>
-    Phase 3 build report · generated by <code>scripts/build-report.py</code> ·
-    source of truth: <code>documentation/PHASE-LOG/PHASE-3.md</code>
+    Phase 4 build report · generated by <code>scripts/build-report.py</code> ·
+    source of truth: <code>documentation/PHASE-LOG/PHASE-4.md</code>
   </footer>
 </main>
 </body>

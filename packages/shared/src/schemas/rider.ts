@@ -45,3 +45,93 @@ export const changePasswordSchema = z.object({
   currentPassword: z.string().min(1, 'Enter your current password'),
   newPassword: passwordSchema,
 });
+
+/* ───────────────────────── Phase 4 — rider operations ─────────────────────── */
+
+export const riderAvailabilitySchema = z.object({
+  availability: z.enum(['ONLINE', 'OFFLINE']),
+});
+
+export const locationPingSchema = z.object({
+  lat: z.number().min(-90).max(90),
+  lng: z.number().min(-180).max(180),
+  accuracyM: z.number().nonnegative().max(5000).optional(),
+  speedKph: z.number().nonnegative().max(200).optional(),
+  heading: z.number().min(0).max(360).optional(),
+  batteryPct: z.number().int().min(0).max(100).optional(),
+  deliveryId: z.string().uuid().optional(),
+});
+export type LocationPingInput = z.infer<typeof locationPingSchema>;
+
+/**
+ * Documents arrive as base64 JSON rather than multipart: it keeps the upload path
+ * dependency-free and identical under test. Size and MIME type are validated
+ * server-side (5 MB, JPEG/PNG/WebP/PDF) — the browser's opinion is not trusted.
+ */
+export const uploadDocumentSchema = z.object({
+  docType: z.enum(['NIN', 'DRIVERS_LICENCE', 'VEHICLE_REGISTRATION', 'PROOF_OF_ADDRESS', 'GUARANTOR_FORM', 'SELFIE']),
+  mimeType: z.enum(['image/jpeg', 'image/png', 'image/webp', 'application/pdf']),
+  base64: z.string().min(16, 'Attach a file'),
+  expiresAt: z.coerce.date().optional(),
+});
+
+/**
+ * Proof-of-delivery photo. Uploaded before calling complete; `complete` then
+ * receives only the storage key, so the OTP and photo paths share one endpoint.
+ */
+export const proofPhotoSchema = z.object({
+  mimeType: z.enum(['image/jpeg', 'image/png', 'image/webp']),
+  base64: z.string().min(16, 'Attach a photo'),
+});
+export type ProofPhotoInput = z.infer<typeof proofPhotoSchema>;
+
+export const rejectOfferSchema = z.object({
+  reason: z.string().trim().max(200).optional(),
+});
+
+export const advanceJobSchema = z.object({
+  lat: z.number().min(-90).max(90).optional(),
+  lng: z.number().min(-180).max(180).optional(),
+});
+
+export const completeJobSchema = z
+  .object({
+    otp: z.string().regex(/^\d{6}$/, 'Enter the 6-digit code').optional(),
+    proofPhotoKey: z.string().max(300).optional(),
+    recipientNameEntered: z.string().trim().min(2).max(80).optional(),
+    lat: z.number().min(-90).max(90).optional(),
+    lng: z.number().min(-180).max(180).optional(),
+  })
+  .refine((value) => !!value.otp || (!!value.proofPhotoKey && !!value.recipientNameEntered), {
+    message: 'Enter the recipient code, or attach a photo and the recipient’s name',
+    path: ['otp'],
+  });
+export type CompleteJobInput = z.infer<typeof completeJobSchema>;
+
+export const failJobSchema = z.object({
+  reason: z.string().trim().min(5, 'Tell us what happened').max(300),
+});
+
+/* ────────────────────── Phase 4 — admin rider review ─────────────────────── */
+
+export const ReviewDocumentSchema = z
+  .object({
+    decision: z.enum(['APPROVE', 'REJECT']),
+    note: z.string().trim().max(300, 'Keep the note under 300 characters').optional(),
+  })
+  .refine((value) => value.decision !== 'REJECT' || !!value.note?.trim(), {
+    message: 'Say why the document was rejected — the rider sees this',
+    path: ['note'],
+  });
+export type ReviewDocumentInput = z.infer<typeof ReviewDocumentSchema>;
+
+export const SetRiderApprovalSchema = z
+  .object({
+    decision: z.enum(['APPROVE', 'REJECT', 'SUSPEND']),
+    reason: z.string().trim().max(300).optional(),
+  })
+  .refine((value) => value.decision === 'APPROVE' || !!value.reason?.trim(), {
+    message: 'Give a reason — the rider sees it',
+    path: ['reason'],
+  });
+export type SetRiderApprovalInput = z.infer<typeof SetRiderApprovalSchema>;

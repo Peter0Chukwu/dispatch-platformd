@@ -28,6 +28,8 @@ export class AppConfig {
   get mapsProviderKey(): 'stub' | 'google' | 'mapbox' {
     return this.config.get('MAPS_PROVIDER', { infer: true }).toLowerCase() as 'stub' | 'google' | 'mapbox';
   }
+  get storageDriver() { return this.config.get('STORAGE_DRIVER', { infer: true }); }
+  get storageLocalDir() { return this.config.get('STORAGE_LOCAL_DIR', { infer: true }); }
   get googleMapsApiKey(): string | undefined {
     const key = this.config.get('GOOGLE_MAPS_API_KEY', { infer: true });
     return key && key.trim().length > 0 ? key.trim() : undefined;

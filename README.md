@@ -3,11 +3,13 @@
 A complete dispatch-rider and logistics management platform for a Nigerian dispatch company:
 **Customer portal · Rider portal · Admin command centre** — one backend, one database, real records.
 
-> **Current status: Phase 3 complete** — foundation, authentication/RBAC, and customer booking with a
-> server-side pricing engine. 102 automated tests passing. Phase 4 (rider portal + offer engine) is next.
+> **Current status: Phase 4 complete** — foundation, authentication/RBAC, customer booking with a
+> server-side pricing engine, and the rider portal: onboarding with document review, online/offline
+> availability, an offer engine that no two riders can win, the full delivery workflow with OTP or photo
+> proof, and a real earnings ledger. 149 automated tests passing. Phase 5 (admin command centre) is next.
 >
 > Phase logs: [`PHASE-1`](documentation/PHASE-LOG/PHASE-1.md) · [`PHASE-2`](documentation/PHASE-LOG/PHASE-2.md)
-> · [`PHASE-3`](documentation/PHASE-LOG/PHASE-3.md)
+> · [`PHASE-3`](documentation/PHASE-LOG/PHASE-3.md) · [`PHASE-4`](documentation/PHASE-LOG/PHASE-4.md)
 > · Visual build report: [`documentation/BUILD-REPORT.html`](documentation/BUILD-REPORT.html)
 
 ## Documentation
@@ -16,6 +18,7 @@ A complete dispatch-rider and logistics management platform for a Nigerian dispa
 |---|---|
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | System architecture, portal communication, API surface, folder structure, 10-phase roadmap, external services, risks |
 | [`docs/DATABASE-DRAFT.prisma`](docs/DATABASE-DRAFT.prisma) | The full database design (review copy) |
+| [`documentation/PHASE-LOG/PHASE-4.md`](documentation/PHASE-LOG/PHASE-4.md) | Phase 4: rider portal, the offer race, the delivery workflow, earnings |
 | [`documentation/PHASE-LOG/PHASE-3.md`](documentation/PHASE-LOG/PHASE-3.md) | Phase 3: pricing engine, booking API, cancellation — how a price is built |
 | [`documentation/PHASE-LOG/PHASE-2.md`](documentation/PHASE-LOG/PHASE-2.md) | Phase 2: auth, sessions, RBAC, audit — files, endpoints, tests, bugs fixed |
 | [`documentation/PHASE-LOG/PHASE-1.md`](documentation/PHASE-LOG/PHASE-1.md) | Phase 1: schema, seed, API shell, design system |
@@ -48,7 +51,7 @@ Then open:
 - **http://localhost:4000/api/v1/health** — API + database + Redis status
 
 ```bash
-npm test              # 102 tests (pricing, booking, auth, RBAC, money maths, state machine)
+npm test              # 149 tests (dispatch race, rider workflow, admin review, pricing, booking, auth, RBAC)
 ./scripts/smoke.sh    # end-to-end smoke check of a running stack
 ```
 

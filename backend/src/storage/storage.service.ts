@@ -1,0 +1,80 @@
+import { Injectable, Logger } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { dirname, join, resolve } from 'node:path';
+import { AppConfig } from '../config/app.config';
+import { AppError } from '../common/errors/app-error';
+
+/** 5 MB. A rider photographing a licence does not need more, and it caps abuse. */
+export const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
+
+/** Only formats we can actually render in the review screens later. */
+export const ALLOWED_UPLOAD_MIME = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'] as const;
+
+/**
+ * Private file storage.
+ *
+ * Files never get a public URL. The database stores a *key* (`riders/<id>/licence-….jpg`)
+ * and the only way to read it back is an authenticated endpoint that checks who is
+ * asking. With STORAGE_DRIVER=LOCAL the bytes live on disk; the S3 driver implements
+ * the same two methods, so nothing above this class changes when you move to a bucket.
+ */
+@Injectable()
+export class StorageService {
+  private readonly logger = new Logger(StorageService.name);
+
+  constructor(private readonly config: AppConfig) {}
+
+  /**
+   * Persist a base64-encoded upload and return its storage key.
+   * JSON + base64 keeps the upload path dependency-free and identical in tests;
+   * a multipart endpoint can wrap this method later without touching callers.
+   */
+  async saveBase64(params: {
+    keyPrefix: string;
+    fileName: string;
+    mimeType: string;
+    base64: string;
+  }): Promise<{ key: string; sizeBytes: number }> {
+    if (!ALLOWED_UPLOAD_MIME.includes(params.mimeType as (typeof ALLOWED_UPLOAD_MIME)[number])) {
+      throw AppError.validation([
+        { field: 'file', message: 'Upload a JPEG, PNG, WebP image or a PDF' },
+      ]);
+    }
+
+    // Strip a data-URL prefix if the client sent one ("data:image/png;base64,....").
+    const base64 = params.base64.includes(',') ? params.base64.split(',').pop()! : params.base64;
+    let buffer: Buffer;
+    try {
+      buffer = Buffer.from(base64, 'base64');
+    } catch {
+      throw AppError.validation([{ field: 'file', message: 'The file could not be read' }]);
+    }
+    if (buffer.length === 0) {
+      throw AppError.validation([{ field: 'file', message: 'The file is empty' }]);
+    }
+    if (buffer.length > MAX_UPLOAD_BYTES) {
+      throw AppError.validation([
+        { field: 'file', message: `Files must be smaller than ${MAX_UPLOAD_BYTES / 1024 / 1024} MB` },
+      ]);
+    }
+
+    const extension = params.mimeType === 'application/pdf' ? 'pdf' : params.mimeType.split('/')[1];
+    const key = `${params.keyPrefix}/${randomUUID()}.${extension}`;
+    const absolutePath = this.absolutePath(key);
+
+    await mkdir(dirname(absolutePath), { recursive: true });
+    await writeFile(absolutePath, buffer);
+    this.logger.log(`Stored ${buffer.length} bytes at ${key}`);
+
+    return { key, sizeBytes: buffer.length };
+  }
+
+  absolutePath(key: string): string {
+    const root = resolve(this.config.storageLocalDir);
+    const target = resolve(join(root, key));
+    // Defence in depth: a key containing ../ must never escape the storage root.
+    if (!target.startsWith(root)) throw AppError.forbidden('Invalid storage key');
+    return target;
+  }
+}

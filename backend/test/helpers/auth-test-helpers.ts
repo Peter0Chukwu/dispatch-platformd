@@ -26,15 +26,19 @@ export async function resetUsers(prisma: PrismaService): Promise<void> {
   // configuration. Deleting rows respects ON DELETE SET NULL and leaves the
   // reference data (zones, pricing, ledger accounts, roles) intact.
   const statements = [
+    // Strict child-first order. Every table that points at `deliveries` must go
+    // before it, or the delete fails with a foreign-key violation (which is how
+    // the Phase 4 earnings table caught this list being wrong).
     'audit_logs', 'verification_tokens', 'refresh_tokens',
     'wallet_transactions', 'wallets', 'notifications',
     'ticket_messages', 'support_tickets', 'complaints', 'reviews', 'promo_redemptions',
-    'delivery_proofs', 'delivery_status_history', 'delivery_assignments', 'delivery_stops',
-    'delivery_items', 'deliveries',
-    'delivery_status_history', 'rider_locations', 'rider_documents', 'vehicles',
+    'delivery_proofs', 'delivery_status_history', 'delivery_assignments',
+    'delivery_stops', 'delivery_items',
     'rider_earnings', 'rider_adjustments', 'withdrawals',
     'refunds', 'payments', 'payment_webhooks',
     'ledger_lines', 'journal_entries',
+    'rider_locations', 'rider_documents', 'vehicles',
+    'deliveries',
     'addresses',
     'customers', 'riders',
     'staff_roles', 'staff_branches', 'staff',
@@ -116,5 +120,85 @@ export async function registerAndActivateCustomer(app: INestApplication) {
     userId: register.body.userId as string,
     accessToken: login.body.accessToken as string,
     cookies: login.headers['set-cookie'] as unknown as string[],
+  };
+}
+
+/**
+ * Creates a rider who is fully approved and ready to receive offers.
+ * Mirrors what an administrator does in Phase 5: approve the account and every
+ * required document.
+ */
+export async function createApprovedRider(
+  prisma: PrismaService,
+  passwords: PasswordService,
+  app: INestApplication,
+  overrides: { phone?: string; withDocuments?: boolean; branchId?: string } = {},
+) {
+  const email = uniqueEmail('rider');
+  const phone = overrides.phone ?? uniquePhone();
+  const branch = overrides.branchId
+    ? await prisma.branch.findUniqueOrThrow({ where: { id: overrides.branchId } })
+    : await prisma.branch.findFirstOrThrow();
+  const riderCount = await prisma.rider.count();
+
+  const user = await prisma.user.create({
+    data: {
+      email,
+      phone,
+      passwordHash: await passwords.hash(VALID_PASSWORD),
+      type: 'RIDER',
+      status: 'ACTIVE',
+      firstName: 'Rita',
+      lastName: 'Rider',
+      emailVerifiedAt: new Date(),
+      phoneVerifiedAt: new Date(),
+      rider: {
+        create: {
+          riderCode: `RDR-T${String(riderCount + 1).padStart(4, '0')}`,
+          branchId: branch.id,
+          approvalStatus: 'APPROVED',
+          availability: 'OFFLINE',
+          vehicles: {
+            create: {
+              type: 'MOTORCYCLE',
+              registrationNumber: `LSD-${String(riderCount + 1).padStart(3, '0')}AA`,
+              isVerified: true,
+            },
+          },
+        },
+      },
+      wallet: { create: { type: 'RIDER', balanceKobo: 0n, currency: 'NGN' } },
+    },
+    select: { id: true, email: true, rider: { select: { id: true } } },
+  });
+
+  const riderId = user.rider!.id;
+
+  if (overrides.withDocuments !== false) {
+    for (const docType of ['NIN', 'DRIVERS_LICENCE', 'VEHICLE_REGISTRATION'] as const) {
+      await prisma.riderDocument.create({
+        data: {
+          riderId,
+          docType,
+          fileKey: `riders/${riderId}/${docType.toLowerCase()}.jpg`,
+          mimeType: 'image/jpeg',
+          sizeBytes: 1024,
+          status: 'APPROVED',
+        },
+      });
+    }
+  }
+
+  const login = await request(app.getHttpServer())
+    .post('/api/v1/auth/login')
+    .send({ identifier: email, password: VALID_PASSWORD, audience: 'RIDER' })
+    .expect(201);
+
+  return {
+    userId: user.id,
+    riderId,
+    email,
+    phone,
+    accessToken: login.body.accessToken as string,
   };
 }
