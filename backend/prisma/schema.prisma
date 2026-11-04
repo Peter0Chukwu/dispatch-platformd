@@ -1,0 +1,1361 @@
+// ============================================================================
+// DISPATCH PLATFORM — PRISMA SCHEMA  (Phase 1: applied as the `init` migration)
+// ----------------------------------------------------------------------------
+// Companion to docs/ARCHITECTURE.md §4 and docs/DATABASE-DRAFT.prisma.
+// Migrations: backend/prisma/migrations/. Seed: backend/prisma/seed.ts.
+// CHECK constraints Prisma cannot express are appended to the init migration:
+//   wallets.balanceKobo >= 0
+//   ledger_lines: exactly one of (debitKobo, creditKobo) is non-zero
+//   reviews.rating BETWEEN 1 AND 5
+//   rider_earnings.netKobo = grossKobo - commissionKobo + bonusKobo - penaltyKobo
+//
+// CONVENTIONS
+//  * UUID primary keys (@db.Uuid) — non-guessable in URLs.
+//  * Money = BigInt in KOBO (1 NGN = 100 kobo). Never Float, never Decimal-as-number.
+//  * createdAt/updatedAt everywhere; append-only tables carry createdAt only.
+//  * Soft delete (deletedAt) ONLY on identity/config tables.
+//  * branchId on every operational row so multi-branch is a data change, not a rewrite.
+//  * Money-relevant values are SNAPSHOT (priceSnapshot/commissionSnapshot), never re-derived.
+// ============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────── ENUMS ─────────────────────────────────────
+
+enum UserType {
+  CUSTOMER
+  RIDER
+  STAFF
+}
+
+enum UserStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+  DELETED
+}
+
+enum VerificationPurpose {
+  EMAIL_VERIFY
+  PHONE_OTP
+  PASSWORD_RESET
+  INVITE
+}
+
+enum RiderApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  SUSPENDED
+}
+
+enum RiderAvailability {
+  OFFLINE
+  ONLINE
+  ON_DELIVERY
+}
+
+enum VehicleType {
+  MOTORCYCLE
+  BICYCLE
+  TRICYCLE
+  CAR
+  VAN
+}
+
+enum DocumentType {
+  NIN
+  DRIVERS_LICENCE
+  VEHICLE_REGISTRATION
+  PROOF_OF_ADDRESS
+  GUARANTOR_FORM
+  SELFIE
+}
+
+enum DocumentStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum DeliveryType {
+  STANDARD
+  EXPRESS
+  SCHEDULED
+  SAME_DAY
+}
+
+enum DeliveryStatus {
+  PENDING
+  ASSIGNED
+  ACCEPTED
+  ARRIVED_AT_PICKUP
+  PICKED_UP
+  IN_TRANSIT
+  ARRIVED_AT_DESTINATION
+  DELIVERED
+  REJECTED
+  CANCELLED
+  FAILED
+  RETURNED
+}
+
+enum DeliveryPaymentStatus {
+  UNPAID
+  PAID
+  PARTIALLY_REFUNDED
+  REFUNDED
+  FAILED
+}
+
+enum AssignmentStatus {
+  OFFERED
+  ACCEPTED
+  REJECTED
+  EXPIRED
+  CANCELLED
+}
+
+enum AssignmentMethod {
+  AUTO
+  MANUAL
+  REASSIGNMENT
+}
+
+enum ActorType {
+  CUSTOMER
+  RIDER
+  STAFF
+  SYSTEM
+}
+
+enum ProofType {
+  RECIPIENT_OTP
+  PHOTO
+  SIGNATURE
+  RECIPIENT_NAME
+  RIDER_GEOSTAMP
+}
+
+enum PaymentProvider {
+  PAYSTACK
+  FLUTTERWAVE
+  WALLET
+  BANK_TRANSFER
+  CASH
+}
+
+enum PaymentRecordStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  ABANDONED
+  REFUNDED
+}
+
+enum RefundStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum WalletType {
+  CUSTOMER
+  RIDER
+  COMPANY
+}
+
+enum WalletDirection {
+  CREDIT
+  DEBIT
+}
+
+enum WalletTxCategory {
+  TOPUP
+  DELIVERY_PAYMENT
+  EARNING
+  WITHDRAWAL
+  REFUND
+  ADJUSTMENT
+  BONUS
+  PENALTY
+  COMMISSION
+}
+
+enum LedgerAccountType {
+  ASSET
+  LIABILITY
+  EQUITY
+  REVENUE
+  EXPENSE
+}
+
+enum NormalBalance {
+  DEBIT
+  CREDIT
+}
+
+enum JournalEventType {
+  DELIVERY_PAYMENT
+  WALLET_TOPUP
+  EARNING_ACCRUAL
+  PAYOUT
+  REFUND
+  ADJUSTMENT
+  EXPENSE
+  OPENING
+  BALANCE_FIX
+}
+
+enum EarningStatus {
+  PENDING
+  AVAILABLE
+  PAID
+  REVERTED
+}
+
+enum WithdrawalStatus {
+  REQUESTED
+  APPROVED
+  PROCESSING
+  PAID
+  REJECTED
+  FAILED
+}
+
+enum PromoType {
+  PERCENT
+  FIXED
+  FREE_DELIVERY
+}
+
+enum TicketStatus {
+  OPEN
+  PENDING_CUSTOMER
+  PENDING_AGENT
+  RESOLVED
+  CLOSED
+}
+
+enum TicketPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum ComplaintStatus {
+  OPEN
+  INVESTIGATING
+  RESOLVED
+  REJECTED
+}
+
+enum AlertSeverity {
+  INFO
+  WARNING
+  CRITICAL
+}
+
+enum ReportType {
+  DAILY_DELIVERIES
+  MONTHLY_DELIVERIES
+  REVENUE
+  RIDER_EARNINGS
+  CUSTOMERS
+  CANCELLATIONS
+  RIDER_PERFORMANCE
+  ZONE_PERFORMANCE
+  FINANCIAL_SUMMARY
+}
+
+enum ReportStatus {
+  QUEUED
+  PROCESSING
+  READY
+  FAILED
+}
+
+enum NotificationChannel {
+  IN_APP
+  EMAIL
+  SMS
+  WHATSAPP
+  PUSH
+}
+
+// ───────────────────────── IDENTITY & ACCESS ───────────────────────────────
+
+model User {
+  id                 String     @id @default(uuid()) @db.Uuid
+  email              String?    @unique
+  phone              String?    @unique
+  passwordHash       String
+  type               UserType
+  status             UserStatus @default(PENDING)
+  firstName          String
+  lastName           String
+  avatarKey          String?
+  emailVerifiedAt    DateTime?
+  phoneVerifiedAt    DateTime?
+  lastLoginAt        DateTime?
+  failedLogins       Int        @default(0)
+  lockedUntil        DateTime?
+  mustChangePassword Boolean    @default(false)
+  createdAt          DateTime   @default(now())
+  updatedAt          DateTime   @updatedAt
+  deletedAt          DateTime?
+
+  customer            Customer?
+  rider               Rider?
+  staff               Staff?
+  wallet              Wallet?
+  refreshTokens       RefreshToken[]
+  verifications       VerificationToken[]
+  notifications       Notification[]
+  addresses           Address[]
+  auditLogs           AuditLog[]          @relation("ActorAuditLogs")
+  cancelledDeliveries Delivery[]          @relation("DeliveryCanceller")
+
+  @@index([type, status])
+  @@index([createdAt])
+  @@map("users")
+}
+
+model Customer {
+  id              String    @id @default(uuid()) @db.Uuid
+  userId          String    @unique @db.Uuid
+  defaultBranchId String?   @db.Uuid
+  referralCode    String?   @unique
+  ratingGivenAvg  Float     @default(0)
+  notes           String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  deletedAt       DateTime?
+
+  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  branch           Branch?           @relation(fields: [defaultBranchId], references: [id])
+  deliveries       Delivery[]
+  addresses        Address[]
+  complaints       Complaint[]
+  tickets          SupportTicket[]
+  reviews          Review[]
+  payments         Payment[]
+  promoRedemptions PromoRedemption[]
+
+  @@index([defaultBranchId])
+  @@map("customers")
+}
+
+model Rider {
+  id                      String              @id @default(uuid()) @db.Uuid
+  userId                  String              @unique @db.Uuid
+  riderCode               String              @unique
+  branchId                String              @db.Uuid
+  serviceZoneId           String?             @db.Uuid
+  approvalStatus          RiderApprovalStatus @default(PENDING)
+  availability            RiderAvailability   @default(OFFLINE)
+  reviewedById            String?             @db.Uuid
+  reviewedAt              DateTime?
+  rejectionReason         String?
+  approvedAt              DateTime?
+  commissionRatePct       Float? // null => use pricing rule default
+  ratingAvg               Float               @default(0)
+  ratingCount             Int                 @default(0)
+  completedCount          Int                 @default(0)
+  cancelledCount          Int                 @default(0)
+  lastLat                 Float?
+  lastLng                 Float?
+  lastLocationAt          DateTime?
+  lastOnlineAt            DateTime?
+  emergencyContactName    String?
+  emergencyContactPhone   String?
+  maxConcurrentDeliveries Int? // null => system setting
+  createdAt               DateTime            @default(now())
+  updatedAt               DateTime            @updatedAt
+  deletedAt               DateTime?
+
+  user        User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  branch      Branch               @relation(fields: [branchId], references: [id])
+  serviceZone ServiceZone?         @relation(fields: [serviceZoneId], references: [id])
+  reviewer    Staff?               @relation("RiderReviewer", fields: [reviewedById], references: [id])
+  vehicles    Vehicle[]
+  documents   RiderDocument[]
+  locations   RiderLocation[]
+  assignments DeliveryAssignment[]
+  deliveries  Delivery[]           @relation("DeliveryRider")
+  earnings    RiderEarning[]
+  withdrawals Withdrawal[]
+  reviews     Review[]
+  tickets     SupportTicket[]
+  adjustments RiderAdjustment[]
+
+  @@index([approvalStatus, availability, branchId])
+  @@index([serviceZoneId])
+  @@map("riders")
+}
+
+model Staff {
+  id           String    @id @default(uuid()) @db.Uuid
+  userId       String    @unique @db.Uuid
+  staffCode    String    @unique
+  branchId     String    @db.Uuid
+  isSuperAdmin Boolean   @default(false)
+  jobTitle     String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  deletedAt    DateTime?
+
+  user                User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  branch              Branch            @relation(fields: [branchId], references: [id])
+  roles               StaffRole[]
+  branches            StaffBranch[]
+  reviewedRiders      Rider[]           @relation("RiderReviewer")
+  reviewedDocuments   RiderDocument[]   @relation("DocumentReviewer")
+  resolvedComplaints  Complaint[]       @relation("ComplaintResolver")
+  assignedTickets     SupportTicket[]   @relation("TicketAssignee")
+  processedRefunds    Refund[]          @relation("RefundProcessor")
+  reviewedWithdrawals Withdrawal[]      @relation("WithdrawalReviewer")
+  recordedExpenses    Expense[]         @relation("ExpenseRecorder")
+  recordedAdjustments RiderAdjustment[] @relation("AdjustmentRecorder")
+  createdPricingRules PricingRule[]     @relation("PricingRuleCreator")
+  acknowledgedAlerts  AdminAlert[]      @relation("AlertAcknowledger")
+
+  @@index([branchId])
+  @@map("staff")
+}
+
+model Role {
+  id          String   @id @default(uuid()) @db.Uuid
+  key         String   @unique // SUPER_ADMIN, OPERATIONS_MANAGER, ...
+  name        String
+  description String?
+  isSystem    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  permissions RolePermission[]
+  staff       StaffRole[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id          String   @id @default(uuid()) @db.Uuid
+  key         String   @unique // "delivery:assign", "withdrawal:approve"
+  description String?
+  group       String // for grouping in the admin UI
+  createdAt   DateTime @default(now())
+
+  roles RolePermission[]
+
+  @@map("permissions")
+}
+
+model RolePermission {
+  roleId       String     @db.Uuid
+  permissionId String     @db.Uuid
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model StaffRole {
+  staffId String @db.Uuid
+  roleId  String @db.Uuid
+  staff   Staff  @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  role    Role   @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([staffId, roleId])
+  @@map("staff_roles")
+}
+
+model StaffBranch {
+  staffId  String @db.Uuid
+  branchId String @db.Uuid
+  staff    Staff  @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  branch   Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  @@id([staffId, branchId])
+  @@map("staff_branches")
+}
+
+model RefreshToken {
+  id                String    @id @default(uuid()) @db.Uuid
+  userId            String    @db.Uuid
+  tokenHash         String    @unique
+  familyId          String    @db.Uuid // rotation chain; reuse => revoke whole family
+  replacedByTokenId String?   @db.Uuid
+  audience          String // CUSTOMER | RIDER | ADMIN
+  ip                String?
+  userAgent         String?
+  expiresAt         DateTime
+  revokedAt         DateTime?
+  createdAt         DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, revokedAt])
+  @@index([familyId])
+  @@map("refresh_tokens")
+}
+
+model VerificationToken {
+  id          String              @id @default(uuid()) @db.Uuid
+  userId      String              @db.Uuid
+  tokenHash   String              @unique
+  purpose     VerificationPurpose
+  destination String? // email or phone the code was sent to
+  attempts    Int                 @default(0)
+  consumedAt  DateTime?
+  expiresAt   DateTime
+  createdAt   DateTime            @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, purpose])
+  @@map("verification_tokens")
+}
+
+model Address {
+  id         String    @id @default(uuid()) @db.Uuid
+  customerId String    @db.Uuid
+  label      String // Home, Office…
+  line1      String
+  line2      String?
+  city       String
+  state      String
+  landmark   String?
+  lat        Float
+  lng        Float
+  isDefault  Boolean   @default(false)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  deletedAt  DateTime?
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  user     User?    @relation(fields: [userId], references: [id])
+  userId   String?  @db.Uuid
+
+  @@index([customerId])
+  @@map("addresses")
+}
+
+// ───────────────────── ORGANISATION, ZONES & FLEET ─────────────────────────
+
+model Branch {
+  id        String   @id @default(uuid()) @db.Uuid
+  code      String   @unique
+  name      String
+  city      String
+  state     String
+  country   String   @default("NG")
+  phone     String?
+  email     String?
+  lat       Float?
+  lng       Float?
+  timezone  String   @default("Africa/Lagos")
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  customers     Customer[]
+  riders        Rider[]
+  staff         Staff[]
+  zones         ServiceZone[]
+  deliveries    Delivery[]
+  pricingRules  PricingRule[]
+  expenses      Expense[]
+  staffBranches StaffBranch[]
+
+  @@map("branches")
+}
+
+model ServiceZone {
+  id              String   @id @default(uuid()) @db.Uuid
+  branchId        String   @db.Uuid
+  code            String
+  name            String
+  centerLat       Float
+  centerLng       Float
+  radiusKm        Float
+  polygonGeoJson  Json?
+  baseFeeKobo     BigInt?
+  perKmFeeKobo    BigInt?
+  minFeeKobo      BigInt?
+  supportsSameDay Boolean  @default(true)
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  branch       Branch        @relation(fields: [branchId], references: [id])
+  riders       Rider[]
+  deliveries   Delivery[]
+  pricingRules PricingRule[]
+
+  @@unique([branchId, code])
+  @@index([branchId, isActive])
+  @@map("service_zones")
+}
+
+model Vehicle {
+  id                 String      @id @default(uuid()) @db.Uuid
+  riderId            String      @db.Uuid
+  type               VehicleType
+  registrationNumber String      @unique
+  make               String?
+  model              String?
+  year               Int?
+  color              String?
+  capacityKg         Float?
+  documentKey        String?
+  isVerified         Boolean     @default(false)
+  verifiedById       String?     @db.Uuid
+  verifiedAt         DateTime?
+  isActive           Boolean     @default(true)
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
+
+  rider Rider @relation(fields: [riderId], references: [id], onDelete: Cascade)
+
+  @@index([riderId])
+  @@map("vehicles")
+}
+
+model RiderDocument {
+  id           String         @id @default(uuid()) @db.Uuid
+  riderId      String         @db.Uuid
+  docType      DocumentType
+  fileKey      String // private storage key — never a public URL
+  mimeType     String
+  sizeBytes    Int
+  expiresAt    DateTime?
+  status       DocumentStatus @default(PENDING)
+  reviewNote   String?
+  reviewedById String?        @db.Uuid
+  reviewedAt   DateTime?
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  rider    Rider  @relation(fields: [riderId], references: [id], onDelete: Cascade)
+  reviewer Staff? @relation("DocumentReviewer", fields: [reviewedById], references: [id])
+
+  @@index([riderId, docType])
+  @@index([status])
+  @@map("rider_documents")
+}
+
+model RiderLocation {
+  id         String   @id @default(uuid()) @db.Uuid
+  riderId    String   @db.Uuid
+  deliveryId String?  @db.Uuid
+  lat        Float
+  lng        Float
+  accuracyM  Float?
+  speedKph   Float?
+  heading    Float?
+  batteryPct Int?
+  recordedAt DateTime @default(now())
+
+  rider    Rider     @relation(fields: [riderId], references: [id], onDelete: Cascade)
+  delivery Delivery? @relation(fields: [deliveryId], references: [id])
+
+  @@index([riderId, recordedAt(sort: Desc)])
+  @@index([deliveryId, recordedAt(sort: Desc)])
+  @@map("rider_locations")
+}
+
+// ───────────────────────────── DELIVERY CORE ───────────────────────────────
+
+model Delivery {
+  id            String                @id @default(uuid()) @db.Uuid
+  reference     String                @unique
+  customerId    String                @db.Uuid
+  branchId      String                @db.Uuid
+  serviceZoneId String?               @db.Uuid
+  riderId       String?               @db.Uuid // current assignee (fast reads)
+  deliveryType  DeliveryType
+  status        DeliveryStatus        @default(PENDING)
+  paymentStatus DeliveryPaymentStatus @default(UNPAID)
+
+  pickupAddress   String
+  pickupLat       Float
+  pickupLng       Float
+  pickupLandmark  String?
+  destAddress     String
+  destLat         Float
+  destLng         Float
+  destLandmark    String?
+  distanceKm      Float?
+  durationMinutes Int?
+
+  senderName     String
+  senderPhone    String
+  recipientName  String
+  recipientPhone String
+
+  packageCategory     String
+  packageDescription  String
+  packageWeightKg     Float?
+  packagePhotoKey     String?
+  isFragile           Boolean @default(false)
+  declaredValueKobo   BigInt?
+  specialInstructions String?
+
+  scheduledFor       DateTime?
+  chargeKobo         BigInt
+  discountKobo       BigInt    @default(0)
+  codAmountKobo      BigInt    @default(0)
+  priceSnapshot      Json // frozen pricing breakdown used for this delivery
+  commissionSnapshot Json? // frozen commission split
+
+  otpHash      String?
+  otpExpiresAt DateTime?
+  otpAttempts  Int       @default(0)
+
+  shareToken          String?   @unique
+  shareTokenExpiresAt DateTime?
+
+  acceptedAt         DateTime?
+  pickedUpAt         DateTime?
+  deliveredAt        DateTime?
+  cancelledAt        DateTime?
+  cancellationReason String?
+  cancelledById      String?   @db.Uuid
+
+  ratingsDeadlineAt DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  customer    Customer     @relation(fields: [customerId], references: [id])
+  branch      Branch       @relation(fields: [branchId], references: [id])
+  serviceZone ServiceZone? @relation(fields: [serviceZoneId], references: [id])
+  rider       Rider?       @relation("DeliveryRider", fields: [riderId], references: [id])
+
+  items           DeliveryItem[]
+  stops           DeliveryStop[]
+  assignments     DeliveryAssignment[]
+  statusHistory   DeliveryStatusHistory[]
+  proofs          DeliveryProof[]
+  payments        Payment[]
+  earning         RiderEarning?
+  review          Review?
+  complaint       Complaint?
+  locations       RiderLocation[]
+  promoRedemption PromoRedemption?
+  journalEntries  JournalEntry[]
+  cancelledBy     User?                   @relation("DeliveryCanceller", fields: [cancelledById], references: [id])
+
+  @@index([customerId, createdAt(sort: Desc)])
+  @@index([riderId, status])
+  @@index([branchId, status, createdAt(sort: Desc)])
+  @@index([status, createdAt])
+  @@index([scheduledFor])
+  @@index([createdAt])
+  @@map("deliveries")
+}
+
+model DeliveryItem {
+  id                String   @id @default(uuid()) @db.Uuid
+  deliveryId        String   @db.Uuid
+  description       String
+  quantity          Int      @default(1)
+  weightKg          Float?
+  declaredValueKobo BigInt?
+  delivery          Delivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+
+  @@index([deliveryId])
+  @@map("delivery_items")
+}
+
+model DeliveryStop {
+  id           String    @id @default(uuid()) @db.Uuid
+  deliveryId   String    @db.Uuid
+  sequence     Int
+  address      String
+  lat          Float
+  lng          Float
+  contactName  String?
+  contactPhone String?
+  feeKobo      BigInt    @default(0)
+  completedAt  DateTime?
+  delivery     Delivery  @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+
+  @@unique([deliveryId, sequence])
+  @@map("delivery_stops")
+}
+
+model DeliveryAssignment {
+  id              String           @id @default(uuid()) @db.Uuid
+  deliveryId      String           @db.Uuid
+  riderId         String           @db.Uuid
+  status          AssignmentStatus @default(OFFERED)
+  method          AssignmentMethod @default(AUTO)
+  rank            Int?
+  scoreBreakdown  Json?
+  offeredAt       DateTime         @default(now())
+  expiresAt       DateTime
+  respondedAt     DateTime?
+  rejectionReason String?
+  assignedById    String?          @db.Uuid
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  delivery Delivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+  rider    Rider    @relation(fields: [riderId], references: [id])
+
+  @@unique([deliveryId, riderId])
+  @@index([riderId, status])
+  @@index([status, expiresAt]) // timeout sweep
+  @@map("delivery_assignments")
+}
+
+model DeliveryStatusHistory {
+  id              String          @id @default(uuid()) @db.Uuid
+  deliveryId      String          @db.Uuid
+  fromStatus      DeliveryStatus?
+  toStatus        DeliveryStatus
+  actorType       ActorType
+  changedByUserId String?         @db.Uuid
+  reason          String?
+  lat             Float?
+  lng             Float?
+  createdAt       DateTime        @default(now())
+
+  delivery Delivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+
+  @@index([deliveryId, createdAt])
+  @@map("delivery_status_history")
+}
+
+model DeliveryProof {
+  id                   String    @id @default(uuid()) @db.Uuid
+  deliveryId           String    @db.Uuid
+  type                 ProofType
+  fileKey              String?
+  otpVerifiedAt        DateTime?
+  recipientNameEntered String?
+  lat                  Float?
+  lng                  Float?
+  capturedAt           DateTime  @default(now())
+  capturedByUserId     String?   @db.Uuid
+
+  delivery Delivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+
+  @@index([deliveryId])
+  @@map("delivery_proofs")
+}
+
+model Review {
+  id         String   @id @default(uuid()) @db.Uuid
+  deliveryId String   @unique @db.Uuid
+  customerId String   @db.Uuid
+  riderId    String   @db.Uuid
+  rating     Int // 1..5, CHECK constraint added in migration
+  comment    String?
+  tags       String[]
+  createdAt  DateTime @default(now())
+
+  delivery Delivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+  customer Customer @relation(fields: [customerId], references: [id])
+  rider    Rider    @relation(fields: [riderId], references: [id])
+
+  @@index([riderId, createdAt(sort: Desc)])
+  @@map("reviews")
+}
+
+model Complaint {
+  id             String          @id @default(uuid()) @db.Uuid
+  deliveryId     String?         @unique @db.Uuid
+  customerId     String          @db.Uuid
+  category       String
+  description    String
+  status         ComplaintStatus @default(OPEN)
+  resolutionNote String?
+  resolvedById   String?         @db.Uuid
+  resolvedAt     DateTime?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  delivery Delivery? @relation(fields: [deliveryId], references: [id])
+  customer Customer  @relation(fields: [customerId], references: [id])
+  resolver Staff?    @relation("ComplaintResolver", fields: [resolvedById], references: [id])
+
+  @@index([customerId, createdAt(sort: Desc)])
+  @@index([status])
+  @@map("complaints")
+}
+
+// ─────────────────────────── SUPPORT DESK ──────────────────────────────────
+
+model SupportTicket {
+  id                String         @id @default(uuid()) @db.Uuid
+  ticketNumber      String         @unique
+  customerId        String?        @db.Uuid
+  riderId           String?        @db.Uuid
+  subject           String
+  priority          TicketPriority @default(NORMAL)
+  status            TicketStatus   @default(OPEN)
+  assignedToStaffId String?        @db.Uuid
+  lastMessageAt     DateTime       @default(now())
+  closedAt          DateTime?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  customer Customer?       @relation(fields: [customerId], references: [id])
+  rider    Rider?          @relation(fields: [riderId], references: [id])
+  assignee Staff?          @relation("TicketAssignee", fields: [assignedToStaffId], references: [id])
+  messages TicketMessage[]
+
+  @@index([status, lastMessageAt(sort: Desc)])
+  @@index([customerId])
+  @@map("support_tickets")
+}
+
+model TicketMessage {
+  id             String   @id @default(uuid()) @db.Uuid
+  ticketId       String   @db.Uuid
+  authorUserId   String   @db.Uuid
+  body           String
+  attachmentKey  String?
+  isInternalNote Boolean  @default(false)
+  createdAt      DateTime @default(now())
+
+  ticket SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  @@index([ticketId, createdAt])
+  @@map("ticket_messages")
+}
+
+model Faq {
+  id        String   @id @default(uuid()) @db.Uuid
+  question  String
+  answer    String
+  category  String
+  sortOrder Int      @default(0)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("faqs")
+}
+
+// ─────────────────────── MONEY: PAYMENTS & WALLETS ─────────────────────────
+
+model Payment {
+  id                    String              @id @default(uuid()) @db.Uuid
+  deliveryId            String?             @db.Uuid
+  customerId            String              @db.Uuid
+  provider              PaymentProvider
+  providerReference     String              @unique // our reference sent to the provider
+  providerTransactionId String?             @unique // provider's id (unique when present)
+  amountKobo            BigInt
+  feeKobo               BigInt              @default(0)
+  currency              String              @default("NGN")
+  status                PaymentRecordStatus @default(PENDING)
+  channel               String?
+  authorizationUrl      String?
+  paidAt                DateTime?
+  verifiedAt            DateTime?
+  failureReason         String?
+  rawResponse           Json?
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+
+  delivery Delivery? @relation(fields: [deliveryId], references: [id])
+  customer Customer  @relation(fields: [customerId], references: [id])
+  refunds  Refund[]
+
+  @@index([customerId, createdAt(sort: Desc)])
+  @@index([status])
+  @@index([deliveryId])
+  @@map("payments")
+}
+
+model PaymentWebhook {
+  id              String          @id @default(uuid()) @db.Uuid
+  provider        PaymentProvider
+  eventId         String // provider event id — dedupe key
+  eventType       String
+  signatureValid  Boolean
+  payload         Json
+  processedAt     DateTime?
+  processingError String?
+  createdAt       DateTime        @default(now())
+
+  @@unique([provider, eventId]) // ★ duplicate-webhook protection
+  @@index([createdAt])
+  @@map("payment_webhooks")
+}
+
+model Refund {
+  id               String       @id @default(uuid()) @db.Uuid
+  paymentId        String       @db.Uuid
+  amountKobo       BigInt
+  reason           String
+  status           RefundStatus @default(PENDING)
+  providerRefundId String?
+  processedById    String?      @db.Uuid
+  note             String?
+  completedAt      DateTime?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  payment   Payment @relation(fields: [paymentId], references: [id])
+  processor Staff?  @relation("RefundProcessor", fields: [processedById], references: [id])
+
+  @@index([paymentId])
+  @@map("refunds")
+}
+
+model Wallet {
+  id          String     @id @default(uuid()) @db.Uuid
+  userId      String     @unique @db.Uuid
+  type        WalletType
+  balanceKobo BigInt     @default(0) // CHECK (balanceKobo >= 0) added in migration
+  currency    String     @default("NGN")
+  version     Int        @default(0) // optimistic locking
+  isActive    Boolean    @default(true)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions WalletTransaction[]
+
+  @@map("wallets")
+}
+
+model WalletTransaction {
+  id               String           @id @default(uuid()) @db.Uuid
+  walletId         String           @db.Uuid
+  direction        WalletDirection
+  category         WalletTxCategory
+  amountKobo       BigInt
+  balanceAfterKobo BigInt
+  reference        String           @unique
+  idempotencyKey   String           @unique
+  journalEntryId   String?          @db.Uuid
+  description      String?
+  deliveryId       String?          @db.Uuid
+  createdAt        DateTime         @default(now())
+
+  wallet Wallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+
+  @@index([walletId, createdAt(sort: Desc)])
+  @@map("wallet_transactions")
+}
+
+// ────────────────────── MONEY: DOUBLE-ENTRY LEDGER ─────────────────────────
+
+model LedgerAccount {
+  id            String            @id @default(uuid()) @db.Uuid
+  code          String            @unique // 1000_CASH_CLEARING …
+  name          String
+  type          LedgerAccountType
+  normalBalance NormalBalance
+  isSystem      Boolean           @default(true)
+  isActive      Boolean           @default(true)
+  createdAt     DateTime          @default(now())
+
+  lines LedgerLine[]
+
+  @@map("ledger_accounts")
+}
+
+model JournalEntry {
+  id             String           @id @default(uuid()) @db.Uuid
+  reference      String           @unique
+  eventType      JournalEventType
+  description    String
+  deliveryId     String?          @db.Uuid
+  paymentId      String?          @db.Uuid
+  withdrawalId   String?          @db.Uuid
+  idempotencyKey String           @unique // ★ one posting per business event
+  createdById    String?          @db.Uuid
+  postedAt       DateTime         @default(now())
+  createdAt      DateTime         @default(now())
+
+  lines    LedgerLine[]
+  delivery Delivery?    @relation(fields: [deliveryId], references: [id])
+
+  @@index([eventType, postedAt])
+  @@map("journal_entries")
+}
+
+model LedgerLine {
+  id             String   @id @default(uuid()) @db.Uuid
+  journalEntryId String   @db.Uuid
+  accountId      String   @db.Uuid
+  debitKobo      BigInt   @default(0)
+  creditKobo     BigInt   @default(0)
+  memo           String?
+  createdAt      DateTime @default(now())
+
+  journalEntry JournalEntry  @relation(fields: [journalEntryId], references: [id], onDelete: Cascade)
+  account      LedgerAccount @relation(fields: [accountId], references: [id])
+
+  @@index([accountId, createdAt])
+  @@index([journalEntryId])
+  @@map("ledger_lines")
+}
+
+// ─────────────── EARNINGS, WITHDRAWALS, PRICING & PROMOTIONS ───────────────
+
+model RiderEarning {
+  id             String        @id @default(uuid()) @db.Uuid
+  riderId        String        @db.Uuid
+  deliveryId     String        @unique @db.Uuid
+  grossKobo      BigInt
+  commissionKobo BigInt
+  bonusKobo      BigInt        @default(0)
+  penaltyKobo    BigInt        @default(0)
+  netKobo        BigInt
+  status         EarningStatus @default(PENDING)
+  availableAt    DateTime // T+hold before withdrawal
+  withdrawalId   String?       @db.Uuid
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  rider      Rider       @relation(fields: [riderId], references: [id])
+  delivery   Delivery    @relation(fields: [deliveryId], references: [id])
+  withdrawal Withdrawal? @relation(fields: [withdrawalId], references: [id])
+
+  @@index([riderId, status, createdAt(sort: Desc)])
+  @@map("rider_earnings")
+}
+
+model RiderAdjustment {
+  id           String   @id @default(uuid()) @db.Uuid
+  riderId      String   @db.Uuid
+  amountKobo   BigInt // positive bonus, negative penalty
+  reason       String
+  recordedById String   @db.Uuid
+  createdAt    DateTime @default(now())
+
+  rider    Rider @relation(fields: [riderId], references: [id])
+  recorder Staff @relation("AdjustmentRecorder", fields: [recordedById], references: [id])
+
+  @@index([riderId, createdAt(sort: Desc)])
+  @@map("rider_adjustments")
+}
+
+model Withdrawal {
+  id                  String           @id @default(uuid()) @db.Uuid
+  riderId             String           @db.Uuid
+  amountKobo          BigInt
+  feeKobo             BigInt           @default(0)
+  netAmountKobo       BigInt
+  status              WithdrawalStatus @default(REQUESTED)
+  bankName            String
+  bankCode            String
+  accountNumber       String
+  accountName         String
+  idempotencyKey      String           @unique // ★ double-submit protection
+  reviewedById        String?          @db.Uuid
+  reviewedAt          DateTime?
+  decisionNote        String?
+  providerTransferRef String?          @unique
+  processedAt         DateTime?
+  paidAt              DateTime?
+  failureReason       String?
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+
+  rider    Rider          @relation(fields: [riderId], references: [id])
+  reviewer Staff?         @relation("WithdrawalReviewer", fields: [reviewedById], references: [id])
+  earnings RiderEarning[]
+
+  @@index([riderId, createdAt(sort: Desc)])
+  @@index([status, createdAt])
+  @@map("withdrawals")
+}
+
+model PricingRule {
+  id                     String   @id @default(uuid()) @db.Uuid
+  branchId               String?  @db.Uuid
+  serviceZoneId          String?  @db.Uuid
+  name                   String
+  version                Int      @default(1)
+  isActive               Boolean  @default(false)
+  effectiveFrom          DateTime @default(now())
+  baseFeeKobo            BigInt
+  perKmFeeKobo           BigInt
+  minFeeKobo             BigInt
+  freeKmIncluded         Float    @default(0)
+  expressSurchargeKobo   BigInt   @default(0)
+  scheduledSurchargeKobo BigInt   @default(0)
+  waitingFeePerMinKobo   BigInt   @default(0)
+  additionalStopFeeKobo  BigInt   @default(0)
+  sameDaySurchargeKobo   BigInt   @default(0)
+  defaultCommissionPct   Float    @default(20)
+  roundToKobo            Int      @default(50)
+  createdById            String?  @db.Uuid
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  branch      Branch?      @relation(fields: [branchId], references: [id])
+  serviceZone ServiceZone? @relation(fields: [serviceZoneId], references: [id])
+  creator     Staff?       @relation("PricingRuleCreator", fields: [createdById], references: [id])
+
+  @@index([isActive, effectiveFrom])
+  @@index([branchId, serviceZoneId])
+  @@map("pricing_rules")
+}
+
+model Promotion {
+  id               String    @id @default(uuid()) @db.Uuid
+  code             String    @unique
+  description      String?
+  type             PromoType
+  value            Int // percent (0-100) or kobo for FIXED
+  maxDiscountKobo  BigInt?
+  minOrderKobo     BigInt?
+  usageLimit       Int?
+  usageCount       Int       @default(0)
+  perCustomerLimit Int       @default(1)
+  startsAt         DateTime
+  endsAt           DateTime
+  isActive         Boolean   @default(true)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  redemptions PromoRedemption[]
+
+  @@index([isActive, startsAt, endsAt])
+  @@map("promotions")
+}
+
+model PromoRedemption {
+  id           String   @id @default(uuid()) @db.Uuid
+  promotionId  String   @db.Uuid
+  customerId   String   @db.Uuid
+  deliveryId   String   @unique @db.Uuid
+  discountKobo BigInt
+  createdAt    DateTime @default(now())
+
+  promotion Promotion @relation(fields: [promotionId], references: [id])
+  customer  Customer  @relation(fields: [customerId], references: [id])
+  delivery  Delivery  @relation(fields: [deliveryId], references: [id])
+
+  @@unique([promotionId, customerId, deliveryId])
+  @@map("promo_redemptions")
+}
+
+model Expense {
+  id           String   @id @default(uuid()) @db.Uuid
+  branchId     String   @db.Uuid
+  category     String
+  amountKobo   BigInt
+  description  String
+  spentAt      DateTime
+  receiptKey   String?
+  recordedById String   @db.Uuid
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  branch   Branch @relation(fields: [branchId], references: [id])
+  recorder Staff  @relation("ExpenseRecorder", fields: [recordedById], references: [id])
+
+  @@index([branchId, spentAt])
+  @@map("expenses")
+}
+
+// ───────────────────── NOTIFICATIONS, REPORTS & SYSTEM ─────────────────────
+
+model Notification {
+  id           String    @id @default(uuid()) @db.Uuid
+  userId       String    @db.Uuid
+  type         String
+  title        String
+  body         String
+  data         Json?
+  channelsSent Json?
+  readAt       DateTime?
+  createdAt    DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt])
+  @@index([createdAt])
+  @@map("notifications")
+}
+
+model AdminAlert {
+  id               String        @id @default(uuid()) @db.Uuid
+  type             String // NEW_BOOKING, NEW_RIDER, DOC_REVIEW, FAILED_DELIVERY, PAYMENT_FAILURE, WITHDRAWAL_REQUEST, SUSPICIOUS_ACTIVITY
+  severity         AlertSeverity @default(INFO)
+  title            String
+  body             String?
+  entityType       String?
+  entityId         String?       @db.Uuid
+  acknowledgedById String?       @db.Uuid
+  acknowledgedAt   DateTime?
+  createdAt        DateTime      @default(now())
+
+  acknowledger Staff? @relation("AlertAcknowledger", fields: [acknowledgedById], references: [id])
+
+  @@index([acknowledgedAt, createdAt(sort: Desc)])
+  @@map("admin_alerts")
+}
+
+model ReportRequest {
+  id            String       @id @default(uuid()) @db.Uuid
+  type          ReportType
+  format        String // CSV | PDF
+  params        Json
+  status        ReportStatus @default(QUEUED)
+  fileKey       String?
+  error         String?
+  requestedById String       @db.Uuid
+  completedAt   DateTime?
+  createdAt     DateTime     @default(now())
+
+  @@index([requestedById, createdAt(sort: Desc)])
+  @@map("report_requests")
+}
+
+model AuditLog {
+  id          String   @id @default(uuid()) @db.Uuid
+  actorUserId String?  @db.Uuid
+  actorRole   String?
+  action      String
+  entityType  String
+  entityId    String?
+  before      Json?
+  after       Json?
+  ip          String?
+  userAgent   String?
+  createdAt   DateTime @default(now())
+
+  actor User? @relation("ActorAuditLogs", fields: [actorUserId], references: [id])
+
+  @@index([entityType, entityId])
+  @@index([actorUserId, createdAt(sort: Desc)])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+model SystemSetting {
+  id          String   @id @default(uuid()) @db.Uuid
+  key         String   @unique
+  valueJson   Json
+  type        String // STRING | NUMBER | BOOLEAN | JSON
+  group       String
+  description String?
+  isSecret    Boolean  @default(false)
+  updatedById String?  @db.Uuid
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("system_settings")
+}

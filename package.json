@@ -1,0 +1,35 @@
+{
+  "name": "dispatch-platform",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Dispatch rider & logistics management platform (customer, rider, admin portals)",
+  "workspaces": [
+    "packages/shared",
+    "backend",
+    "frontend"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "env:up": "bash ./scripts/dev-env-up.sh",
+    "build:shared": "npm run build --workspace @dispatch/shared",
+    "dev": "npm run build:shared && concurrently -n api,web -c blue,green \"npm run dev --workspace @dispatch/api\" \"npm run dev --workspace @dispatch/web\"",
+    "dev:api": "npm run dev --workspace @dispatch/api",
+    "dev:web": "npm run dev --workspace @dispatch/web",
+    "db:migrate": "npm run db:migrate --workspace @dispatch/api",
+    "db:seed": "npm run db:seed --workspace @dispatch/api",
+    "db:studio": "npm run db:studio --workspace @dispatch/api",
+    "db:reset": "npm run db:reset --workspace @dispatch/api",
+    "test": "npm run test --workspace @dispatch/api",
+    "test:watch": "npm run test:watch --workspace @dispatch/api",
+    "build": "npm run build:shared && npm run build --workspace @dispatch/api && npm run build --workspace @dispatch/web",
+    "lint": "npm run lint --workspace @dispatch/api && npm run lint --workspace @dispatch/web",
+    "setup": "bash ./scripts/dev-env-up.sh && npm install && npm run build:shared && npm run db:migrate && npm run db:seed"
+  },
+  "devDependencies": {
+    "concurrently": "9.2.1",
+    "playwright": "^1.64.1",
+    "typescript": "5.9.3"
+  }
+}

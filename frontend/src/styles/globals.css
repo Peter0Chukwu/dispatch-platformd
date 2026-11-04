@@ -1,0 +1,40 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+  body {
+    @apply bg-ink-50 text-ink-800 antialiased;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+  }
+  /* Visible keyboard focus everywhere — accessibility is not optional. */
+  :focus-visible {
+    @apply outline-none ring-2 ring-accent-500 ring-offset-2 ring-offset-white;
+  }
+  /* Respect users who ask for less motion. */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+@layer components {
+  .card-surface {
+    @apply rounded-2xl border border-ink-200 bg-white shadow-card;
+  }
+  .field-label {
+    @apply mb-1.5 block text-sm font-medium text-ink-700;
+  }
+  .field-hint {
+    @apply mt-1.5 text-xs text-ink-500;
+  }
+  /* Rider portal: touch targets must be comfortable on a motorcycle-mounted phone. */
+  .touch-target {
+    @apply min-h-[44px] min-w-[44px];
+  }
+}
