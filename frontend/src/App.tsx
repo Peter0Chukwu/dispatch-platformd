@@ -8,6 +8,9 @@ import VerifyPage from './pages/auth/VerifyPage';
 import ForgotPasswordPage from './pages/auth/ForgotPasswordPage';
 import ResetPasswordPage from './pages/auth/ResetPasswordPage';
 import CustomerHome from './pages/customer/CustomerHome';
+import BookDeliveryPage from './pages/customer/BookDeliveryPage';
+import DeliveriesPage from './pages/customer/DeliveriesPage';
+import DeliveryDetailPage from './pages/customer/DeliveryDetailPage';
 import RiderHome from './pages/rider/RiderHome';
 import AdminHome from './pages/admin/AdminHome';
 import { RedirectIfAuthenticated, RequireAuth, RequirePermission } from './routes/guards';
@@ -31,8 +34,9 @@ export default function App() {
       {/* Customer portal */}
       <Route path="/app" element={<RequireAuth audience="CUSTOMER" />}>
         <Route index element={<CustomerHome />} />
-        <Route path="book" element={<PortalPlaceholder portal="Customer" phase="Phase 3" scope={['Map-based booking with a server-calculated price']} />} />
-        <Route path="deliveries" element={<PortalPlaceholder portal="Customer" phase="Phase 3" scope={['Delivery history and live tracking']} />} />
+        <Route path="book" element={<BookDeliveryPage />} />
+        <Route path="deliveries" element={<DeliveriesPage />} />
+        <Route path="deliveries/:id" element={<DeliveryDetailPage />} />
         <Route path="wallet" element={<PortalPlaceholder portal="Customer" phase="Phase 7" scope={['Wallet top-up and transaction history']} />} />
       </Route>
 

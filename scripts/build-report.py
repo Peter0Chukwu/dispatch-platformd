@@ -9,6 +9,13 @@ from PIL import Image
 
 OUT = "documentation/BUILD-REPORT.html"
 SHOTS = [
+    ("screenshots/33-book-review.png", "Phase 3 — review step with the server's price", "₦4,341.00 for Lekki → Yaba, 18.47 km. Every line — base fee, distance beyond the 2 free km, express surcharge — was computed in integer kobo by the API. The browser sent two coordinates and nothing else."),
+    ("screenshots/34-delivery-detail.png", "Phase 3 — the booking, with its frozen price", "The breakdown on this page comes from deliveries.priceSnapshot, written at booking time. Changing the pricing rules tomorrow cannot rewrite what this customer was charged."),
+    ("screenshots/35-deliveries-list.png", "Phase 3 — delivery history", "Real rows from the customer's own bookings, status-filtered and paginated by the API. Another customer's deliveries are unreachable: the query is scoped by customerId, and a probe returns 404 rather than confirming a reference exists."),
+    ("screenshots/36-dashboard-filled.png", "Phase 3 — dashboard counters, now non-zero", "These figures come from COUNT and SUM in Postgres. The same screen showed honest zeros before the first booking — the numbers moved because a real delivery was created, not because someone typed a demo value."),
+    ("screenshots/31-book-step1-pickup.png", "Phase 3 — pickup step", "Twelve real Lagos locations with coordinates stand in for the Google Maps picker (Maps is still stubbed). Distances are still measured server-side, so the price is right even before the map arrives."),
+    ("screenshots/37-cancel-dialog.png", "Phase 3 — cancelling requires a reason", "The API stores who cancelled, when, and why, and writes a timeline entry. Cancelling is refused with 409 once a rider is carrying the package — the state machine decides, not the button."),
+    ("screenshots/38-delivery-cancelled.png", "Phase 3 — cancelled, with the reason kept", "A cancelled delivery keeps its price snapshot and its full history. Nothing is deleted, so support can always reconstruct what happened."),
     ("screenshots/11-admin-dashboard.png", "Phase 2 — admin command centre (signed in)", "A real super-admin session. The staff directory, role badges and 37 permission chips are read from PostgreSQL through /admin/whoami and /admin/staff — capture by a real browser sign-in, not a mock."),
     ("screenshots/10-login.png", "Phase 2 — sign-in with portal selection", "One login screen, three audiences. The portal choice is enforced server-side: a customer account cannot obtain an admin token."),
     ("screenshots/12-register.png", "Phase 2 — customer registration", "Validated by the same Zod schema the API uses. Weak passwords are rejected by the server even if the browser is bypassed."),
@@ -64,7 +71,7 @@ html = f"""<!doctype html>
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Dispatch Platform — Build Report (Phase 2)</title>
+<title>Dispatch Platform — Build Report (Phase 3)</title>
 <style>
   :root {{
     --navy:#0B1F3A; --navy-2:#16304F; --green:#12B76A; --ink:#334155;
@@ -121,17 +128,18 @@ html = f"""<!doctype html>
 <body>
 <header>
   <div class="wrap">
-    <p class="eyebrow">Phase 2 complete · build report</p>
+    <p class="eyebrow">Phase 3 complete · build report</p>
     <h1>Dispatch &amp; Logistics Platform</h1>
     <p>Customer portal, rider portal and admin command centre on one NestJS API and one PostgreSQL
        database. This page is a static snapshot with real screenshots captured from the running
        application — it works without any server.</p>
     <div class="badges">
-      <span class="badge ok">✓ 61 tests passing</span>
+      <span class="badge ok">✓ 102 tests passing</span>
       <span class="badge ok">✓ API + database + Redis live</span>
       <span class="badge">NestJS 11 · Prisma 6 · PostgreSQL 17 · Redis 8</span>
       <span class="badge">React 19 · Vite 7 · Tailwind · TanStack Query</span>
       <span class="badge ok">✓ Argon2id · JWT 15 min · rotating refresh tokens</span>
+      <span class="badge ok">✓ Prices computed server-side in integer kobo</span>
       <span class="badge">Captured {datetime.now(timezone.utc).strftime('%d %b %Y %H:%M UTC')}</span>
     </div>
   </div>
@@ -153,6 +161,25 @@ html = f"""<!doctype html>
     customers or naira of revenue. Everything else is real configuration: a permission matrix, a chart of
     accounts, service zones and pricing rules. When Phase 3 adds bookings, every figure on every dashboard
     will trace back to a genuine row.</p>
+  </div>
+
+  <h2>Phase 3 — booking and the pricing engine</h2>
+  <div class="panel">
+    <p><strong>The browser never sends a price.</strong> A booking request carries two coordinates, a
+    package description and a delivery type. The API looks up the active pricing rule, measures the
+    route, assembles the fee, applies promotions and returns the breakdown. When the customer confirms,
+    it calculates all of it again — a quote is never treated as a payment instruction.</p>
+    <table>
+      <tr><th>Step</th><th>Rule</th></tr>
+      <tr><td>Zone</td><td>The zone containing the pickup decides the rule; falls back to the branch rule, then the global rule. A point more than 60 km from every zone is refused with a readable message.</td></tr>
+      <tr><td>Distance</td><td>Haversine × 1.35 road factor while Google Maps is stubbed. Multi-stop trips are summed leg by leg.</td></tr>
+      <tr><td>Fees</td><td>Base fee + (distance beyond the free kilometres × per-km rate) + additional stops.</td></tr>
+      <tr><td>Minimum</td><td>The floor is applied to the trip <em>before</em> surcharges, so it protects the trip without hiding an express fee.</td></tr>
+      <tr><td>Surcharges</td><td>Express, same-day and scheduled fees from the rule row.</td></tr>
+      <tr><td>Rounding</td><td>One rounding step, to 50 kobo, in integer arithmetic. No floating-point naira in the money path.</td></tr>
+      <tr><td>Promotions</td><td>Percentage (capped), fixed amount, or free delivery. Window, global limit, per-customer limit and minimum order are all checked against the database. A promo can make a delivery free, never negative.</td></tr>
+      <tr><td>Freeze</td><td>The entire breakdown is written to <code>deliveries.priceSnapshot</code>. A rule change tomorrow cannot alter what was charged today.</td></tr>
+    </table>
   </div>
 
   <h2>Phase 2 — authentication and access control</h2>
@@ -215,7 +242,9 @@ html = f"""<!doctype html>
       <tr><td>Rate limiting + account lockout</td><td class="yes">Built &amp; tested</td><td><code>common/rate-limit/</code></td></tr>
       <tr><td>Rider portal screens (documents, offers, jobs)</td><td class="no">Phase 4</td><td>—</td></tr>
       <tr><td>Admin command centre screens</td><td class="no">Phase 5</td><td>—</td></tr>
-      <tr><td>Customer booking screens + pricing engine</td><td class="no">Phase 3 (next)</td><td>—</td></tr>
+      <tr><td>Booking wizard, quote, price snapshot, cancel</td><td class="yes">Built &amp; tested</td><td><code>backend/src/pricing/</code> · <code>src/deliveries/</code></td></tr>
+      <tr><td>Delivery history and detail with a real timeline</td><td class="yes">Built &amp; tested</td><td><code>frontend/src/pages/customer/</code></td></tr>
+      <tr><td>Rider assignment, offers and the delivery workflow</td><td class="no">Phase 4 (next)</td><td>—</td></tr>
     </table>
   </div>
 
@@ -240,9 +269,9 @@ npm run setup
 npm run dev
 
 <span class="c"># verify</span>
-npm test            <span class="c"># 61 tests against a real, isolated Postgres + Redis</span>
+npm test            <span class="c"># 102 tests against a real, isolated Postgres + Redis</span>
 bash scripts/smoke.sh
-node scripts/capture-phase2.mjs       <span class="c"># browser journey + refresh these screenshots</span>
+node scripts/capture-phase3.mjs       <span class="c"># booking journey + refresh these screenshots</span>
 python3 scripts/build-report.py       <span class="c"># regenerate this page</span></pre>
 
   <h2>Known limitations after Phase 2</h2>
@@ -253,8 +282,12 @@ python3 scripts/build-report.py       <span class="c"># regenerate this page</sp
       provider plugs into <code>MessagingService</code> in Phase 7 without touching the auth code.</li>
       <li><strong>No staff 2FA yet.</strong> Recommended before real money moves; the TOTP storage and
       verification plumbing already exist.</li>
-      <li><strong>No CAPTCHA.</strong> Lockout and rate limiting cover the basics; add Turnstile if abuse
-      appears.</li>
+      <li><strong>Google Maps is not connected.</strong> Distances are straight-line × a road factor, and
+      the UI labels them as an estimate. A real key switches one service, nothing else.</li>
+      <li><strong>No payment is taken yet.</strong> A booking is created UNPAID and the screen says so;
+      Paystack, Flutterwave and the wallet arrive in Phase 7.</li>
+      <li><strong>No rider assignment yet.</strong> Bookings wait at PENDING until the Phase 4 offer
+      engine exists.</li>
       <li><strong>Not yet built:</strong> rider document upload, staff/role management screens, audit-log
       viewer, session list. The APIs exist; the screens arrive with Phases 4–5.</li>
       <li><strong>Payments remain simulated</strong> (<code>PAYMENTS_MODE=DEVELOPMENT</code>) until the
@@ -263,8 +296,8 @@ python3 scripts/build-report.py       <span class="c"># regenerate this page</sp
   </div>
 
   <footer>
-    Phase 2 build report · generated by <code>scripts/build-report.py</code> ·
-    source of truth: <code>documentation/PHASE-LOG/PHASE-2.md</code>
+    Phase 3 build report · generated by <code>scripts/build-report.py</code> ·
+    source of truth: <code>documentation/PHASE-LOG/PHASE-3.md</code>
   </footer>
 </main>
 </body>

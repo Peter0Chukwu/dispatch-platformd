@@ -1,3 +1,11 @@
+// Load backend/.env explicitly.
+//
+// `tsx` does not read .env on its own, so running the seed from a fresh shell
+// failed with "Environment variable not found: DATABASE_URL" — the API worked
+// because Nest's ConfigModule loads the file. Loading it here makes the seed
+// behave identically however it is invoked (npm script, CI, docker entrypoint).
+import 'dotenv/config';
+
 /**
  * DATABASE SEED — run with:  npm run db:seed
  *

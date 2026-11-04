@@ -3,10 +3,11 @@
 A complete dispatch-rider and logistics management platform for a Nigerian dispatch company:
 **Customer portal · Rider portal · Admin command centre** — one backend, one database, real records.
 
-> **Current status: Phase 2 complete** — foundation + authentication, sessions, roles, permissions and
-> audit trail. 61 automated tests passing. Phase 3 (customer booking + pricing engine) is next.
+> **Current status: Phase 3 complete** — foundation, authentication/RBAC, and customer booking with a
+> server-side pricing engine. 102 automated tests passing. Phase 4 (rider portal + offer engine) is next.
 >
 > Phase logs: [`PHASE-1`](documentation/PHASE-LOG/PHASE-1.md) · [`PHASE-2`](documentation/PHASE-LOG/PHASE-2.md)
+> · [`PHASE-3`](documentation/PHASE-LOG/PHASE-3.md)
 > · Visual build report: [`documentation/BUILD-REPORT.html`](documentation/BUILD-REPORT.html)
 
 ## Documentation
@@ -15,6 +16,7 @@ A complete dispatch-rider and logistics management platform for a Nigerian dispa
 |---|---|
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | System architecture, portal communication, API surface, folder structure, 10-phase roadmap, external services, risks |
 | [`docs/DATABASE-DRAFT.prisma`](docs/DATABASE-DRAFT.prisma) | The full database design (review copy) |
+| [`documentation/PHASE-LOG/PHASE-3.md`](documentation/PHASE-LOG/PHASE-3.md) | Phase 3: pricing engine, booking API, cancellation — how a price is built |
 | [`documentation/PHASE-LOG/PHASE-2.md`](documentation/PHASE-LOG/PHASE-2.md) | Phase 2: auth, sessions, RBAC, audit — files, endpoints, tests, bugs fixed |
 | [`documentation/PHASE-LOG/PHASE-1.md`](documentation/PHASE-LOG/PHASE-1.md) | Phase 1: schema, seed, API shell, design system |
 | [`documentation/BUILD-REPORT.html`](documentation/BUILD-REPORT.html) | Self-contained visual report with real screenshots |
@@ -46,7 +48,7 @@ Then open:
 - **http://localhost:4000/api/v1/health** — API + database + Redis status
 
 ```bash
-npm test              # 61 tests (auth, RBAC, money maths, state machine, live health)
+npm test              # 102 tests (pricing, booking, auth, RBAC, money maths, state machine)
 ./scripts/smoke.sh    # end-to-end smoke check of a running stack
 ```
 
@@ -72,6 +74,8 @@ docs/                 Architecture and database design
    `localStorage` — that is one XSS away from a full account takeover.
 7. **Every new route must declare its permissions.** The global guards require auth by default; use
    `@Public()` deliberately and `@RequirePermissions(...)` on anything sensitive.
+8. **The client never sends a price.** The server quotes, recalculates on confirm, and freezes the
+   breakdown onto the row. Never trust an amount that arrived over HTTP.
 
 ## Environment notes (this sandbox)
 

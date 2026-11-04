@@ -4,7 +4,18 @@ import { PortalShell } from '../../layouts/PortalShell';
 import { Alert, Badge, Card, CardBody, CardHeader, StatCard, StatusPill } from '../../components/ui';
 import { api } from '../../lib/api';
 import { useAuth } from '../../contexts/AuthContext';
-import { formatNgPhone } from '@dispatch/shared';
+import { formatNaira, formatNgPhone } from '@dispatch/shared';
+import { CUSTOMER_NAV } from './nav';
+
+interface SummaryResponse {
+  total: number;
+  active: number;
+  delivered: number;
+  cancelled: number;
+  pending: number;
+  spentKobo: string;
+  savedKobo: string;
+}
 
 interface ProfileResponse {
   user: { firstName: string; email: string | null; phone: string | null; emailVerified: boolean; phoneVerified: boolean; createdAt: string };
@@ -12,12 +23,7 @@ interface ProfileResponse {
   session: { audience: string };
 }
 
-const NAV = [
-  { to: '/app', label: 'Overview' },
-  { to: '/app/book', label: 'Book a rider', soon: true },
-  { to: '/app/deliveries', label: 'Deliveries', soon: true },
-  { to: '/app/wallet', label: 'Wallet', soon: true },
-];
+
 
 export default function CustomerHome() {
   const { user } = useAuth();
@@ -25,9 +31,14 @@ export default function CustomerHome() {
     queryKey: ['me'],
     queryFn: () => api.get<ProfileResponse>('/auth/me'),
   });
+  // Real aggregates from Postgres — never a placeholder number.
+  const { data: summary } = useQuery({
+    queryKey: ['deliveries', 'summary'],
+    queryFn: () => api.get<SummaryResponse>('/deliveries/summary'),
+  });
 
   return (
-    <PortalShell portal="Customer" nav={NAV}>
+    <PortalShell portal="Customer" nav={CUSTOMER_NAV}>
       <div className="mx-auto max-w-5xl space-y-6">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-ink-900">
@@ -40,10 +51,22 @@ export default function CustomerHome() {
         </div>
 
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <StatCard label="Deliveries booked" value="0" hint="booking arrives in Phase 3" />
-          <StatCard label="Active deliveries" value="0" hint="live tracking in Phase 8" />
+          <StatCard
+            label="Deliveries booked"
+            value={String(summary?.total ?? 0)}
+            hint={summary ? `${summary.delivered} delivered · ${summary.cancelled} cancelled` : 'loading…'}
+          />
+          <StatCard
+            label="Active now"
+            value={String(summary?.active ?? 0)}
+            hint={summary?.pending ? `${summary.pending} waiting for a rider` : 'nothing in progress'}
+          />
+          <StatCard
+            label="Spent on deliveries"
+            value={formatNaira(summary?.spentKobo ?? 0)}
+            hint={summary && BigInt(summary.savedKobo) > 0n ? `saved ${formatNaira(summary.savedKobo)} with promos` : 'payment arrives in Phase 7'}
+          />
           <StatCard label="Wallet balance" value="₦0.00" hint="top-up in Phase 7" />
-          <StatCard label="Ratings given" value="0" hint="after completed deliveries" />
         </div>
 
         <div className="grid gap-4 lg:grid-cols-2">

@@ -9,6 +9,8 @@ import { RedisModule } from './infra/redis/redis.module';
 import { HealthModule } from './health/health.module';
 import { AuthModule } from './auth/auth.module';
 import { AdminModule } from './admin/admin.module';
+import { PricingModule } from './pricing/pricing.module';
+import { DeliveriesModule } from './deliveries/deliveries.module';
 import { UsersModule } from './users/users.module';
 import { AuditModule } from './audit/audit.module';
 import { MessagingModule } from './messaging/messaging.module';
@@ -34,6 +36,8 @@ import { PermissionsGuard } from './auth/guards/permissions.guard';
     AuditModule,
     UsersModule,
     AuthModule,
+    PricingModule,
+    DeliveriesModule,
     AdminModule,
     HealthModule,
   ],

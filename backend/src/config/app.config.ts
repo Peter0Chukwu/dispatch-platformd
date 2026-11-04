@@ -24,6 +24,14 @@ export class AppConfig {
   get redisUrl() { return this.config.get('REDIS_URL', { infer: true }); }
   get paymentsMode() { return this.config.get('PAYMENTS_MODE', { infer: true }); }
   get mapsProvider() { return this.config.get('MAPS_PROVIDER', { infer: true }); }
+  /** Lower-cased provider for comparisons: 'stub' | 'google' | 'mapbox'. */
+  get mapsProviderKey(): 'stub' | 'google' | 'mapbox' {
+    return this.config.get('MAPS_PROVIDER', { infer: true }).toLowerCase() as 'stub' | 'google' | 'mapbox';
+  }
+  get googleMapsApiKey(): string | undefined {
+    const key = this.config.get('GOOGLE_MAPS_API_KEY', { infer: true });
+    return key && key.trim().length > 0 ? key.trim() : undefined;
+  }
   get smsMode() { return this.config.get('SMS_MODE', { infer: true }); }
   get emailMode() { return this.config.get('EMAIL_MODE', { infer: true }); }
   get commissionPercent() { return this.config.get('DEFAULT_COMMISSION_PCT', { infer: true }); }
