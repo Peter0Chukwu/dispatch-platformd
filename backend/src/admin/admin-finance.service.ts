@@ -59,12 +59,15 @@ export class AdminFinanceService {
         }),
       ]);
 
+    // Ledger figures are scoped to the same window as the payment ones — otherwise a
+    // September summary would quietly contain last year's revenue.
+    const period = from || to ? { from, to } : undefined;
     const [revenueKobo, surchargeKobo, refundsKobo, feesKobo, riderCostKobo] = await Promise.all([
-      this.ledgerBalance(ACCOUNTS.DELIVERY_REVENUE),
-      this.ledgerBalance(ACCOUNTS.SURCHARGE_REVENUE),
-      this.ledgerBalance(ACCOUNTS.REFUNDS),
-      this.ledgerBalance(ACCOUNTS.GATEWAY_FEES),
-      this.ledgerBalance(ACCOUNTS.RIDER_COMMISSION_COST),
+      this.ledgerBalance(ACCOUNTS.DELIVERY_REVENUE, period),
+      this.ledgerBalance(ACCOUNTS.SURCHARGE_REVENUE, period),
+      this.ledgerBalance(ACCOUNTS.REFUNDS, period),
+      this.ledgerBalance(ACCOUNTS.GATEWAY_FEES, period),
+      this.ledgerBalance(ACCOUNTS.RIDER_COMMISSION_COST, period),
     ]);
 
     const collectedKobo = collected._sum.amountKobo ?? 0n;
@@ -262,8 +265,8 @@ export class AdminFinanceService {
     };
   }
 
-  /** Net balance of a revenue/expense account, in naira-friendly kobo. */
-  private async ledgerBalance(code: string): Promise<bigint> {
-    return this.ledger.accountBalance(code);
+  /** Net balance of a revenue/expense account, optionally inside a period. */
+  private async ledgerBalance(code: string, window?: { from?: Date; to?: Date }): Promise<bigint> {
+    return this.ledger.accountBalance(code, window);
   }
 }

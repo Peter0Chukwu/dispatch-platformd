@@ -17,6 +17,7 @@ import { PricingModule } from './pricing/pricing.module';
 import { DeliveriesModule } from './deliveries/deliveries.module';
 import { MapsModule } from './maps/maps.module';
 import { TrackingModule } from './tracking/tracking.module';
+import { ReportsModule } from './reports/reports.module';
 import { StorageModule } from './storage/storage.module';
 import { RidersModule } from './riders/riders.module';
 import { RealtimeModule } from './realtime/realtime.module';
@@ -59,6 +60,7 @@ import { PermissionsGuard } from './auth/guards/permissions.guard';
     WithdrawalsModule,
     MapsModule,
     TrackingModule,
+    ReportsModule,
     DeliveriesModule,
     AdminModule,
     HealthModule,

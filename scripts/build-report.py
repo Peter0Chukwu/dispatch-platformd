@@ -9,6 +9,13 @@ from PIL import Image
 
 OUT = "documentation/BUILD-REPORT.html"
 SHOTS = [
+    ("screenshots/phase-9/01-report-catalogue-and-preview.png", "Phase 9 \u2014 nine reports, and a preview that writes nothing", "The financial summary for the last 45 days, computed seconds before the shutter: collected \u20a660,943.50, gross revenue \u20a660,943.50, refunds \u20a60.00, rider cost \u20a642,180.00, gateway fees \u20a63,014.07, net \u20a615,749.43. Gross and net are separate lines on purpose \u2014 \u201cwe invoiced \u20a660k\u201d and \u201cwe kept \u20a615.7k\u201d are different questions. This is a preview: it ran the same dataset the file will run, and wrote nothing to disk."),
+    ("screenshots/phase-9/06-csv-download.png", "Phase 9 \u2014 the CSV, as a spreadsheet sees it", "Downloaded through a signed link, not a session. Every file carries its own provenance in comment lines \u2014 title, period, generation timestamp, report id \u2014 plus a totals block at the end, and money is a plain naira decimal (52726.50, never \u20a652,726.50) so SUM() works. A UTF-8 BOM goes first so Excel opens it as UTF-8 instead of mojibake."),
+    ("screenshots/phase-9/05-generated-files.png", "Phase 9 \u2014 the queue, visible", "Every file here was a job: the API answered in milliseconds with QUEUED, a worker rendered it, and the row moved ready. A failure keeps its error text and offers Retry; a ready row offers Download, which mints a fresh 15-minute link. Restart the API mid-report and the row is still there \u2014 the queue is the table, not a variable."),
+    ("screenshots/phase-9/02-zone-performance-preview.png", "Phase 9 \u2014 zone performance", "Deliveries, completion and revenue per service zone with average trip distance. Same pipeline, different shape: one dataset builder per report, one table, two renderings \u2014 which is why the CSV and the PDF of a report cannot disagree about a number."),
+    ("screenshots/phase-9/03-rider-performance-preview.png", "Phase 9 \u2014 rider performance", "Completion rate, average time from acceptance to hand-over, acceptance rate and ratings, per rider. The column says what it measures rather than calling it \u201ctrip time\u201d."),
+    ("screenshots/phase-9/04-report-queued.png", "Phase 9 \u2014 generating a file does not block the API", "The request returned 201 with a QUEUED job in milliseconds while the row above still says working. A report is a read-heavy query; making a manager\u2019s browser wait for it is fine once and ruinous when the finance team all clicks at 09:00."),
+    ("screenshots/phase-9/07-tampered-link-refused.png", "Phase 9 \u2014 a download link is a signed, expiring credential", "The token is base64url(reportId.expiry) + an HMAC over it, keyed with a purpose-prefixed secret and compared in constant time. Edit the id and it stops verifying; wait out the 15 minutes and it expires; either way it is a 403 rather than a file."),
     ("screenshots/phase-8/02-customer-live-tracking.png", "Phase 8 — the customer sees the rider, and the map admits what it is", "\u007e23 min and 8.4 km to the drop-off, measured from the rider's last reported coordinate \u2014 not from the booking's stored distance. The caption under the map says the positions are exact and the basemap is not, because Google Maps is not configured yet. A schematic that says it is a schematic is honest; a fake street map would not be."),
     ("screenshots/phase-8/05-admin-operations-map.png", "Phase 8 — the dispatcher's city view", "One rider on a delivery between pickup and drop-off, one job waiting for a rider, and the counts above the map computed from the same payload that drew the markers. Riders who have never pinged are not drawn at all \u2014 they are counted as missing instead of parked at their branch."),
     ("screenshots/phase-8/04-public-tracking.png", "Phase 8 — a share link a recipient can open", "No account, no app, no session \u2014 the token is the credential. It shows the parcel, the rider's first name and the expiry date, and nothing else: no phone numbers, no customer identity. The customer can revoke it at any moment and the old URL stops working immediately."),
@@ -187,7 +194,7 @@ html = f"""<!doctype html>
        database. This page is a static snapshot with real screenshots captured from the running
        application — it works without any server.</p>
     <div class="badges">
-      <span class="badge ok">✓ 237 automated tests passing</span>
+      <span class="badge ok">✓ 253 automated tests passing</span>
       <span class="badge ok">✓ API + database + Redis live</span>
       <span class="badge">NestJS 11 · Prisma 6 · PostgreSQL 17 · Redis 8</span>
       <span class="badge">React 19 · Vite 7 · Tailwind · TanStack Query</span>
@@ -240,6 +247,31 @@ html = f"""<!doctype html>
     </table>
   </div>
 
+
+  <h2>Phase 9 — reports and analytics</h2>
+  <div class="panel">
+    <p><strong>A report is not a picture of the data, it is a claim about it.</strong> So the rule for this
+    phase was simple to state and expensive to honour: every total in a report must equal a number the rest
+    of the platform already knows. The financial summary's net line is the same arithmetic as
+    <code>GET /admin/finance/summary</code> for the same dates, and the test suite asserts it rather than
+    trusting it. The second rule is about pace — generating a file never holds a request open, because the
+    finance team clicks at 09:00 and a report is a read-heavy query.</p>
+    <table>
+      <tr><th>Decision</th><th>How it works</th></tr>
+      <tr><td>Nine reports, two formats, one source of truth</td><td>Daily and monthly deliveries, revenue by provider and day, rider earnings, customers, cancellations, rider performance, zone performance and the financial summary. Each is built once into a <code>ReportTable</code> and rendered twice — CSV and PDF — so the two files cannot disagree.</td></tr>
+      <tr><td>A report is a job, not a request</td><td><code>POST /admin/reports</code> returns a QUEUED row in milliseconds. A worker tick claims it with a conditional <code>updateMany</code> (so it renders exactly once), stores the file privately and marks it READY — or FAILED, keeping the error text for the operator to read.</td></tr>
+      <tr><td>The queue is the table</td><td>Restart the API mid-report and nothing is lost: the row is still QUEUED, or PROCESSING and recovered by <code>requeueStale()</code> on the next tick. No in-memory queue, no lost work on deploy.</td></tr>
+      <tr><td>One report per tick</td><td>Deliberate throttling. Five concurrent report queries is how a reporting feature takes a production database down; a queue length is a capacity problem, not an emergency.</td></tr>
+      <tr><td>A link, not a session</td><td>The file is served behind <code>base64url(reportId.expiry) + HMAC</code>, keyed with a purpose-prefixed secret, compared in constant time, valid 15 minutes, <code>no-store</code>. A browser cannot put a bearer token on an &lt;a href&gt;, and a download should not need one.</td></tr>
+      <tr><td>Spreadsheet-safe money</td><td>CSV money is a plain naira decimal — <code>4894.50</code>, never <code>₦4,894.50</code> — because a currency symbol turns a number into text and breaks every formula. The PDF keeps the ₦. Every file carries its period, generation time and report id in comment lines, and a totals block at the end.</td></tr>
+      <tr><td>Gross and net are separate lines</td><td>Collected, gross revenue, refunds, net revenue, rider cost, gateway fees, net — seven lines that do not blend two different questions. Ledger figures are scoped to the requested period by <code>postedAt</code>, so a report for September cannot contain last year.</td></tr>
+      <tr><td>Preview writes nothing</td><td>The preview runs the same builder and shows its totals and up to 25 rows with an explicit \u201cthis is a sample\u201d notice. What an operator checks is exactly what the operator gets — and no file, no job, no storage cost.</td></tr>
+      <tr><td>Deliberately not built</td><td>Recurring emailed reports. The job model is shaped for it (<code>params</code> holds the period) but no scheduler exists, and a fake \u201cscheduled\u201d checkbox would be worse than an honest gap. It lands with the notification centre.</td></tr>
+    </table>
+    <p style="margin-top:14px;color:#475569">Reconciliation from the demo run: report net \u20a615,749.43 = finance screen net \u20a615,749.43 ·
+    collected \u20a660,943.50 = \u20a660,943.50 · gross \u20a660,943.50 \u2212 refunds \u20a60.00 = net revenue \u20a660,943.50 ·
+    delivered revenue \u20a652,726.50 = <code>SUM(chargeKobo WHERE DELIVERED)</code> · rider gross \u2212 commission = net, per row and in total.</p>
+  </div>
 
   <h2>Phase 8 — maps, live tracking and realtime</h2>
   <div class="panel">

@@ -1,0 +1,20 @@
+﻿# Daily deliveries
+# 26 bookings in the period, 18 delivered. Revenue counts delivered deliveries only.
+# Period: 2026-09-21 → 2026-11-05
+# Generated: 2026-11-05 13:16 UTC
+# Report id: 1d00b80d-4181-434c-b223-80c9fbfc32fa
+#
+Day,Bookings,Delivered,Cancelled,Failed,Completion,Delivered revenue,Avg km
+2026-10-08,3,0,0,3,0%,0.00,11.5
+2026-10-15,3,0,3,0,0%,0.00,13.1
+2026-10-22,3,3,0,0,100%,7437.00,9.5
+2026-10-27,3,3,0,0,100%,9243.00,14.2
+2026-10-30,3,3,0,0,100%,7288.50,9.2
+2026-11-02,3,3,0,0,100%,10317.00,11.5
+2026-11-04,3,3,0,0,100%,8836.50,13.1
+2026-11-05,5,3,0,0,60%,9604.50,15.1
+
+# Totals
+Bookings,26
+Delivered,18
+Delivered revenue,52726.50

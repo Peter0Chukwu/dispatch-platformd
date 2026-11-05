@@ -53,6 +53,8 @@ export class AppConfig {
   get trackingPingIntervalSeconds() { return this.config.get('TRACKING_PING_INTERVAL_SECONDS', { infer: true }); }
   /** Positions older than this are swept out of `rider_locations`. */
   get locationRetentionDays() { return this.config.get('LOCATION_RETENTION_DAYS', { infer: true }); }
+  /** Secret behind signed report download tokens (derived, never used raw). */
+  get trackingLinkSecret(): string { return this.config.get('TRACKING_LINK_SECRET', { infer: true }); }
   /** Hours a share link stays alive before it must be re-issued. */
   get shareLinkTtlHours() { return Number(process.env.TRACKING_SHARE_LINK_TTL_HOURS ?? 72); }
 }

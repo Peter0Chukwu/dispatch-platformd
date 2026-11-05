@@ -206,13 +206,24 @@ export class LedgerService {
   }
 
   /** Net balance of one account in the direction of its normal balance. */
-  async accountBalance(code: string): Promise<bigint> {
+  /**
+   * Balance of one account, all time — or only the postings inside `window`.
+   *
+   * The period form matters for reports: a range that says "September" must not
+   * include a posting from last year. A balance is a *sum of postings*, so scoping
+   * it by `postedAt` is the honest way to ask for a period figure.
+   */
+  async accountBalance(code: string, window?: { from?: Date; to?: Date }): Promise<bigint> {
     const account = await this.prisma.ledgerAccount.findUniqueOrThrow({
       where: { code },
       select: { id: true, normalBalance: true },
     });
+    const postedAt =
+      window?.from || window?.to
+        ? { ...(window.from ? { gte: window.from } : {}), ...(window.to ? { lte: window.to } : {}) }
+        : undefined;
     const sums = await this.prisma.ledgerLine.aggregate({
-      where: { accountId: account.id },
+      where: { accountId: account.id, ...(postedAt ? { journalEntry: { postedAt } } : {}) },
       _sum: { debitKobo: true, creditKobo: true },
     });
     const debit = sums._sum.debitKobo ?? 0n;

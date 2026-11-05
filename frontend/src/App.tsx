@@ -34,6 +34,7 @@ const AdminStaffPage = lazy(() => import("./pages/admin/StaffPage"));
 const AdminAuditPage = lazy(() => import("./pages/admin/AuditPage"));
 const AdminFinancePage = lazy(() => import("./pages/admin/FinancePage"));
 const AdminLiveMapPage = lazy(() => import("./pages/admin/LiveMapPage"));
+const AdminReportsPage = lazy(() => import("./pages/admin/ReportsPage"));
 const CustomerWalletPage = lazy(() => import("./pages/customer/WalletPage"));
 import {
   RedirectIfAuthenticated,
@@ -143,6 +144,9 @@ export default function App() {
             behind the same permission its API routes demand. */}
           <Route element={<RequirePermission permission="finance:read" />}>
             <Route path="finance" element={<AdminFinancePage />} />
+          </Route>
+          <Route element={<RequirePermission permission="report:generate" />}>
+            <Route path="reports" element={<AdminReportsPage />} />
           </Route>
         </Route>
 
