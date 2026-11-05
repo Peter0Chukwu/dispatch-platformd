@@ -8,6 +8,27 @@ export const paginationSchema = z.object({
 });
 export type PaginationQuery = z.infer<typeof paginationSchema>;
 
+/**
+ * DATE INPUTS FROM A URL
+ *
+ * `?from=2026-11-05&to=2026-11-05` is how a human asks for "that day". JavaScript
+ * parses both as midnight, which would make the range empty — a filter that silently
+ * returns nothing is worse than one that errors. So a bare `to` date means the *end*
+ * of that day, and a bare `from` date means its start. Full timestamps pass through
+ * untouched.
+ */
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+
+export const rangeFromSchema = z.preprocess(
+  (value) => (typeof value === 'string' && DATE_ONLY.test(value.trim()) ? `${value.trim()}T00:00:00.000Z` : value),
+  z.coerce.date().optional(),
+);
+
+export const rangeToSchema = z.preprocess(
+  (value) => (typeof value === 'string' && DATE_ONLY.test(value.trim()) ? `${value.trim()}T23:59:59.999Z` : value),
+  z.coerce.date().optional(),
+);
+
 export const dateRangeSchema = z
   .object({
     from: z.coerce.date().optional(),

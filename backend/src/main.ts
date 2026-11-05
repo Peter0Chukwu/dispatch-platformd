@@ -1,6 +1,7 @@
 import 'reflect-metadata';
 import { Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
 import { AppConfig } from './config/app.config';
@@ -10,7 +11,7 @@ async function bootstrap(): Promise<void> {
   // `rawBody` is what makes payment webhook signature verification possible: the
   // HMAC is computed over the exact bytes the provider sent, so the body must be
   // kept before JSON parsing reorders or re-spaces it.
-  const app = await NestFactory.create(AppModule, { bufferLogs: false, rawBody: true });
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, { bufferLogs: false, rawBody: true });
   const config = app.get(AppConfig);
   const logger = new Logger('Bootstrap');
 
@@ -32,6 +33,14 @@ async function bootstrap(): Promise<void> {
     allowedHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key', 'X-Request-Id'],
     exposedHeaders: ['X-Request-Id'],
   });
+
+  // ── Body size. Riders upload proof-of-delivery photos as base64 inside JSON, so
+  //    the express default (100 kB) would reject a real phone photo with a 413 the
+  //    app cannot explain. 8 MB covers a 5 MB image after base64 expansion (×4/3)
+  //    plus JSON overhead, and every upload route is authenticated and rate limited.
+  //    `useBodyParser` keeps the raw-body capture that webhook signatures depend on.
+  app.useBodyParser('json', { limit: '8mb' });
+  app.useBodyParser('urlencoded', { limit: '1mb', extended: true });
 
   app.setGlobalPrefix(config.apiPrefix);
 

@@ -1,0 +1,29 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Web image — the React SPA, built once, served by Nginx
+#
+# The browser talks to the same origin for everything: `/api/v1` and `/socket.io`
+# are proxied to the API container, so the refresh cookie stays first-party and no
+# CORS rule has to be loosened for production.
+# ─────────────────────────────────────────────────────────────────────────────
+FROM node:20-bookworm-slim AS build
+WORKDIR /app
+COPY package.json package-lock.json tsconfig.base.json ./
+COPY packages/shared/package.json packages/shared/
+COPY backend/package.json backend/
+COPY frontend/package.json frontend/
+RUN npm ci --workspace @dispatch/web --workspace @dispatch/shared --include-workspace-root
+
+COPY packages/shared ./packages/shared
+COPY frontend ./frontend
+# Vite compiles the shared package from source, so no shared build step is needed.
+# Anything the browser must know at build time is passed in here.
+ARG VITE_GOOGLE_MAPS_API_KEY=""
+ARG VITE_APP_NAME="Dispatch"
+ENV VITE_GOOGLE_MAPS_API_KEY=$VITE_GOOGLE_MAPS_API_KEY VITE_APP_NAME=$VITE_APP_NAME
+RUN cd frontend && npx vite build
+
+FROM nginx:1.27-alpine AS runtime
+COPY deploy/nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=build /app/frontend/dist /usr/share/nginx/html
+EXPOSE 80
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD wget -qO- http://127.0.0.1/ >/dev/null || exit 1

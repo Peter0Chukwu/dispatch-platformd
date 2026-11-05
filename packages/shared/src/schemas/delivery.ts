@@ -52,7 +52,7 @@ export const createDeliverySchema = z.object({
   promoCode: z.string().trim().toUpperCase().max(30).optional(),
   codAmountKobo: z.coerce.bigint().nonnegative().default(0n),
   paymentMethod: z.enum(['PAYSTACK', 'FLUTTERWAVE', 'WALLET', 'CASH']).default('PAYSTACK'),
-  acceptTerms: z.literal(true, { errorMap: () => ({ message: 'Accept the delivery terms to continue' }) }),
+  acceptTerms: z.literal(true, { message: 'Accept the delivery terms to continue' }),
 })
   .refine(
     (d) => d.deliveryType !== DeliveryType.SCHEDULED || !!d.scheduledFor,

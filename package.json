@@ -28,8 +28,14 @@
     "setup": "bash ./scripts/dev-env-up.sh && npm install && npm run build:shared && npm run db:migrate && npm run db:seed"
   },
   "devDependencies": {
-    "concurrently": "9.2.1",
+    "concurrently": "^9.2.2",
     "playwright": "^1.64.1",
     "typescript": "5.9.3"
+  },
+  "overrides": {
+    "multer": "^2.5.0",
+    "shell-quote": "^1.8.5",
+    "deepmerge-ts": "^8.0.0",
+    "zod": "^4.6.7"
   }
 }

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { emailSchema, passwordSchema } from "./auth";
+import { rangeFromSchema, rangeToSchema } from "./common";
 import { DeliveryStatus } from "../enums";
 
 /* ─────────────────────── Phase 5 — admin command centre ──────────────────── */
@@ -19,8 +20,8 @@ const ngPhone = z
   });
 
 export const dashboardQuerySchema = z.object({
-  from: z.coerce.date().optional(),
-  to: z.coerce.date().optional(),
+  from: rangeFromSchema,
+  to: rangeToSchema,
 });
 export type DashboardQuery = z.infer<typeof dashboardQuerySchema>;
 
@@ -30,8 +31,8 @@ export const adminDeliveryQuerySchema = z.object({
     .optional(),
   q: z.string().trim().max(120).optional(),
   riderId: z.string().uuid().optional(),
-  from: z.coerce.date().optional(),
-  to: z.coerce.date().optional(),
+  from: rangeFromSchema,
+  to: rangeToSchema,
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(25),
 });

@@ -112,9 +112,13 @@ export class TokenService {
     return { token, familyId, expiresAt };
   }
 
+  /** How long a just-rotated token may be replayed by the same browser. */
+  private static readonly REPLAY_GRACE_MS = 30_000;
+
   /**
    * Validates a refresh token and rotates it.
-   * Throws 401 for unknown/expired/revoked tokens; revokes the whole family on reuse.
+   * Throws 401 for unknown/expired/revoked tokens. A replay inside the grace
+   * window is served a sibling token; a replay after it revokes the family.
    */
   async rotateRefreshToken(input: {
     token: string;
@@ -131,8 +135,48 @@ export class TokenService {
       throw new AppError('UNAUTHORIZED', 'Your session is no longer valid. Please sign in again.', 401);
     }
 
-    // ── Reuse detection ──────────────────────────────────────────────────────
+    // ── Reuse detection, with a short grace window ───────────────────────────
+    //
+    // A rotated token must not be reusable — that is how a stolen token is caught.
+    // But a *browser* legitimately presents an already-rotated token in one ordinary
+    // situation: two refreshes leave the app at the same moment (two tabs waking, a
+    // socket re-authenticating while a request 401s, a navigation that tears the page
+    // down before the Set-Cookie lands). The first response rotated the token; the
+    // second request was already built with the old one and arrives milliseconds
+    // later. Treating that as theft logs a paying customer out for no reason.
+    //
+    // So: within TokenService.REPLAY_GRACE_MS of the rotation, and only while the successor is
+    // still alive, the replay is served a sibling token in the same family and logged
+    // as suspicious. Outside that window — or if the successor has itself been
+    // revoked, which is what a real replay attack looks like — the whole family dies,
+    // exactly as before.
     if (existing.revokedAt) {
+      if (existing.replacedByTokenId && Date.now() - existing.revokedAt.getTime() <= TokenService.REPLAY_GRACE_MS) {
+        const successor = await this.prisma.refreshToken.findUnique({
+          where: { id: existing.replacedByTokenId },
+          select: { revokedAt: true, expiresAt: true },
+        });
+        if (successor && !successor.revokedAt && successor.expiresAt.getTime() > Date.now()) {
+          const sibling = await this.createRefreshToken({
+            userId: existing.userId,
+            audience: existing.audience as Audience,
+            ip: input.ip,
+            userAgent: input.userAgent,
+            familyId: existing.familyId,
+          });
+          this.logger.warn(
+            `Refresh token replayed within ${TokenService.REPLAY_GRACE_MS / 1000}s for user ${existing.userId} — ` +
+              `served a sibling token in family ${existing.familyId} (rotation race, not treated as theft).`,
+          );
+          return {
+            userId: existing.userId,
+            audience: existing.audience as Audience,
+            familyId: existing.familyId,
+            refresh: sibling,
+          };
+        }
+      }
+
       await this.revokeFamily(existing.familyId);
       this.logger.warn(
         `SECURITY: refresh token reuse detected for user ${existing.userId}. Family ${existing.familyId} revoked.`,

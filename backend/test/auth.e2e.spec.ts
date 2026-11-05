@@ -316,17 +316,42 @@ describe('Phase 2 — authentication, sessions and access control', () => {
       expect(newCookie).not.toBe(firstCookie);
     });
 
-    it('detects refresh-token reuse and revokes the whole session family', async () => {
-      const { cookies } = await registerAndActivateCustomer(app);
+    it('serves a sibling token when the browser replays a just-rotated token', async () => {
+      // Two refreshes leaving the app at once is an ordinary browser race, not theft.
+      const { cookies, userId } = await registerAndActivateCustomer(app);
+      const oldCookie = cookies.find((c) => c.startsWith('dispatch_refresh='))!;
+
+      const rotated = await request(app.getHttpServer()).post('/api/v1/auth/refresh').set('Cookie', oldCookie).expect(201);
+      const rotatedCookie = (rotated.headers['set-cookie'] as unknown as string[]).find((c) =>
+        c.startsWith('dispatch_refresh='),
+      )!;
+
+      // The second request was already in flight with the old cookie.
+      const replay = await request(app.getHttpServer()).post('/api/v1/auth/refresh').set('Cookie', oldCookie).expect(201);
+      expect(replay.body.accessToken).toBeTruthy();
+
+      // The session survived: both tokens still work, because the family is alive.
+      await request(app.getHttpServer()).post('/api/v1/auth/refresh').set('Cookie', rotatedCookie).expect(201);
+
+      const familyAlive = await prisma.refreshToken.count({ where: { userId, revokedAt: null } });
+      expect(familyAlive).toBeGreaterThan(0);
+    });
+
+    it('kills the whole session family when an old token is replayed after the grace window', async () => {
+      const { cookies, userId } = await registerAndActivateCustomer(app);
       const stolen = cookies.find((c) => c.startsWith('dispatch_refresh='))!;
 
-      // Legitimate client rotates once.
       const rotated = await request(app.getHttpServer()).post('/api/v1/auth/refresh').set('Cookie', stolen).expect(201);
       const validCookie = (rotated.headers['set-cookie'] as unknown as string[]).find((c) =>
         c.startsWith('dispatch_refresh='),
       )!;
 
-      // Attacker replays the old token → reuse detected.
+      // Age the rotation past the grace window — the theft signal.
+      await prisma.refreshToken.updateMany({
+        where: { userId, replacedByTokenId: { not: null } },
+        data: { revokedAt: new Date(Date.now() - 5 * 60_000) },
+      });
+
       const reuse = await request(app.getHttpServer()).post('/api/v1/auth/refresh').set('Cookie', stolen).expect(401);
       expect(reuse.body.error.message).toMatch(/signed out|sign in again/i);
 

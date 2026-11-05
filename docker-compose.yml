@@ -1,0 +1,107 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Dispatch platform — production-ish stack on one VPS
+#
+#   cp deploy/.env.example deploy/.env      # then edit the secrets
+#   docker compose up -d --build
+#   docker compose logs -f api
+#
+# Four services plus a one-shot migration runner:
+#   postgres  — the database, on a named volume, not exposed to the internet
+#   redis     — rate limits, dispatch locks, socket adapter
+#   migrate   — runs `prisma migrate deploy` once, then exits
+#   api       — the NestJS server (behind nothing: only web publishes a port)
+#   web       — Nginx serving the SPA and proxying /api + /socket.io to `api`
+#
+# Only `web` publishes a port. The database, Redis and the API are reachable only
+# inside the compose network, which is the simplest internet-facing hardening there is.
+# ─────────────────────────────────────────────────────────────────────────────
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-dispatch}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env}
+      POSTGRES_DB: ${POSTGRES_DB:-dispatch}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-dispatch} -d ${POSTGRES_DB:-dispatch}']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    # Not published: reachable only from other containers in this network.
+    expose:
+      - '5432'
+
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    command: ['redis-server', '--appendonly', 'yes', '--maxmemory-policy', 'noeviction']
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    expose:
+      - '6379'
+
+  # Runs once per `up`, then exits. Kept separate from `api` so that scaling the API
+  # never runs two migrations at the same time.
+  migrate:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.api
+    image: dispatch-api:local
+    command: ['npx', 'prisma', 'migrate', 'deploy']
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in deploy/.env}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: 'no'
+
+  api:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.api
+    image: dispatch-api:local
+    restart: unless-stopped
+    env_file:
+      - deploy/.env
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      # Generated report files and uploaded documents live on a volume, so a
+      # container rebuild does not lose artifacts that rows still point at.
+      - storage-data:/app/backend/storage
+    expose:
+      - '4000'
+
+  web:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.web
+      args:
+        VITE_GOOGLE_MAPS_API_KEY: ${VITE_GOOGLE_MAPS_API_KEY:-}
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_started
+    ports:
+      - '${WEB_PORT:-8080}:80'
+
+volumes:
+  postgres-data:
+  redis-data:
+  storage-data:

@@ -1,5 +1,6 @@
 import { Controller, Get, Param, ParseUUIDPipe, Post, Query, Res, Body } from '@nestjs/common';
 import type { Response } from 'express';
+import { rangeFromSchema, rangeToSchema } from '@dispatch/shared';
 import { z } from 'zod';
 import { RequirePermissions } from '../auth/decorators/require-permissions.decorator';
 import { RequireType } from '../auth/decorators/require-type.decorator';
@@ -10,17 +11,18 @@ import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import { ReportsService } from './reports.service';
 import { REPORT_CATALOGUE } from './report-types';
 
+// A bare date for `to` means the end of that day — see `rangeToSchema`.
+const periodFields = { from: rangeFromSchema, to: rangeToSchema };
+
 const requestSchema = z.object({
   type: z.enum(REPORT_CATALOGUE.map((entry) => entry.type) as [string, ...string[]]),
   format: z.enum(['CSV', 'PDF']).default('CSV'),
-  from: z.string().datetime({ offset: true }).or(z.string().date()).optional(),
-  to: z.string().datetime({ offset: true }).or(z.string().date()).optional(),
+  ...periodFields,
 });
 
 const periodSchema = z.object({
   type: z.enum(REPORT_CATALOGUE.map((entry) => entry.type) as [string, ...string[]]),
-  from: z.string().optional(),
-  to: z.string().optional(),
+  ...periodFields,
 });
 
 /**
@@ -48,14 +50,14 @@ export class ReportsController {
   @RateLimit({ points: 20, windowSeconds: 60, keyBy: 'ip+route' })
   request(
     @CurrentUser('userId') userId: string,
-    @Body(new ZodValidationPipe(requestSchema)) input: { type: string; format: 'CSV' | 'PDF'; from?: string; to?: string },
+    @Body(new ZodValidationPipe(requestSchema)) input: { type: string; format: 'CSV' | 'PDF'; from?: Date; to?: Date },
   ) {
     return this.reports.request({
       userId,
       type: input.type as never,
       format: input.format,
-      from: input.from,
-      to: input.to,
+      from: input.from?.toISOString(),
+      to: input.to?.toISOString(),
     });
   }
 
@@ -73,8 +75,8 @@ export class ReportsController {
   @Get('preview')
   @RequirePermissions('report:generate')
   @RateLimit({ points: 60, windowSeconds: 60, keyBy: 'ip+route' })
-  preview(@Query(new ZodValidationPipe(periodSchema)) query: { type: string; from?: string; to?: string }) {
-    return this.reports.preview(query.type as never, query.from, query.to);
+  preview(@Query(new ZodValidationPipe(periodSchema)) query: { type: string; from?: Date; to?: Date }) {
+    return this.reports.preview(query.type as never, query.from?.toISOString(), query.to?.toISOString());
   }
 
   @Get(':id')

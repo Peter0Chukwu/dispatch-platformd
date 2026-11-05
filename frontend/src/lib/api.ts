@@ -8,6 +8,9 @@
  *  · on a 401 the client silently refreshes ONCE, then retries the original request
  *  · refresh calls are single-flight: ten parallel 401s trigger one refresh, not ten
  *    (ten parallel rotations look exactly like token theft to the server)
+ *  · single-flight also holds ACROSS page loads and TABS via the Web Locks API:
+ *    a reload that starts while the old page is still refreshing waits its turn
+ *    instead of rotating the same cookie a second time
  */
 export const API_BASE = '/api/v1';
 
@@ -66,11 +69,31 @@ type Options = Omit<RequestInit, 'body'> & {
 
 let refreshInFlight: Promise<string | null> | null = null;
 
-/** Silently rotates the refresh token. Returns the new access token, or null. */
+const REFRESH_LOCK = 'dispatch:refresh-token';
+
+/**
+ * Runs `task` while holding an origin-wide lock, so only one tab (or one page
+ * load) rotates the refresh cookie at a time. Falls back to running directly
+ * where the Web Locks API is unavailable (older Safari, some embedded views).
+ */
+function withRefreshLock<T>(task: () => Promise<T>): Promise<T> {
+  const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined;
+  if (!locks?.request) return task();
+  return locks.request(REFRESH_LOCK, task) as Promise<T>;
+}
+
+/**
+ * Silently rotates the refresh token. Returns the new access token, or null.
+ * Safe to call from many places at once: concurrent callers share one request.
+ */
 export async function refreshAccessToken(): Promise<string | null> {
+  // Someone in this page is already refreshing — reuse their result.
   if (refreshInFlight) return refreshInFlight;
 
-  refreshInFlight = (async () => {
+  // The lock is held for the whole request, so a reload or a second tab
+  // starting at the same moment waits here and then rotates the (already new)
+  // cookie serially — never two rotations of the same token in parallel.
+  refreshInFlight = withRefreshLock(async () => {
     try {
       const response = await fetch(`${API_BASE}/auth/refresh`, {
         method: 'POST',
@@ -87,12 +110,14 @@ export async function refreshAccessToken(): Promise<string | null> {
     } catch {
       accessToken = null;
       return null;
-    } finally {
-      refreshInFlight = null;
     }
-  })();
+  });
 
-  return refreshInFlight;
+  try {
+    return await refreshInFlight;
+  } finally {
+    refreshInFlight = null;
+  }
 }
 
 export async function apiRequest<T>(path: string, options: Options = {}): Promise<T> {

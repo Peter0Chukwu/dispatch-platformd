@@ -1,0 +1,213 @@
+name: CI
+
+# Runs on every push and pull request. The jobs are ordered by cost, so a broken
+# type or a failing test is reported before a browser is ever launched.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '20'
+
+jobs:
+  build-and-test:
+    name: Types, unit & integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: dispatch
+          POSTGRES_PASSWORD: dispatch_dev_password
+          POSTGRES_DB: dispatch_dev_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U dispatch"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:8-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://dispatch:dispatch_dev_password@localhost:5432/dispatch_dev_test?schema=public
+      TEST_DATABASE_URL: postgresql://dispatch:dispatch_dev_password@localhost:5432/dispatch_dev_test?schema=public
+      REDIS_URL: redis://localhost:6379
+      JWT_ACCESS_SECRET: ci_access_secret_ci_access_secret_ci_access_secret
+      JWT_REFRESH_SECRET: ci_refresh_secret_ci_refresh_secret_ci_refresh
+      TRACKING_LINK_SECRET: ci_tracking_secret_ci_tracking_secret_ci_tracking
+      PAYMENTS_MODE: DEVELOPMENT
+      SMS_MODE: CONSOLE
+      EMAIL_MODE: CONSOLE
+      MAPS_PROVIDER: STUB
+      STORAGE_DRIVER: LOCAL
+      STORAGE_LOCAL_DIR: ./storage
+      CORS_ORIGINS: http://localhost:5173
+      FRONTEND_URL: http://localhost:5173
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install PostgreSQL client tools (used by the backup drill)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client
+
+      - name: Build shared package
+        run: npm run build:shared
+
+      - name: Type-check API
+        run: npm run lint --workspace @dispatch/api
+
+      - name: Type-check web
+        run: npx tsc --noEmit -p frontend/tsconfig.json
+
+      - name: Apply migrations to the CI database
+        working-directory: backend
+        run: npx prisma migrate deploy
+
+      - name: Seed reference data (roles, permissions, ledger accounts, zones)
+        working-directory: backend
+        run: npm run db:seed
+
+      - name: Run the API test suite
+        working-directory: backend
+        run: npx vitest run --reporter=verbose
+
+      - name: Build the web bundle
+        working-directory: frontend
+        run: npx vite build
+
+      - name: Security audit — fail on anything high that actually ships
+        run: node scripts/audit-runtime.mjs
+
+      - name: Rehearse the backup and restore (a backup nobody restored is a hypothesis)
+        run: bash scripts/db-restore-drill.sh
+
+  end-to-end:
+    name: Browser journey (Playwright)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: build-and-test
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: dispatch
+          POSTGRES_PASSWORD: dispatch_dev_password
+          POSTGRES_DB: dispatch_dev
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U dispatch"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:8-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      NODE_ENV: development
+      DATABASE_URL: postgresql://dispatch:dispatch_dev_password@localhost:5432/dispatch_dev?schema=public
+      REDIS_URL: redis://localhost:6379
+      JWT_ACCESS_SECRET: ci_access_secret_ci_access_secret_ci_access_secret
+      JWT_REFRESH_SECRET: ci_refresh_secret_ci_refresh_secret_ci_refresh
+      TRACKING_LINK_SECRET: ci_tracking_secret_ci_tracking_secret_ci_tracking
+      PAYMENTS_MODE: DEVELOPMENT
+      SMS_MODE: CONSOLE
+      EMAIL_MODE: CONSOLE
+      MAPS_PROVIDER: STUB
+      STORAGE_DRIVER: LOCAL
+      CORS_ORIGINS: http://127.0.0.1:5173
+      FRONTEND_URL: http://127.0.0.1:5173
+      WEB_URL: http://127.0.0.1:5173
+      API_URL: http://127.0.0.1:4000/api/v1
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Chromium for Playwright
+        run: npx playwright install --with-deps chromium
+
+      - name: Prepare the database
+        working-directory: backend
+        run: |
+          npx prisma migrate deploy
+          npm run db:seed
+
+      - name: Build shared package
+        run: npm run build:shared
+
+      - name: Start the API and the web app
+        run: |
+          npm run dev:api > /tmp/api.log 2>&1 &
+          npm run dev:web > /tmp/web.log 2>&1 &
+          # Wait for both, without adding another dependency to the project.
+          for attempt in $(seq 1 90); do
+            if curl -fsS http://127.0.0.1:4000/api/v1/health/live >/dev/null \
+              && curl -fsS http://127.0.0.1:5173 >/dev/null; then
+              echo "API and web are up after ${attempt}0s"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::The API or the web app never became reachable"
+          tail -40 /tmp/api.log || true
+          exit 1
+
+      - name: Seed the demo rider and customer
+        run: node scripts/seed-demo-phase4.mjs
+
+      - name: Run the master scenario
+        run: npx playwright test
+
+      - name: Upload the failure trace
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-trace
+          path: test-results/
+          retention-days: 7
+
+      - name: Upload the API log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-log
+          path: /tmp/api.log
+          retention-days: 7

@@ -37,7 +37,7 @@ export const registerRiderSchema = z.object({
     .transform((v) => v.toUpperCase().replace(/\s+/g, ' ')),
   emergencyContactName: z.string().trim().min(2, 'Enter an emergency contact name').max(80),
   emergencyContactPhone: ngPhone,
-  acceptTerms: z.literal(true, { errorMap: () => ({ message: 'You must accept the rider agreement' }) }),
+  acceptTerms: z.literal(true, { message: 'You must accept the rider agreement' }),
 });
 export type RegisterRiderInput = z.infer<typeof registerRiderSchema>;
 

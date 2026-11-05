@@ -24,3 +24,9 @@ backend/storage/
 
 # Scratch files written by the capture scripts
 **/.proof-handover.png
+
+# Phase 10 — build & ops artifacts
+backups/
+test-results/
+playwright-report/
+deploy/.env

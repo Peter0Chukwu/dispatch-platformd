@@ -9,6 +9,13 @@ from PIL import Image
 
 OUT = "documentation/BUILD-REPORT.html"
 SHOTS = [
+    ("screenshots/phase-10/04-master-scenario.png", "Phase 10 \u2014 the whole business, unattended, in about a minute and a half", "One Playwright run drives three browser sessions at once \u2014 a customer on desktop, a rider on a 430px phone with real geolocation, an admin \u2014 through twenty steps: register, verify, quote, book, pay, dispatch, accept, collect, transit, arrive, proof photo, deliver, confirm. Step twenty is the point: the customer\u2019s receipt, the rider\u2019s earnings and admin \u2192 Finance must be the same numbers, read from different endpoints. This is the third consecutive green run \u2014 the two flakes that had to be fixed to get here are in PHASE-10.md."),
+    ("screenshots/phase-10/03-backup-restore-drill.png", "Phase 10 \u2014 a backup that has actually been restored", "A dump you have never restored is a rumour with a filename. The drill dumps the database, restores it into a scratch database, and then checks that the restored platform is still correct: 16 of 16 tables, identical row counts everywhere (users 21, deliveries 42, ledger_lines 217), debits minus credits = 0, and wallet liability = the sum of wallet balances. A restore that brings the rows back but leaves the ledger unbalanced is not a restore \u2014 it is a new, quieter incident."),
+    ("screenshots/phase-10/02-load-smoke.png", "Phase 10 \u2014 forty people at once", "Health at 560\u2013760 req/s; the expensive quote read at 240\u2013266 req/s with p50 145\u2013161 ms; ten of forty autocomplete calls correctly refused with 429 because the rate limit is doing its job. The line that matters is the last: a report was accepted and queued in 10\u201313 ms while the worker rendered it, and probes taken <em>during</em> that render cost at most 16 ms. The request thread is never held by a read-heavy query."),
+    ("screenshots/phase-10/01-runtime-dependency-audit.png", "Phase 10 \u2014 the dependency gate, not the dependency report", "npm audit --omit=dev reports three high advisories \u2014 prisma, @prisma/config and deepmerge-ts \u2014 and all three are Prisma CLI packages that exist only at build and migration time, never in the runtime image. So the build gate is scripts/audit-runtime.mjs: an explicit allowlist of build-only packages, failing on any high or critical advisory that is not on it. The day a vulnerable package enters the shipping tree, CI goes red without anyone remembering to look."),
+    ("screenshots/phase-10/e2e-03-booking-review.png", "Phase 10 \u2014 the journey, step by step: the quote", "Captured by the master scenario as it ran, not staged afterwards. The price came back from the API in integer kobo for a real Lekki \u2192 Yaba route, and the customer is looking at a breakdown they can question line by line rather than a single number to trust."),
+    ("screenshots/phase-10/e2e-06-rider-accepted.png", "Phase 10 \u2014 the rider, mid-journey, on a phone viewport", "The same delivery, one screen later and in a different browser session: the rider accepted the offer, and from here every step is a separate authenticated call that the shared state machine validates. The customer is watching this happen live in yet another session."),
+    ("screenshots/phase-10/e2e-11-admin-dashboard.png", "Phase 10 \u2014 the admin sees a delivery that really happened", "A brand-new booking, made minutes earlier by a stranger in a headless browser, showing up in the command centre with its real status. Nothing on this page was seeded for the screenshot: the counters moved because the journey in the previous images actually moved them."),
     ("screenshots/phase-9/01-report-catalogue-and-preview.png", "Phase 9 \u2014 nine reports, and a preview that writes nothing", "The financial summary for the last 45 days, computed seconds before the shutter: collected \u20a660,943.50, gross revenue \u20a660,943.50, refunds \u20a60.00, rider cost \u20a642,180.00, gateway fees \u20a63,014.07, net \u20a615,749.43. Gross and net are separate lines on purpose \u2014 \u201cwe invoiced \u20a660k\u201d and \u201cwe kept \u20a615.7k\u201d are different questions. This is a preview: it ran the same dataset the file will run, and wrote nothing to disk."),
     ("screenshots/phase-9/06-csv-download.png", "Phase 9 \u2014 the CSV, as a spreadsheet sees it", "Downloaded through a signed link, not a session. Every file carries its own provenance in comment lines \u2014 title, period, generation timestamp, report id \u2014 plus a totals block at the end, and money is a plain naira decimal (52726.50, never \u20a652,726.50) so SUM() works. A UTF-8 BOM goes first so Excel opens it as UTF-8 instead of mojibake."),
     ("screenshots/phase-9/05-generated-files.png", "Phase 9 \u2014 the queue, visible", "Every file here was a job: the API answered in milliseconds with QUEUED, a worker rendered it, and the row moved ready. A failure keeps its error text and offers Retry; a ready row offers Download, which mints a fresh 15-minute link. Restart the API mid-report and the row is still there \u2014 the queue is the table, not a variable."),
@@ -131,7 +138,7 @@ html = f"""<!doctype html>
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Dispatch Platform — Build Report (through Phase 8)</title>
+<title>Dispatch Platform — Build Report (through Phase 10)</title>
 <style>
   :root {{
     --navy:#0B1F3A; --navy-2:#16304F; --green:#12B76A; --ink:#334155;
@@ -188,13 +195,13 @@ html = f"""<!doctype html>
 <body>
 <header>
   <div class="wrap">
-    <p class="eyebrow">Through Phase 6 · build report</p>
+    <p class="eyebrow">Through Phase 10 · build report</p>
     <h1>Dispatch &amp; Logistics Platform</h1>
     <p>Customer portal, rider portal and admin command centre on one NestJS API and one PostgreSQL
        database. This page is a static snapshot with real screenshots captured from the running
        application — it works without any server.</p>
     <div class="badges">
-      <span class="badge ok">✓ 253 automated tests passing</span>
+      <span class="badge ok">✓ 254 automated tests passing</span>
       <span class="badge ok">✓ API + database + Redis live</span>
       <span class="badge">NestJS 11 · Prisma 6 · PostgreSQL 17 · Redis 8</span>
       <span class="badge">React 19 · Vite 7 · Tailwind · TanStack Query</span>
@@ -203,6 +210,9 @@ html = f"""<!doctype html>
       <span class="badge ok">✓ One rider per job, enforced by a Redis lock</span>
       <span class="badge ok">✓ Every naira in a double-entry ledger</span>
       <span class="badge ok">✓ A position is only shown if a phone reported it</span>
+      <span class="badge ok">✓ A 20-step journey proven in a real browser, three runs in a row</span>
+      <span class="badge ok">✓ Backup restored and the ledger still sums to zero</span>
+      <span class="badge ok">✓ 0 high or critical advisories in anything that ships</span>
       <span class="badge">Captured {datetime.now(timezone.utc).strftime('%d %b %Y %H:%M UTC')}</span>
     </div>
   </div>
@@ -247,6 +257,37 @@ html = f"""<!doctype html>
     </table>
   </div>
 
+
+  <h2>Phase 10 — hardening, deployment and the proof</h2>
+  <div class="panel">
+    <p><strong>Phases 1&ndash;9 built a platform. This phase answers a different question: can you prove it
+    works, and can somebody else run it?</strong> Those are not the same question, and the second one is where
+    most projects quietly fail. A feature that works on the machine of the person who wrote it is not finished,
+    it is demonstrated. So the phase is five claims, each made true and then evidenced rather than asserted:</p>
+    <table>
+      <tr><th>Claim</th><th>Evidence</th></tr>
+      <tr><td>A whole journey runs end to end, unattended</td><td>Three browser sessions at once, twenty steps, <strong>1.5 minutes</strong>, <strong>three consecutive green runs</strong>, twelve screenshots. CI runs it on every push and uploads the trace and the API log when it fails.</td></tr>
+      <tr><td>It holds up when forty people arrive</td><td>Health at 560&ndash;760 req/s; the expensive quote read at 240&ndash;266 req/s, p50 145&ndash;161 ms; ten of forty autocomplete calls correctly refused with 429; a report accepted and queued in <strong>10&ndash;13 ms</strong> while the worker rendered it, worst probe during the render <strong>16 ms</strong>.</td></tr>
+      <tr><td>The security story survives inspection</td><td>254 tests, a written review, and a <em>gate</em> on the dependency tree: <code>scripts/audit-runtime.mjs</code> fails the build on any high or critical advisory that is not a documented build-only package. <strong>Nothing that ships is affected.</strong></td></tr>
+      <tr><td>The data can come back after it is lost</td><td>A drill that dumps, restores into a scratch database, then <em>checks the restored platform is still correct</em>: 16/16 tables, identical row counts, ledger debits minus credits = 0, wallet liability equal to the sum of balances. <strong>PASS</strong>, and it runs in CI.</td></tr>
+      <tr><td>Someone else can deploy, roll back and recover</td><td><code>RUNBOOK.md</code>, <code>GO-LIVE-CHECKLIST.md</code> and a two-job CI pipeline, written for a person who is not the author, on a bad day, at 02:00 &mdash; which is why every procedure was executed at least once before being written down.</td></tr>
+    </table>
+    <table style="margin-top:16px">
+      <tr><th>Decision</th><th>How it works</th></tr>
+      <tr><td>Only one port faces the internet</td><td>In <code>docker-compose.yml</code> the database, Redis and the API publish nothing &mdash; only <code>web</code> (Nginx) does. The API runs as uid 10001 and reaches the internet only through the proxy. That single decision removes most of the attack surface you would otherwise have to defend with firewall rules.</td></tr>
+      <tr><td>Migrations cannot race replicas</td><td><code>migrate</code> is a one-shot service that must exit 0 before <code>api</code> starts (<code>service_completed_successfully</code>). Scaling the API to three replicas can never produce two migrations racing each other on a cold start.</td></tr>
+      <tr><td>Liveness is not readiness</td><td><code>/health/live</code> answers &ldquo;the process is up&rdquo;; <code>/health</code> answers &ldquo;and its database and Redis are too&rdquo;. A slow database therefore does not put the container into a restart loop.</td></tr>
+      <tr><td>The proxy refuses to be the weak link</td><td>Strict CSP (<code>script-src 'self'</code>, no <code>unsafe-eval</code>) that still allows <code>maps.googleapis.com</code>; SPA fallback so a deep link survives a refresh; immutable fingerprinted assets; and <code>client_max_body_size 12m</code> deliberately <em>above</em> the API's 8 MB limit, so the API produces the error message rather than Nginx.</td></tr>
+      <tr><td>A test may not weaken the platform</td><td>The end-to-end suite initially failed because it signed in before every step and hit the platform's own 10-per-5-minutes limit. The fix was to make the <em>spec</em> realistic &mdash; one sign-in per persona, token reused &mdash; not to loosen the limit. A test that needs eleven logins in five minutes is describing a user who does not exist.</td></tr>
+      <tr><td>Reuse detection stays on</td><td>Two browser refreshes at once logged a real customer out, because replaying a rotated token is exactly what theft looks like. Rather than disabling the protection, the client now serialises refreshes <em>across tabs and page loads</em> with the Web Locks API, and the server forgives a replay only inside a 30-second window while the successor token is still alive. Both halves are tested; the reasoning is in <code>SECURITY-REVIEW.md</code> §3.</td></tr>
+      <tr><td>Money is append-only, and the drill proves it</td><td>No code path <code>UPDATE</code>s a ledger line or a settled payment; a mistake is corrected by a compensating entry with a reason and an actor. The restore drill re-verifies that invariant <em>after</em> a restore, because a restore that brings the rows back but leaves the ledger unbalanced is a new, quieter incident.</td></tr>
+      <tr><td>Deliberately not built, and said out loud</td><td>Scheduled email; MFA on staff accounts; automated off-box backup wiring; a fixed cosmetic duplicate in the staff roles list. Each is named in <code>RUNBOOK.md</code> §8 with its impact and the trigger for fixing it. A gap nobody can see is worse than a gap on a list.</td></tr>
+    </table>
+    <p style="margin-top:14px;color:#475569">The end-to-end run agrees: customer receipt = rider earnings = admin finance, for a booking made seconds
+    earlier by a headless browser. Load: p50 145&ndash;161 ms on the most expensive read, worst report probe 16 ms.
+    Restore: 243,946-byte dump, 16 tables, ledger 0, liability 0. Dependencies: 3 high, all build-only,
+    <strong>0 in anything that ships</strong>.</p>
+  </div>
 
   <h2>Phase 9 — reports and analytics</h2>
   <div class="panel">
@@ -486,14 +527,28 @@ python3 scripts/build-report.py       <span class="c"># regenerate this page</sp
       actually use.</li>
       <li><strong>No notification centre.</strong> The audit trail and the realtime channel both record what
       happened; a customer-facing inbox over them is still open from Phase 5.</li>
-      <li><strong>Not yet built:</strong> reports and analytics with CSV/PDF export (Phase 9), then deployment
-      hardening — Docker Compose, CI, Playwright end-to-end runs, backup drill, runbook (Phase 10).</li>
+      <li><strong>Docker images are authored but were never built here</strong> — there is no Docker in the
+      environment this was developed in. <code>docker-compose.yml</code>, both Dockerfiles and
+      <code>deploy/nginx.conf</code> are reviewed and internally consistent, but the first
+      <code>docker compose up --build</code> on the real server is a genuine test. It is labelled
+      <strong>UNTESTED</strong> in <code>documentation/RUNBOOK.md</code> §8 rather than glossed over.</li>
+      <li><strong>No automated off-box backup yet.</strong> The scripts are here, the drill passes, and the exact
+      cron and rclone lines are in <code>RUNBOOK.md</code> §4.1 — but the wiring is a server decision, and it is a
+      go-live blocker, not a nice-to-have. A backup on the same machine is a backup of that machine's ability to
+      fail.</li>
+      <li><strong>Sign-in is rate limited to 10 attempts per account per 5 minutes</strong>, which means an
+      automated test must sign in once and reuse its token. That is the platform behaving correctly; the
+      end-to-end suite was rewritten to match reality rather than the limit being loosened.</li>
+      <li><strong>A just-rotated refresh token can be replayed for 30 seconds</strong> by the same browser and is
+      answered with a sibling token instead of a logout. This fixes a real-world "two tabs refreshed at once"
+      logout; replays after the window, or against a dead successor, still revoke the whole family. The reasoning
+      and the tests are in <code>documentation/SECURITY-REVIEW.md</code> §3.</li>
     </ul>
   </div>
 
   <footer>
-    Build report through Phase 8 · generated by <code>scripts/build-report.py</code> ·
-    source of truth: <code>documentation/PHASE-LOG/PHASE-8.md</code>
+    Build report through Phase 10 · generated by <code>scripts/build-report.py</code> ·
+    source of truth: <code>documentation/PHASE-LOG/PHASE-10.md</code>
   </footer>
 </main>
 </body>

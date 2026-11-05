@@ -1,0 +1,66 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# API image — NestJS + Prisma
+#
+# Multi-stage on purpose: the build stage carries TypeScript, the Prisma CLI and
+# every dev dependency; the runtime stage carries only what the server needs to run.
+# A smaller final image is a smaller attack surface, and it makes `npm audit` on the
+# shipped image meaningful (the CLI's dev-only findings never enter it).
+# ─────────────────────────────────────────────────────────────────────────────
+FROM node:20-bookworm-slim AS base
+WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── 1. dependencies (cached until a package manifest changes) ────────────────
+FROM base AS deps
+COPY package.json package-lock.json ./
+COPY packages/shared/package.json packages/shared/
+COPY backend/package.json backend/
+COPY frontend/package.json frontend/
+RUN npm ci --workspace @dispatch/api --workspace @dispatch/shared --include-workspace-root
+
+# ── 2. build ─────────────────────────────────────────────────────────────────
+FROM base AS build
+COPY --from=deps /app/node_modules ./node_modules
+COPY --from=deps /app/backend/node_modules ./backend/node_modules
+COPY package.json package-lock.json tsconfig.base.json ./
+COPY packages/shared ./packages/shared
+COPY backend ./backend
+RUN npm run build:shared \
+ && cd backend \
+ && npx prisma generate \
+ && npm run build
+
+# ── 3. production dependencies only ──────────────────────────────────────────
+FROM base AS prod-deps
+COPY package.json package-lock.json ./
+COPY packages/shared/package.json packages/shared/
+COPY backend/package.json backend/
+COPY frontend/package.json frontend/
+RUN npm ci --omit=dev --workspace @dispatch/api --workspace @dispatch/shared --include-workspace-root
+
+# ── 4. runtime ───────────────────────────────────────────────────────────────
+FROM base AS runtime
+ENV NODE_ENV=production
+# Non-root. A container that runs as root turns one RCE into a host problem.
+RUN useradd --system --uid 10001 --create-home dispatch
+COPY --from=prod-deps /app/node_modules ./node_modules
+COPY --from=prod-deps /app/backend/node_modules ./backend/node_modules
+COPY --from=build /app/backend/dist ./backend/dist
+COPY --from=build /app/packages/shared/dist ./packages/shared/dist
+COPY --from=build /app/packages/shared/package.json ./packages/shared/package.json
+COPY backend/package.json ./backend/package.json
+# The generated Prisma client lives in node_modules; copy the schema + migrations so
+# `prisma migrate deploy` can run against the real database on first boot.
+COPY backend/prisma ./backend/prisma
+RUN mkdir -p backend/storage && chown -R dispatch:dispatch /app
+USER dispatch
+
+WORKDIR /app/backend
+EXPOSE 4000
+HEALTHCHECK --interval=30s --timeout=5s --start-period=25s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:4000/api/v1/health/live').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+
+# Migrations run as a separate compose service (`migrate`) so several API replicas
+# never race each other on `migrate deploy`.
+CMD ["node", "dist/main.js"]

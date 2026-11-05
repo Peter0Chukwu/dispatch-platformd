@@ -1,0 +1,17 @@
+node_modules
+**/node_modules
+dist
+**/dist
+.git
+.github
+backups
+documentation/screenshots
+documentation/BUILD-REPORT.html
+frontend/dist
+backend/storage
+**/*.log
+test-results
+playwright-report
+.env
+**/.env
+deploy/.env
