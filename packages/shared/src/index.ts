@@ -6,4 +6,5 @@ export * from './schemas/common';
 export * from './schemas/auth';
 export * from './schemas/delivery';
 export * from './schemas/rider';
+export * from './schemas/admin';
 export * from './validators/phone';

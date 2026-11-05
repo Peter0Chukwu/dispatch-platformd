@@ -21,3 +21,6 @@ backend/prisma/**/*.d.ts
 
 # Private uploads (rider documents, proofs of delivery) — never commit these.
 backend/storage/
+
+# Scratch files written by the capture scripts
+**/.proof-handover.png

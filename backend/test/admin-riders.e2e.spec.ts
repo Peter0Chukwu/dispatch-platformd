@@ -77,8 +77,8 @@ describe('Phase 4 — admin review and rider approval', () => {
         .set(as(ops.accessToken))
         .expect(200);
 
-      expect(res.body.total).toBe(1);
-      const row = res.body.items[0];
+      expect(res.body.meta.total).toBe(1);
+      const row = res.body.data[0];
       expect(row.id).toBe(rider.riderId);
       expect(row.approvalStatus).toBe('PENDING');
       expect(row.documents.pending).toBe(3);
@@ -94,7 +94,7 @@ describe('Phase 4 — admin review and rider approval', () => {
         .get('/api/v1/admin/riders?q=zzz-nobody')
         .set(as(ops.accessToken))
         .expect(200);
-      expect(none.body.total).toBe(0);
+      expect(none.body.meta.total).toBe(0);
     });
 
     it('shows one application with every document and the missing list', async () => {

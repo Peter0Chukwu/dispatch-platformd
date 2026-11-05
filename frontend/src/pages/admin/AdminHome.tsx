@@ -1,176 +1,422 @@
-import { useQuery } from '@tanstack/react-query';
-import { PortalShell } from '../../layouts/PortalShell';
-import { Alert, Badge, Card, CardBody, CardHeader, DataTable, ErrorState, LoadingBlock, StatCard, type Column } from '../../components/ui';
-import { api, ApiError } from '../../lib/api';
-import { useAuth } from '../../contexts/AuthContext';
+import { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
+import {
+  Area,
+  AreaChart,
+  CartesianGrid,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
+import { PortalShell } from "../../layouts/PortalShell";
+import {
+  Alert,
+  Card,
+  CardBody,
+  CardHeader,
+  DataTable,
+  ErrorState,
+  LoadingBlock,
+  Select,
+  StatCard,
+  StatusPill,
+  type Column,
+} from "../../components/ui";
+import { useAuth } from "../../contexts/AuthContext";
+import { adminNav } from "./nav";
+import {
+  useAdminDashboard,
+  type DashboardOverview,
+} from "../../hooks/useAdmin";
 
-interface WhoAmI {
-  staff: {
-    staffCode: string;
-    isSuperAdmin: boolean;
-    jobTitle: string | null;
-    branch: { code: string; name: string; city: string };
-    roles: Array<{ role: { key: string; name: string } }>;
-    user: { firstName: string; lastName: string; email: string | null };
-  };
-  permissions: string[];
-  isSuperAdmin: boolean;
-}
+const STATUS_TONE: Record<
+  string,
+  "neutral" | "info" | "warning" | "success" | "danger"
+> = {
+  PENDING: "warning",
+  ASSIGNED: "info",
+  ACCEPTED: "info",
+  ARRIVED_AT_PICKUP: "info",
+  PICKED_UP: "info",
+  IN_TRANSIT: "info",
+  ARRIVED_AT_DESTINATION: "info",
+  DELIVERED: "success",
+  FAILED: "danger",
+  CANCELLED: "neutral",
+};
 
-interface StaffRow {
-  id: string;
-  staffCode: string;
-  name: string;
-  email: string | null;
-  status: string;
-  roles: Array<{ key: string; name: string }>;
-  isSuperAdmin: boolean;
-  lastLoginAt: string | null;
-}
-
-const NAV = [
-  { to: '/admin', label: 'Overview' },
-  { to: '/admin/deliveries', label: 'Deliveries', soon: true },
-  { to: '/admin/riders', label: 'Riders', soon: true },
-  { to: '/admin/finance', label: 'Finance', soon: true },
-  { to: '/admin/staff', label: 'Staff', soon: true },
+const PIE_COLOURS = [
+  "#0f766e",
+  "#0891b2",
+  "#f59e0b",
+  "#6366f1",
+  "#dc2626",
+  "#64748b",
 ];
 
+/** Quick ranges. Values are ISO dates so the API receives exactly what it expects. */
+const RANGES = [
+  { value: "7", label: "Last 7 days" },
+  { value: "30", label: "Last 30 days" },
+  { value: "90", label: "Last 90 days" },
+] as const;
+
 export default function AdminHome() {
-  const { user, profile, hasPermission } = useAuth();
+  const { hasPermission, profile } = useAuth();
+  const [days, setDays] = useState<string>("30");
 
-  const whoami = useQuery({
-    queryKey: ['admin', 'whoami'],
-    queryFn: () => api.get<WhoAmI>('/admin/whoami'),
-  });
+  const range = useMemo(() => {
+    const to = new Date();
+    const from = new Date(to.getTime() - Number(days) * 24 * 60 * 60 * 1000);
+    return { from: from.toISOString(), to: to.toISOString() };
+  }, [days]);
 
-  const staff = useQuery({
-    queryKey: ['admin', 'staff'],
-    queryFn: () => api.get<{ data: StaffRow[]; meta: { total: number } }>('/admin/staff?pageSize=10'),
-    enabled: hasPermission('staff:read'),
-    retry: false,
-  });
+  const dashboard = useAdminDashboard(range);
+  const data = dashboard.data;
 
-  const staffColumns: Column<StaffRow>[] = [
-    { key: 'code', header: 'Code', render: (row) => <span className="font-mono text-xs">{row.staffCode}</span> },
-    { key: 'name', header: 'Name', render: (row) => <span className="font-medium text-ink-900">{row.name}</span> },
+  const chartData = useMemo(
+    () =>
+      (data?.daily ?? []).map((row) => ({
+        date: new Date(row.date).toLocaleDateString("en-NG", {
+          day: "2-digit",
+          month: "short",
+        }),
+        deliveries: row.deliveries,
+        delivered: row.delivered,
+        revenue: Number(row.revenueKobo) / 100,
+      })),
+    [data],
+  );
+
+  const statusData = useMemo(
+    () =>
+      Object.entries(data?.deliveries.byStatus ?? {})
+        .map(([status, count]) => ({
+          name: status.replace(/_/g, " ").toLowerCase(),
+          count,
+        }))
+        .sort((a, b) => b.count - a.count),
+    [data],
+  );
+
+  const recentColumns: Column<DashboardOverview["recent"][number]>[] = [
     {
-      key: 'roles',
-      header: 'Roles',
+      key: "reference",
+      header: "Reference",
+      render: (row) => (
+        <span className="font-mono text-xs">{row.reference}</span>
+      ),
+    },
+    {
+      key: "route",
+      header: "Route",
       hideOnMobile: true,
       render: (row) => (
-        <div className="flex flex-wrap gap-1">
-          {row.isSuperAdmin && <Badge tone="brand">super admin</Badge>}
-          {row.roles.map((role) => (
-            <Badge key={role.key} tone="neutral">
-              {role.key.replace(/_/g, ' ').toLowerCase()}
-            </Badge>
-          ))}
+        <div className="max-w-[260px]">
+          <p className="truncate text-sm text-ink-800">{row.pickup}</p>
+          <p className="truncate text-xs text-ink-500">→ {row.destination}</p>
         </div>
       ),
     },
-    { key: 'status', header: 'Status', render: (row) => <Badge tone={row.status === 'ACTIVE' ? 'success' : 'warning'}>{row.status}</Badge> },
     {
-      key: 'lastLogin',
-      header: 'Last sign-in',
-      hideOnMobile: true,
-      render: (row) => (row.lastLoginAt ? new Date(row.lastLoginAt).toLocaleString('en-NG') : 'never'),
+      key: "charge",
+      header: "Charge",
+      align: "right",
+      render: (row) => row.chargeFormatted,
+    },
+    {
+      key: "status",
+      header: "Status",
+      render: (row) => (
+        <StatusPill
+          label={row.status.replace(/_/g, " ")}
+          tone={STATUS_TONE[row.status] ?? "neutral"}
+        />
+      ),
     },
   ];
 
   return (
-    <PortalShell portal="Admin" nav={NAV}>
+    <PortalShell portal="Admin" nav={adminNav(hasPermission)}>
       <div className="mx-auto max-w-6xl space-y-6">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight text-ink-900">Operations overview</h1>
+            <h1 className="text-2xl font-bold tracking-tight text-ink-900">
+              Operations overview
+            </h1>
             <p className="mt-1 text-sm text-ink-500">
-              {whoami.data ? `${whoami.data.staff.branch.name} · ${whoami.data.staff.branch.code}` : 'Loading branch…'}
+              {data
+                ? `${new Date(data.range.from).toLocaleDateString("en-NG")} → ${new Date(data.range.to).toLocaleDateString("en-NG")} · every figure below is a live SQL aggregate`
+                : "Loading the live figures…"}
             </p>
           </div>
-          <div className="flex flex-wrap gap-1.5">
-            {(whoami.data?.staff.roles ?? []).map((role) => (
-              <Badge key={role.role.key} tone="brand">
-                {role.role.name}
-              </Badge>
-            ))}
+          <div className="w-44">
+            <Select
+              label="Range"
+              value={days}
+              onChange={(event) => setDays(event.target.value)}
+              options={RANGES.map((option) => ({
+                value: option.value,
+                label: option.label,
+              }))}
+            />
           </div>
         </div>
 
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <StatCard label="Deliveries today" value="0" hint="no bookings yet — Phase 3" />
-          <StatCard label="Online riders" value="0" hint="rider operations arrive in Phase 4" />
-          <StatCard label="Revenue today" value="₦0.00" hint="computed from real payments" />
-          <StatCard label="Pending withdrawals" value="0" hint="finance centre in Phase 5" />
-        </div>
+        {dashboard.isError ? (
+          <ErrorState
+            title="We could not load the dashboard"
+            message={(dashboard.error as Error)?.message}
+            onRetry={() => void dashboard.refetch()}
+          />
+        ) : dashboard.isPending || !data ? (
+          <LoadingBlock rows={8} />
+        ) : (
+          <>
+            {/* ── the numbers ── */}
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <StatCard
+                label="Deliveries booked"
+                value={data.deliveries.total.toLocaleString("en-NG")}
+                hint={`${data.deliveries.delivered} delivered · ${data.deliveries.awaitingAssignment} waiting for a rider`}
+              />
+              <StatCard
+                label="Gross charged"
+                value={data.money.grossFormatted}
+                hint={`average order ${data.money.averageOrderFormatted}`}
+              />
+              <StatCard
+                label="Commission earned"
+                value={data.money.commissionFormatted}
+                hint={`riders keep ${data.money.riderNetFormatted}`}
+              />
+              <StatCard
+                label="Success rate"
+                value={
+                  data.deliveries.successRate === null
+                    ? "—"
+                    : `${data.deliveries.successRate}%`
+                }
+                hint={
+                  data.deliveries.avgDeliveryMinutes === null
+                    ? "nothing has completed yet"
+                    : `median trip ${data.deliveries.avgDeliveryMinutes} min`
+                }
+              />
+            </div>
 
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
-          <Card>
-            <CardHeader
-              title="Staff directory"
-              subtitle={hasPermission('staff:read') ? 'Live from the database' : 'Requires the staff:read permission'}
-            />
-            {hasPermission('staff:read') ? (
-              staff.isError ? (
-                <ErrorState
-                  message={(staff.error as ApiError)?.userMessage ?? 'Could not load staff'}
-                  requestId={(staff.error as ApiError)?.requestId}
-                  onRetry={() => void staff.refetch()}
-                />
-              ) : (
-                <DataTable
-                  columns={staffColumns}
-                  rows={staff.data?.data}
-                  isLoading={staff.isPending}
-                  emptyTitle="No staff accounts yet"
-                  emptyDescription="Create them from the Staff screen once Phase 5 lands."
-                />
-              )
-            ) : (
-              <CardBody>
-                <Alert tone="warning" title="Restricted">
-                  Your role does not include <code>staff:read</code>, so this panel is not even requested. The API
-                  would reject it with 403 anyway — the check is enforced on the server.
-                </Alert>
-              </CardBody>
-            )}
-          </Card>
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <StatCard
+                label="Riders online"
+                value={`${data.riders.online + data.riders.onDelivery} / ${data.riders.total}`}
+                hint={`${data.riders.onDelivery} carrying a job now`}
+              />
+              <StatCard
+                label="Documents to review"
+                value={data.riders.pendingDocuments}
+                hint="rider onboarding queue"
+              />
+              <StatCard
+                label="Live deliveries"
+                value={data.deliveries.active}
+                hint={`${data.deliveries.failed} failed · ${data.deliveries.cancelled} cancelled`}
+              />
+              <StatCard
+                label="Customers"
+                value={data.customers.total}
+                hint={`${data.money.marginFormatted} margin in range`}
+              />
+            </div>
 
-          <Card>
-            <CardHeader title="Your permissions" subtitle={`${whoami.data?.permissions.length ?? 0} granted`} />
-            <CardBody>
-              {whoami.isPending ? (
-                <LoadingBlock rows={6} />
-              ) : (
-                <div className="flex max-h-80 flex-wrap gap-1.5 overflow-y-auto">
-                  {(whoami.data?.permissions ?? []).map((permission) => (
-                    <span
-                      key={permission}
-                      className="rounded-md bg-ink-100 px-1.5 py-0.5 font-mono text-[11px] text-ink-700"
+            {/* ── the chart ── */}
+            <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
+              <Card>
+                <CardHeader
+                  title="Volume and revenue"
+                  subtitle="Charged revenue counts delivered jobs only"
+                />
+                <CardBody>
+                  {chartData.length === 0 ? (
+                    <p className="py-12 text-center text-sm text-ink-500">
+                      No deliveries in this range yet.
+                    </p>
+                  ) : (
+                    <div className="h-64 w-full">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <AreaChart
+                          data={chartData}
+                          margin={{ top: 8, right: 8, bottom: 0, left: -18 }}
+                        >
+                          <defs>
+                            <linearGradient
+                              id="revenueFill"
+                              x1="0"
+                              y1="0"
+                              x2="0"
+                              y2="1"
+                            >
+                              <stop
+                                offset="0%"
+                                stopColor="#0f766e"
+                                stopOpacity={0.35}
+                              />
+                              <stop
+                                offset="100%"
+                                stopColor="#0f766e"
+                                stopOpacity={0.02}
+                              />
+                            </linearGradient>
+                          </defs>
+                          <CartesianGrid
+                            strokeDasharray="3 3"
+                            stroke="#e2e8f0"
+                            vertical={false}
+                          />
+                          <XAxis
+                            dataKey="date"
+                            tick={{ fontSize: 11 }}
+                            stroke="#94a3b8"
+                          />
+                          <YAxis tick={{ fontSize: 11 }} stroke="#94a3b8" />
+                          <Tooltip
+                            formatter={(value) => [
+                              `₦${Number(value ?? 0).toLocaleString("en-NG")}`,
+                              "Revenue",
+                            ]}
+                            contentStyle={{ fontSize: 12, borderRadius: 8 }}
+                          />
+                          <Area
+                            type="monotone"
+                            dataKey="revenue"
+                            stroke="#0f766e"
+                            strokeWidth={2}
+                            fill="url(#revenueFill)"
+                            dot={{ r: 3, strokeWidth: 0, fill: "#0f766e" }}
+                          />
+                        </AreaChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
+                </CardBody>
+              </Card>
+
+              <Card>
+                <CardHeader
+                  title="Where jobs stand"
+                  subtitle="All deliveries in range, by status"
+                />
+                <CardBody>
+                  {statusData.length === 0 ? (
+                    <p className="py-10 text-center text-sm text-ink-500">
+                      Nothing booked in this range.
+                    </p>
+                  ) : (
+                    <ul className="space-y-2.5">
+                      {statusData.map((entry, index) => {
+                        const share =
+                          data.deliveries.total > 0
+                            ? (entry.count / data.deliveries.total) * 100
+                            : 0;
+                        return (
+                          <li key={entry.name}>
+                            <div className="flex items-center justify-between text-sm">
+                              <span className="capitalize text-ink-700">
+                                {entry.name}
+                              </span>
+                              <span className="font-semibold text-ink-900">
+                                {entry.count}
+                                <span className="ml-1 text-xs font-normal text-ink-400">
+                                  {Math.round(share)}%
+                                </span>
+                              </span>
+                            </div>
+                            <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-ink-100">
+                              <div
+                                className="h-full rounded-full"
+                                style={{
+                                  width: `${share}%`,
+                                  background:
+                                    PIE_COLOURS[index % PIE_COLOURS.length],
+                                }}
+                              />
+                            </div>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </CardBody>
+              </Card>
+            </div>
+
+            {/* ── zones + recent ── */}
+            <div className="grid gap-4 lg:grid-cols-[360px_minmax(0,1fr)]">
+              <Card>
+                <CardHeader
+                  title="Zones"
+                  subtitle="Delivered jobs and revenue per zone"
+                />
+                <CardBody>
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-left text-xs uppercase tracking-wide text-ink-500">
+                        <th className="pb-2">Zone</th>
+                        <th className="pb-2 text-right">Done</th>
+                        <th className="pb-2 text-right">Revenue</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {data.zones.map((zone) => (
+                        <tr key={zone.zone} className="border-t border-ink-100">
+                          <td className="py-2 text-ink-800">{zone.zone}</td>
+                          <td className="py-2 text-right text-ink-600">
+                            {zone.delivered}
+                          </td>
+                          <td className="py-2 text-right font-medium text-ink-900">
+                            {zone.revenueFormatted}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </CardBody>
+              </Card>
+
+              <Card>
+                <CardHeader
+                  title="Latest bookings"
+                  subtitle="Newest six in the selected range"
+                  action={
+                    <Link
+                      to="/admin/deliveries"
+                      className="text-xs font-semibold text-brand-700 hover:underline"
                     >
-                      {permission}
-                    </span>
-                  ))}
-                </div>
-              )}
-              <p className="mt-3 text-[11px] leading-relaxed text-ink-500">
-                Loaded from the database via <code>/admin/whoami</code>. A support agent sees a much shorter list and
-                cannot reach finance or pricing at all.
-              </p>
-            </CardBody>
-          </Card>
-        </div>
+                      Open the delivery board →
+                    </Link>
+                  }
+                />
+                <DataTable
+                  columns={recentColumns}
+                  rows={data.recent}
+                  emptyTitle="No bookings yet"
+                  emptyDescription="Once customers book, the newest jobs appear here."
+                />
+              </Card>
+            </div>
 
-        <Alert tone="info" title="Phase 5 builds the command centre">
-          The overview cards above are honest zeros: they are wired to real queries that will populate the moment
-          deliveries exist. This phase delivered the authentication and authorisation layer that every one of those
-          screens depends on — sign-in, sessions, roles, permissions and the audit trail,
-          {profile?.isSuperAdmin ? ' with full super-admin access.' : '.'}
-        </Alert>
-
-        <p className="text-xs text-ink-400">
-          Signed in as {user?.firstName} {user?.lastName} · {user?.email}
-        </p>
+            <Alert tone="info" title="Where these numbers come from">
+              Gross is the sum of <code>chargeKobo</code> on delivered jobs;
+              commission comes from the rider earning rows written when each job
+              is completed. The chart is a <code>date_trunc</code> query, and
+              the range selector sends real dates — change the range and every
+              card moves with it.
+              {profile?.isSuperAdmin
+                ? " You are a super admin, so nothing is hidden from you."
+                : ""}
+            </Alert>
+          </>
+        )}
       </div>
     </PortalShell>
   );

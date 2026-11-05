@@ -64,7 +64,7 @@ export class AdminRidersService {
     ]);
 
     return {
-      items: rows.map((rider) => ({
+      data: rows.map((rider) => ({
         id: rider.id,
         riderCode: rider.riderCode,
         name: `${rider.user.firstName} ${rider.user.lastName}`,
@@ -86,10 +86,8 @@ export class AdminRidersService {
         },
         createdAt: rider.createdAt,
       })),
-      page,
-      perPage,
-      total,
-      totalPages: Math.max(1, Math.ceil(total / perPage)),
+      // Same envelope as every other admin list endpoint: { data, meta }.
+      meta: { page, pageSize: perPage, total, totalPages: Math.max(1, Math.ceil(total / perPage)) },
     };
   }
 
