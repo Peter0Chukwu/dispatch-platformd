@@ -9,6 +9,7 @@ import RegisterRiderPage from "./pages/auth/RegisterRiderPage";
 import VerifyPage from "./pages/auth/VerifyPage";
 import ForgotPasswordPage from "./pages/auth/ForgotPasswordPage";
 import ResetPasswordPage from "./pages/auth/ResetPasswordPage";
+import TrackPage from "./pages/TrackPage";
 import CustomerHome from "./pages/customer/CustomerHome";
 import BookDeliveryPage from "./pages/customer/BookDeliveryPage";
 import DeliveriesPage from "./pages/customer/DeliveriesPage";
@@ -32,6 +33,7 @@ const AdminPricingPage = lazy(() => import("./pages/admin/PricingPage"));
 const AdminStaffPage = lazy(() => import("./pages/admin/StaffPage"));
 const AdminAuditPage = lazy(() => import("./pages/admin/AuditPage"));
 const AdminFinancePage = lazy(() => import("./pages/admin/FinancePage"));
+const AdminLiveMapPage = lazy(() => import("./pages/admin/LiveMapPage"));
 const CustomerWalletPage = lazy(() => import("./pages/customer/WalletPage"));
 import {
   RedirectIfAuthenticated,
@@ -74,6 +76,8 @@ export default function App() {
           }
         />
         <Route path="/verify" element={<VerifyPage />} />
+        {/* Public tracking: the share link is the credential, so no auth wrapper. */}
+        <Route path="/track/:token" element={<TrackPage />} />
         <Route
           path="/forgot-password"
           element={
@@ -116,6 +120,9 @@ export default function App() {
           <Route element={<RequirePermission permission="delivery:read" />}>
             <Route path="deliveries" element={<AdminDeliveriesPage />} />
             <Route path="dispatch" element={<AdminDispatchBoardPage />} />
+          </Route>
+          <Route element={<RequirePermission permission="tracking:read" />}>
+            <Route path="map" element={<AdminLiveMapPage />} />
           </Route>
           <Route element={<RequirePermission permission="rider:read" />}>
             <Route path="riders" element={<AdminRidersPage />} />

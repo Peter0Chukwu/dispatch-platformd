@@ -21,6 +21,8 @@ export const LIVE_EVENTS = {
   OFFER_REVOKED: 'offer:revoked',
   DELIVERY_NEW: 'delivery:new',
   DELIVERY_UPDATED: 'delivery:updated',
+  /** A rider reported a position on an active delivery (Phase 8). */
+  TRACKING_PING: 'tracking:update',
   DISPATCH_EXHAUSTED: 'dispatch:exhausted',
   SESSION_REVOKED: 'session:revoked',
   ERROR: 'error:api',
@@ -92,6 +94,20 @@ export function onLive(event: string, handler: Handler): () => void {
     set.delete(handler);
     socket?.off(event, handler);
   };
+}
+
+/**
+ * Ask the server to put this socket in a delivery's tracking room.
+ *
+ * The server decides: the owning customer, the assigned rider and staff with
+ * `delivery:read` are admitted; anybody else is told FORBIDDEN and never receives
+ * a position. Joining is best-effort — the polling query keeps the map working if
+ * the socket is down.
+ */
+export function subscribeToDelivery(deliveryId: string): () => void {
+  if (!socket) return () => {};
+  socket.emit('subscribe:delivery', { deliveryId });
+  return () => {};
 }
 
 /** React binding: run `handler` whenever the event arrives. */

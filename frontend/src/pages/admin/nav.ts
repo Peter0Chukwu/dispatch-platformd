@@ -10,6 +10,7 @@ import type { NavItem } from "../../layouts/PortalShell";
 const ALL: Array<NavItem & { permission?: string }> = [
   { to: "/admin", label: "Overview", permission: "dashboard:read" },
   { to: "/admin/dispatch", label: "Dispatch board", permission: "delivery:read" },
+  { to: "/admin/map", label: "Operations map", permission: "tracking:read" },
   { to: "/admin/deliveries", label: "Deliveries", permission: "delivery:read" },
   { to: "/admin/riders", label: "Riders", permission: "rider:read" },
   { to: "/admin/customers", label: "Customers", permission: "customer:read" },

@@ -159,7 +159,7 @@ export default function BookDeliveryPage() {
       notify({
         tone: 'success',
         title: 'Booking created',
-        description: `${created.reference} — ${created.chargeFormatted}. Payment arrives in Phase 7.`,
+        description: `${created.reference} — ${created.chargeFormatted}. Pay by card, transfer or from your wallet on the next screen.`,
       });
       navigate(`/app/deliveries/${created.id}`);
     } catch (error) {
@@ -483,7 +483,7 @@ export default function BookDeliveryPage() {
             </Card>
             <p className="px-1 text-xs leading-relaxed text-ink-400">
               The amount is recomputed when you confirm, so what you are charged always matches the current pricing
-              rules. Payment (Paystack, Flutterwave or wallet) arrives in Phase 7.
+              rules. Payment — card, transfer or wallet — is taken on the delivery page, never before you confirm.
             </p>
           </div>
         </div>

@@ -18,6 +18,7 @@ import {
 import { useAuth, useApiError } from '../../contexts/AuthContext';
 import { RIDER_NAV } from './nav';
 import { useActiveJob, useOffers, useRiderProfile, useSetAvailability } from '../../hooks/useRider';
+import { LocationReporter } from '../../components/LocationReporter';
 
 export default function RiderHome() {
   const { user } = useAuth();
@@ -85,6 +86,8 @@ export default function RiderHome() {
   return (
     <PortalShell portal="Rider" nav={RIDER_NAV}>
       <div className="mx-auto max-w-4xl space-y-5">
+        {/* Only report a position while the rider is actually available for work. */}
+        {(online || onDelivery) && <LocationReporter deliveryId={activeJob.data?.id ?? null} />}
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h1 className="text-xl font-bold tracking-tight text-ink-900">Hello, {user?.firstName}</h1>

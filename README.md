@@ -3,19 +3,21 @@
 A complete dispatch-rider and logistics management platform for a Nigerian dispatch company:
 **Customer portal · Rider portal · Admin command centre** — one backend, one database, real records.
 
-> **Current status: Phase 7 complete** — foundation, authentication/RBAC, customer booking with a
+> **Current status: Phase 8 complete** — foundation, authentication/RBAC, customer booking with a
 > server-side pricing engine, the rider portal (onboarding, offer race, delivery workflow, earnings ledger),
 > the admin command centre (SQL-computed dashboard, delivery board, riders, customers, pricing, staff, audit),
 > the **dispatch engine** (offer rounds that widen from 5 km to the whole branch, live Socket.IO offers, an
-> escalation board), and now **payments**: Paystack and Flutterwave init/verify with signature-verified
-> webhooks, a customer wallet, a double-entry ledger behind every naira, commission accrual on delivery,
-> refunds, and rider withdrawals through a finance approval and provider payout. 214 automated tests passing.
-> Phase 8 (maps, live tracking) is next.
+> escalation board), **payments** (Paystack and Flutterwave init/verify with signature-verified webhooks, a
+> customer wallet, a double-entry ledger behind every naira, commission accrual, refunds, rider withdrawals
+> through finance approval and provider payout), and now **maps and live tracking**: address lookup through a
+> provider adapter, rider GPS reporting at a configurable cadence, a customer map with a real ETA, a public
+> share link that expires and can be revoked, and a dispatcher map that only ever draws a position a phone
+> actually reported. **237 automated tests passing.** Phase 9 (reports and analytics) is next.
 >
 > Phase logs: [`PHASE-1`](documentation/PHASE-LOG/PHASE-1.md) · [`PHASE-2`](documentation/PHASE-LOG/PHASE-2.md)
 > · [`PHASE-3`](documentation/PHASE-LOG/PHASE-3.md) · [`PHASE-4`](documentation/PHASE-LOG/PHASE-4.md)
 > · [`PHASE-5`](documentation/PHASE-LOG/PHASE-5.md) · [`PHASE-6`](documentation/PHASE-LOG/PHASE-6.md)
-> · [`PHASE-7`](documentation/PHASE-LOG/PHASE-7.md)
+> · [`PHASE-7`](documentation/PHASE-LOG/PHASE-7.md) · [`PHASE-8`](documentation/PHASE-LOG/PHASE-8.md)
 > · Visual build report: [`documentation/BUILD-REPORT.html`](documentation/BUILD-REPORT.html)
 
 ## Documentation
@@ -24,6 +26,8 @@ A complete dispatch-rider and logistics management platform for a Nigerian dispa
 |---|---|
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | System architecture, portal communication, API surface, folder structure, 10-phase roadmap, external services, risks |
 | [`docs/DATABASE-DRAFT.prisma`](docs/DATABASE-DRAFT.prisma) | The full database design (review copy) |
+| [`documentation/PHASE-LOG/PHASE-8.md`](documentation/PHASE-LOG/PHASE-8.md) | Phase 8: maps adapter, live tracking, share links, the dispatcher map — and the rule that a position is only shown if a phone reported it |
+| [`documentation/CREDENTIALS-SETUP.md`](documentation/CREDENTIALS-SETUP.md) | Every third-party credential: what to create, which dashboard page, which `.env` line |
 | [`documentation/PHASE-LOG/PHASE-7.md`](documentation/PHASE-LOG/PHASE-7.md) | Phase 7: payments, wallet, double-entry ledger, commission, refunds, withdrawals — the money map and its tests |
 | [`documentation/PHASE-LOG/PHASE-6.md`](documentation/PHASE-LOG/PHASE-6.md) | Phase 6: dispatch engine — offer rounds, escalation, live socket offers, the dispatch board |
 | [`documentation/PHASE-LOG/PHASE-5.md`](documentation/PHASE-LOG/PHASE-5.md) | Phase 5: admin command centre — dashboard, deliveries, riders, customers, pricing, staff, audit |

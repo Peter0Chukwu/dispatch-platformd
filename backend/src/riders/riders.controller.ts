@@ -11,12 +11,30 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequireType } from '../auth/decorators/require-type.decorator';
 import { RateLimit } from '../common/rate-limit/rate-limit.decorator';
 import { RidersService } from './riders.service';
+import { AppConfig } from '../config/app.config';
 
 /** Rider self-service. Every route is RIDER-only and scoped to the caller. */
 @Controller('rider')
 @RequireType('RIDER')
 export class RidersController {
-  constructor(private readonly riders: RidersService) {}
+  constructor(
+    private readonly riders: RidersService,
+    private readonly config: AppConfig,
+  ) {}
+
+  /**
+   * How often the app should report position, straight from configuration.
+   * The rider app reads this instead of hardcoding an interval, so changing
+   * TRACKING_PING_INTERVAL_SECONDS in `.env` changes every phone on next launch.
+   */
+  @Get('location/config')
+  locationConfig() {
+    return {
+      pingIntervalSeconds: this.config.trackingPingIntervalSeconds,
+      retentionDays: this.config.locationRetentionDays,
+      staleAfterSeconds: 600,
+    };
+  }
 
   @Get('profile')
   profile(@CurrentUser('riderId') riderId: string) {

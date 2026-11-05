@@ -7,7 +7,7 @@ const PORTALS = [
     to: '/app',
     name: 'Customer',
     tagline: 'Book a rider, track your package, pay securely.',
-    phase: 'Phase 3',
+    phase: 'Live tracking',
     accent: 'from-accent-500 to-accent-700',
     icon: (
       <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
@@ -20,7 +20,7 @@ const PORTALS = [
     to: '/rider',
     name: 'Rider',
     tagline: 'Accept deliveries, navigate, get paid.',
-    phase: 'Phase 4',
+    phase: 'Jobs & earnings',
     accent: 'from-brand-600 to-brand-800',
     icon: (
       <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
@@ -34,7 +34,7 @@ const PORTALS = [
     to: '/admin',
     name: 'Admin',
     tagline: 'Live operations, finance, riders and reports.',
-    phase: 'Phase 5',
+    phase: 'Operations & finance',
     accent: 'from-ink-700 to-ink-900',
     icon: (
       <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
@@ -147,8 +147,8 @@ export default function LandingPage() {
         </section>
 
         <footer className="mt-12 border-t border-brand-800 pt-6 text-xs text-brand-400">
-          Phase 1 complete — foundation, schema, seed, API shell, design system. Next: authentication &amp; access
-          control (Phase 2).
+          Built through Phase 8 — authentication, bookings, dispatch, rider jobs, payments and the double-entry
+          ledger, and live tracking with a public share link. Reports and deployment hardening are next.
         </footer>
       </div>
     </div>

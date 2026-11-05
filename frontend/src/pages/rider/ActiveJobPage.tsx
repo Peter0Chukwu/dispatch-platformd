@@ -20,6 +20,7 @@ import {
   useToast,
 } from '../../components/ui';
 import { RIDER_NAV } from './nav';
+import { LocationReporter } from '../../components/LocationReporter';
 import { LIVE_EVENTS, useLiveEvent } from '../../lib/live';
 import { useApiError } from '../../contexts/AuthContext';
 import {
@@ -211,6 +212,9 @@ export default function ActiveJobPage() {
             <p className="mt-1 text-sm font-bold text-accent-700">{data.pay.netFormatted}</p>
           </div>
         </div>
+
+        {/* The customer is watching this job's map: report position while it is open. */}
+        <LocationReporter deliveryId={data.id} />
 
         {/* Progress rail */}
         <Card>

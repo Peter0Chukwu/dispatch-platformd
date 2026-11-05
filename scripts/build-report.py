@@ -9,6 +9,14 @@ from PIL import Image
 
 OUT = "documentation/BUILD-REPORT.html"
 SHOTS = [
+    ("screenshots/phase-8/02-customer-live-tracking.png", "Phase 8 — the customer sees the rider, and the map admits what it is", "\u007e23 min and 8.4 km to the drop-off, measured from the rider's last reported coordinate \u2014 not from the booking's stored distance. The caption under the map says the positions are exact and the basemap is not, because Google Maps is not configured yet. A schematic that says it is a schematic is honest; a fake street map would not be."),
+    ("screenshots/phase-8/05-admin-operations-map.png", "Phase 8 — the dispatcher's city view", "One rider on a delivery between pickup and drop-off, one job waiting for a rider, and the counts above the map computed from the same payload that drew the markers. Riders who have never pinged are not drawn at all \u2014 they are counted as missing instead of parked at their branch."),
+    ("screenshots/phase-8/04-public-tracking.png", "Phase 8 — a share link a recipient can open", "No account, no app, no session \u2014 the token is the credential. It shows the parcel, the rider's first name and the expiry date, and nothing else: no phone numbers, no customer identity. The customer can revoke it at any moment and the old URL stops working immediately."),
+    ("screenshots/phase-8/06-admin-map-rider-focus.png", "Phase 8 — clicking a rider", "Position 6.5432, 3.3876, reported at 12:30:00, on job DSP-261105-94TR. The coordinate is real browser geolocation captured during the run, and the \u201creported\u201d timestamp is the value the server stored \u2014 which is how a dispatcher tells a live phone from a quiet one."),
+    ("screenshots/phase-8/07-rider-sharing-position.png", "Phase 8 — the rider's phone doing the reporting", "\u201cSharing your position \u00b7 last report 12:28:09 \u00b7 every 15 s while this screen is open.\u201d The cadence comes from TRACKING_PING_INTERVAL_SECONDS via /rider/location/config, so changing one environment variable changes every phone on its next launch."),
+    ("screenshots/phase-8/08-rider-location-denied.png", "Phase 8 — when permission is denied, it says so", "The rider blocked location. Dispatch cannot see them, they are told exactly that, and nothing is sent \u2014 no position is guessed on their behalf and no marker appears anywhere in the platform. This is the state most systems model worst, so it is a screenshot rather than a footnote."),
+    ("screenshots/phase-8/01-address-suggestions.png", "Phase 8 — address lookup through the adapter", "A search for \u201clekki\u201d returns the two places that actually match, from the server. With a Google key the same call is Places Autocomplete; without one it is the platform's own table of real Lagos coordinates, and the caption under the list says which. \u201cFind coordinates\u201d geocodes a typed address and admits when it cannot."),
+    ("screenshots/phase-8/03-customer-share-link.png", "Phase 8 — a link, created and revocable", "The customer mints the link in one click and can copy or revoke it. It expires in 72 hours by default; an expired link returns \u201cthis tracking link has expired\u201d rather than a bare 404, because the person holding it deserves to know the difference."),
     ("screenshots/phase-7/02-reconciliation.png", "Phase 7 — the books reconcile, on demand", "Five checks against the live journal: debits equal credits at \u20a646,391.83, every successful payment has exactly one entry, wallet balances match the ledger, rider payables match accruals, and withdrawals in transit match their account. This screen is the whole argument for double-entry — a bug in the money code cannot hide from it."),
     ("screenshots/phase-7/01-finance-overview.png", "Phase 7 — the finance desk", "Collected \u20a637,900.00, rider cost \u20a63,758.50, gateway fees \u20a6831.83, net \u20a6108.17 — after a \u20a63,201.50 refund. Every figure is a SQL aggregate or a ledger balance at request time; none of it is a stored dashboard number."),
     ("screenshots/phase-7/05-withdrawals-approved.png", "Phase 7 — a rider payout, approved by a human", "Rita requested \u20a63,758.50 of cleared earnings. Approval moved the obligation from rider earnings payable to withdrawals payable; \u201cPay rider\u201d then sends the transfer and settles it. A rider cannot approve their own request \u2014 the API returns 403."),
@@ -50,13 +58,13 @@ SHOTS = [
     ("screenshots/06-modal-open.png", "Phase 1 — accessible modal dialog", "Portal-rendered, Escape to close, focus trapped, body scroll locked — the pattern every confirmation uses."),
 ]
 
-MAX_W = 1100
+MAX_W = 980
 def embed(path: str) -> str:
     img = Image.open(path).convert("RGB")
     if img.width > MAX_W:
         img = img.resize((MAX_W, round(img.height * MAX_W / img.width)), Image.LANCZOS)
     buffer = io.BytesIO()
-    img.save(buffer, format="JPEG", quality=78, optimize=True)
+    img.save(buffer, format="JPEG", quality=74, optimize=True)
     return "data:image/jpeg;base64," + base64.b64encode(buffer.getvalue()).decode()
 
 def count(sql: str) -> str:
@@ -81,9 +89,25 @@ stats = {
     "earnings": count("SELECT count(*) FROM rider_earnings"),
 }
 
+def resolve(relative: str) -> str:
+    """
+    Screenshot paths in SHOTS are written relative to `documentation/`, but this
+    script is run from the repository root. Resolving both keeps the report correct
+    whichever directory it is invoked from — running it from `documentation/` used to
+    write a nested `documentation/documentation/` copy by mistake.
+    """
+    if os.path.exists(relative):
+        return relative
+    candidate = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "documentation", relative)
+    return os.path.normpath(candidate)
+
+
 cards = []
+missing = []
 for path, title, caption in SHOTS:
+    path = resolve(path)
     if not os.path.exists(path):
+        missing.append(path)
         continue
     cards.append(f"""
       <figure class="shot">
@@ -92,12 +116,15 @@ for path, title, caption in SHOTS:
         <p class="file">{path}</p>
       </figure>""")
 
+if missing:
+    print(f"warning: {len(missing)} screenshot(s) not found: {missing[:3]}")
+
 html = f"""<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Dispatch Platform — Build Report (through Phase 6)</title>
+<title>Dispatch Platform — Build Report (through Phase 8)</title>
 <style>
   :root {{
     --navy:#0B1F3A; --navy-2:#16304F; --green:#12B76A; --ink:#334155;
@@ -160,13 +187,15 @@ html = f"""<!doctype html>
        database. This page is a static snapshot with real screenshots captured from the running
        application — it works without any server.</p>
     <div class="badges">
-      <span class="badge ok">✓ 149 tests passing</span>
+      <span class="badge ok">✓ 237 automated tests passing</span>
       <span class="badge ok">✓ API + database + Redis live</span>
       <span class="badge">NestJS 11 · Prisma 6 · PostgreSQL 17 · Redis 8</span>
       <span class="badge">React 19 · Vite 7 · Tailwind · TanStack Query</span>
       <span class="badge ok">✓ Argon2id · JWT 15 min · rotating refresh tokens</span>
       <span class="badge ok">✓ Prices computed server-side in integer kobo</span>
       <span class="badge ok">✓ One rider per job, enforced by a Redis lock</span>
+      <span class="badge ok">✓ Every naira in a double-entry ledger</span>
+      <span class="badge ok">✓ A position is only shown if a phone reported it</span>
       <span class="badge">Captured {datetime.now(timezone.utc).strftime('%d %b %Y %H:%M UTC')}</span>
     </div>
   </div>
@@ -208,6 +237,45 @@ html = f"""<!doctype html>
       <tr><td>One round at a time</td><td>A per-delivery Redis lock (<code>SET PX 15000 NX</code>) means two API processes, or a double click, cannot double-offer. A concurrent test drives two ticks at once.</td></tr>
       <tr><td>Giving up is loud</td><td>When the schedule is spent the engine raises one <code>DISPATCH_EXHAUSTED</code> alert (guarded by a 10-minute Redis key) and stops. It will not restart by itself when a rider frees up — that job needs a decision.</td></tr>
       <tr><td>The socket never owns the truth</td><td>Pushes say only <em>something changed</em>; the screen refetches through the REST API. Every action still needs a bearer token and a permission — the live channel is notification, not authority.</td></tr>
+    </table>
+  </div>
+
+
+  <h2>Phase 8 — maps, live tracking and realtime</h2>
+  <div class="panel">
+    <p><strong>A position is only ever shown if a rider's device reported it.</strong> That rule is enforced
+    in code: no interpolation, no predicted marker, no rider parked at their branch. When nothing has been
+    reported the API returns <code>position: null</code> and the screen says so in words; when a report is
+    old it is flagged <code>stale</code> and drawn faded rather than moved. The second rule is about who may
+    look — a customer sees the rider on <em>their</em> delivery, a share link sees that parcel and nothing
+    else, and a dispatcher needs <code>tracking:read</code>.</p>
+    <table>
+      <tr><th>Decision</th><th>How it works</th></tr>
+      <tr><td>One maps adapter</td><td><code>MapsService</code> answers autocomplete, geocode, reverse geocode and route/ETA. With a Google key it calls Places, Geocoding and Directions; without one it answers from the platform's own table of real Lagos coordinates and says <code>source: STUB</code>. A provider outage falls back rather than blocking a booking, and the response always declares which source answered.</td></tr>
+      <tr><td>One write path for positions</td><td>Every ping goes through <code>TrackingService.recordPing()</code>: it is scoped to the job the rider actually holds, persisted to <code>rider_locations</code>, then pushed to the delivery room. A ping survives a dead socket — the socket only decides how fast a map refreshes.</td></tr>
+      <tr><td>The cadence is configuration</td><td><code>GET /rider/location/config</code> serves <code>TRACKING_PING_INTERVAL_SECONDS</code> (15 s) to the rider app, which re-uses one <code>watchPosition</code> fix between sends instead of waking the GPS on a timer.</td></tr>
+      <tr><td>ETA is measured, not remembered</td><td>From the rider's last real coordinate to the <em>pickup</em> before collection and to the <em>destination</em> after it — never from the booking's stored distance. <code>eta: null</code> whenever there is no position.</td></tr>
+      <tr><td>Tracking stops at DELIVERED</td><td>Once the parcel is handed over, position and ETA become null even for the owning customer. The job is over; the rider's location stops being anyone's business.</td></tr>
+      <tr><td>A share link is a window</td><td>A 24-byte token, 72 h by default, revocable at any moment. It reveals the reference, the status, the rider's first name and the position — no phone number, no email, no customer identity. Expired returns 409 \u201cthis tracking link has expired\u201d, not a bare 404.</td></tr>
+      <tr><td>The room is the authorisation</td><td><code>subscribe:delivery</code> admits the owning customer, the assigned rider and staff with <code>delivery:read</code>. Anyone else gets <code>FORBIDDEN</code> and joins nothing; no principal gets <code>UNAUTHORIZED</code>. Both are covered by tests.</td></tr>
+      <tr><td>Retention is bounded</td><td>A ping every 15 s is ~5,760 rows a day per rider. Pings older than <code>LOCATION_RETENTION_DAYS</code> (30) are pruned hourly. The delivery, its status history and its timestamps survive; the breadcrumb trail does not.</td></tr>
+      <tr><td>The map admits what it is</td><td>Without a Maps key the UI draws a schematic — every point at its true latitude and longitude, on a plain grid — under the caption \u201cpositions are exact, the basemap is not\u201d. A schematic that says it is a schematic is honest; a fake street map would not be.</td></tr>
+    </table>
+  </div>
+
+  <h2>Phase 7 — payments, the wallet and the ledger</h2>
+  <div class="panel">
+    <p><strong>Every naira is provable.</strong> No balance is a column somebody increments: each payment,
+    earning, withdrawal, refund and gateway fee is a journal entry, and debits must equal credits before the
+    transaction is allowed to commit. The reconciliation screen runs five live checks against the journal and
+    reports what it finds, including the \u20a646,391.83 that moved through the books in the demo day.</p>
+    <table>
+      <tr><th>Decision</th><th>How it works</th></tr>
+      <tr><td>Nothing is credited from a browser</td><td>A payment is <code>PENDING</code> until the provider confirms it, and every webhook is signature-verified against the raw body and deduplicated on <code>(provider, eventId)</code>. An unverified or replayed webhook credits nothing.</td></tr>
+      <tr><td>One settlement path</td><td>Card, wallet, cash and simulated payments all settle through <code>PaymentsService.settle()</code>, so there is exactly one place where money becomes revenue.</td></tr>
+      <tr><td>A wallet cannot go negative</td><td><code>SELECT \u2026 FOR UPDATE</code>, a version CAS and a database CHECK constraint. Three layers, because a wallet is the one number a customer will notice.</td></tr>
+      <tr><td>Riders wait before they are paid</td><td>An earning sits <code>PENDING</code> for the hold window (24 h) before it is withdrawable, and money already committed to a withdrawal is subtracted — the same naira cannot be asked for twice.</td></tr>
+      <tr><td>A human approves payouts</td><td><code>REQUESTED \u2192 APPROVED \u2192 PROCESSING \u2192 PAID</code>. Approval and payout need separate permissions, each step is idempotent, and a rider cannot approve their own request.</td></tr>
     </table>
   </div>
 
@@ -360,39 +428,40 @@ npm run dev
 npm test            <span class="c"># 149 tests against a real, isolated Postgres + Redis</span>
 bash scripts/smoke.sh
 node scripts/seed-demo-phase4.mjs     <span class="c"># a real rider, approved, online, with an offer</span>
-node scripts/capture-phase4.mjs       <span class="c"># rider journey + refresh these screenshots</span>
+node scripts/capture-phase4.mjs       <span class="c"># rider journey</span>
+node scripts/seed-demo-phase8.mjs     <span class="c"># a rider mid-delivery, with real position pings</span>
+node scripts/capture-phase8.mjs       <span class="c"># tracking journey + refresh these screenshots</span>
 node scripts/capture-phase3.mjs       <span class="c"># booking journey</span>
 python3 scripts/build-report.py       <span class="c"># regenerate this page</span></pre>
 
-  <h2>Known limitations after Phase 4</h2>
+  <h2>Known limitations after Phase 8</h2>
   <div class="panel">
     <ul>
-      <li><strong>Email and SMS are console drivers.</strong> Codes print to the API log, and in
-      development are also returned to the browser so the flow can be tested without spend. A real
-      provider plugs into <code>MessagingService</code> in Phase 7 without touching the auth code.</li>
+      <li><strong>Maps are stubbed, not missing.</strong> <code>MAPS_PROVIDER=STUB</code> answers with real Lagos
+      coordinates and a road-factor route estimate, and every screen says so. Setting a Google key switches the
+      adapter to Places, Geocoding and Directions with no code change — see
+      <code>documentation/CREDENTIALS-SETUP.md</code>.</li>
+      <li><strong>Payments are simulated</strong> (<code>PAYMENTS_MODE=DEVELOPMENT</code>) until sandbox or live
+      keys are placed in the server's <code>.env</code> — never in this workspace. The webhook, settlement and
+      ledger paths are the same ones a real provider would drive.</li>
+      <li><strong>Email and SMS are console drivers.</strong> Codes print to the API log, and in development are
+      returned to the browser so flows can be tested without spend. Termii and Resend plug into
+      <code>MessagingService</code> through one environment variable.</li>
       <li><strong>No staff 2FA yet.</strong> Recommended before real money moves; the TOTP storage and
       verification plumbing already exist.</li>
-      <li><strong>Google Maps is not connected.</strong> Distances are straight-line × a road factor, and
-      the UI labels them as an estimate. A real key switches one service, nothing else.</li>
-      <li><strong>No payment is taken yet.</strong> A booking is created UNPAID and the screen says so;
-      Paystack, Flutterwave and the wallet arrive in Phase 7. Riders are already earning into a real
-      ledger — the money is recorded, not yet collected or paid out.</li>
-      <li><strong>Offers are polled, not pushed.</strong> The rider app checks every few seconds; Socket.IO
-      push and BullMQ queues arrive in Phase 6. The 20-second deadline is enforced server-side either way.</li>
-      <li><strong>The waiting-delivery sweep runs on a rider coming online, not on a timer.</strong> A
-      delivery that finds no rider waits until someone goes online or an admin assigns it (Phase 5); the
-      scheduled worker joins it in Phase 6.</li>
-      <li><strong>Not yet built:</strong> admin document-review screens (the API is live and tested),
-      staff/role management screens, audit-log viewer, session list, withdrawals. The screens arrive with
-      Phases 5–7.</li>
-      <li><strong>Payments remain simulated</strong> (<code>PAYMENTS_MODE=DEVELOPMENT</code>) until the
-      live keys are placed in the server's <code>.env</code> — never in this workspace.</li>
+      <li><strong>No turn-by-turn navigation for riders.</strong> The rider app shows the route, addresses and
+      landmarks; a deep link into the device's own maps app is the planned hand-off, because that is what riders
+      actually use.</li>
+      <li><strong>No notification centre.</strong> The audit trail and the realtime channel both record what
+      happened; a customer-facing inbox over them is still open from Phase 5.</li>
+      <li><strong>Not yet built:</strong> reports and analytics with CSV/PDF export (Phase 9), then deployment
+      hardening — Docker Compose, CI, Playwright end-to-end runs, backup drill, runbook (Phase 10).</li>
     </ul>
   </div>
 
   <footer>
-    Phase 4 build report · generated by <code>scripts/build-report.py</code> ·
-    source of truth: <code>documentation/PHASE-LOG/PHASE-4.md</code>
+    Build report through Phase 8 · generated by <code>scripts/build-report.py</code> ·
+    source of truth: <code>documentation/PHASE-LOG/PHASE-8.md</code>
   </footer>
 </main>
 </body>

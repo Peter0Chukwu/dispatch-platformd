@@ -19,6 +19,8 @@ export const RT = {
   /** A delivery was created, moved, assigned or cancelled. */
   DELIVERY_NEW: 'delivery:new',
   DELIVERY_UPDATED: 'delivery:updated',
+  /** A rider reported a position on an active delivery (Phase 8). */
+  TRACKING_PING: 'tracking:update',
   /** Money moved: a payment settled, a wallet changed, a withdrawal advanced. */
   PAYMENT_UPDATED: 'payment:updated',
   /** Dispatch has run out of riders to ask. Staff must intervene. */

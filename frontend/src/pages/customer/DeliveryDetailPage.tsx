@@ -17,6 +17,7 @@ import {
 } from '../../components/ui';
 import { PriceBreakdown } from '../../components/PriceBreakdown';
 import { PaymentPanel } from '../../components/PaymentPanel';
+import { DeliveryTrackingCard } from '../../components/DeliveryTrackingCard';
 import { CUSTOMER_NAV } from './nav';
 import { useCancelDelivery, useDelivery } from '../../hooks/useDeliveries';
 import { useApiError } from '../../contexts/AuthContext';
@@ -131,6 +132,8 @@ export default function DeliveryDetailPage() {
               paymentStatus={delivery.paymentStatus}
             />
 
+            <DeliveryTrackingCard deliveryId={delivery.id} status={delivery.status} />
+
             <div className="grid gap-5 lg:grid-cols-2">
               <Card>
                 <CardHeader title="Price you were charged" subtitle="Frozen at booking — later rule changes cannot alter it" />
@@ -199,7 +202,7 @@ export default function DeliveryDetailPage() {
                   </ol>
                   {delivery.status === 'PENDING' && (
                     <p className="mt-4 rounded-lg bg-info-50 p-2.5 text-xs text-info-800">
-                      Waiting for a rider — the dispatch engine is offering this job to the closest riders. Live map tracking arrives in Phase 8.
+                      Waiting for a rider — the dispatch engine is offering this job to the closest riders. The live map below fills in as soon as a rider accepts.
                     </p>
                   )}
                 </CardBody>

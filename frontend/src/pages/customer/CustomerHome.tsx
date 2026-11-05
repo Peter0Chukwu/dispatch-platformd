@@ -6,6 +6,7 @@ import { api } from '../../lib/api';
 import { useAuth } from '../../contexts/AuthContext';
 import { formatNaira, formatNgPhone } from '@dispatch/shared';
 import { CUSTOMER_NAV } from './nav';
+import { useWallet } from '../../hooks/usePayments';
 
 interface SummaryResponse {
   total: number;
@@ -32,6 +33,7 @@ export default function CustomerHome() {
     queryFn: () => api.get<ProfileResponse>('/auth/me'),
   });
   // Real aggregates from Postgres — never a placeholder number.
+  const { data: wallet } = useWallet();
   const { data: summary } = useQuery({
     queryKey: ['deliveries', 'summary'],
     queryFn: () => api.get<SummaryResponse>('/deliveries/summary'),
@@ -64,9 +66,14 @@ export default function CustomerHome() {
           <StatCard
             label="Spent on deliveries"
             value={formatNaira(summary?.spentKobo ?? 0)}
-            hint={summary && BigInt(summary.savedKobo) > 0n ? `saved ${formatNaira(summary.savedKobo)} with promos` : 'payment arrives in Phase 7'}
+            hint={summary && BigInt(summary.savedKobo) > 0n ? `saved ${formatNaira(summary.savedKobo)} with promos` : 'no promo discounts yet'}
           />
-          <StatCard label="Wallet balance" value="₦0.00" hint="top-up in Phase 7" />
+          <StatCard
+            label="Wallet balance"
+            value={wallet ? formatNaira(wallet.balanceKobo) : '—'}
+            hint={wallet ? 'available to spend on deliveries' : 'loading…'}
+            isLoading={!wallet}
+          />
         </div>
 
         <div className="grid gap-4 lg:grid-cols-2">
@@ -86,7 +93,7 @@ export default function CustomerHome() {
           </Card>
 
           <Card>
-            <CardHeader title="What happens next" subtitle="Phase 3 adds the booking flow" />
+            <CardHeader title="What you can do" subtitle="Everything below is live, not a preview" />
             <CardBody className="space-y-3">
               {[
                 { title: 'Book a delivery', detail: 'Pickup and destination on a map, server-calculated price shown before you pay.' },

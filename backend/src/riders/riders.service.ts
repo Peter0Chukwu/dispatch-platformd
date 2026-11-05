@@ -4,6 +4,7 @@ import { PrismaService } from '../infra/prisma/prisma.service';
 import { AppError } from '../common/errors/app-error';
 import { StorageService } from '../storage/storage.service';
 import { DispatchService } from '../dispatch/dispatch.service';
+import { TrackingService } from '../tracking/tracking.service';
 
 /** Documents a rider must have approved before they may go online. */
 export const REQUIRED_DOCUMENTS = ['NIN', 'DRIVERS_LICENCE', 'VEHICLE_REGISTRATION'] as const;
@@ -26,6 +27,7 @@ export class RidersService {
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
     private readonly dispatch: DispatchService,
+    private readonly tracking: TrackingService,
   ) {}
 
   async profile(riderId: string) {
@@ -213,19 +215,10 @@ export class RidersService {
     riderId: string,
     input: { lat: number; lng: number; accuracyM?: number; speedKph?: number; heading?: number; batteryPct?: number; deliveryId?: string },
   ) {
-    await this.prisma.riderLocation.create({
-      data: {
-        riderId,
-        lat: input.lat,
-        lng: input.lng,
-        accuracyM: input.accuracyM,
-        speedKph: input.speedKph,
-        heading: input.heading,
-        batteryPct: input.batteryPct,
-        deliveryId: input.deliveryId,
-      },
-    });
-    return { recorded: true, at: new Date().toISOString() };
+    // Phase 8: the ping is stored AND pushed to whoever is watching the delivery.
+    // It goes through TrackingService so there is exactly one write path — the
+    // heartbeats, the customer's map and the admin map can never disagree.
+    return this.tracking.recordPing(riderId, input);
   }
 
   /**

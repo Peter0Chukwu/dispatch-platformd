@@ -49,4 +49,10 @@ export class AppConfig {
   get offerBatchSize() { return this.config.get('DISPATCH_OFFER_BATCH_SIZE', { infer: true }); }
   get dispatchTickMs() { return this.config.get('DISPATCH_TICK_MS', { infer: true }); }
   get dispatchMaxRounds() { return this.config.get('DISPATCH_MAX_ROUNDS', { infer: true }); }
+  /** How often the rider app should report its position (Phase 8). Advisory: the API serves it. */
+  get trackingPingIntervalSeconds() { return this.config.get('TRACKING_PING_INTERVAL_SECONDS', { infer: true }); }
+  /** Positions older than this are swept out of `rider_locations`. */
+  get locationRetentionDays() { return this.config.get('LOCATION_RETENTION_DAYS', { infer: true }); }
+  /** Hours a share link stays alive before it must be re-issued. */
+  get shareLinkTtlHours() { return Number(process.env.TRACKING_SHARE_LINK_TTL_HOURS ?? 72); }
 }
