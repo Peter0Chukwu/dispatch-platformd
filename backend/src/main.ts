@@ -7,7 +7,10 @@ import { AppConfig } from './config/app.config';
 import { registerIndexPage } from './common/api-index-page';
 
 async function bootstrap(): Promise<void> {
-  const app = await NestFactory.create(AppModule, { bufferLogs: false });
+  // `rawBody` is what makes payment webhook signature verification possible: the
+  // HMAC is computed over the exact bytes the provider sent, so the body must be
+  // kept before JSON parsing reorders or re-spaces it.
+  const app = await NestFactory.create(AppModule, { bufferLogs: false, rawBody: true });
   const config = app.get(AppConfig);
   const logger = new Logger('Bootstrap');
 

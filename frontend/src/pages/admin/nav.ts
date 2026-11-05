@@ -13,6 +13,7 @@ const ALL: Array<NavItem & { permission?: string }> = [
   { to: "/admin/deliveries", label: "Deliveries", permission: "delivery:read" },
   { to: "/admin/riders", label: "Riders", permission: "rider:read" },
   { to: "/admin/customers", label: "Customers", permission: "customer:read" },
+  { to: "/admin/finance", label: "Finance", permission: "finance:read" },
   { to: "/admin/pricing", label: "Pricing", permission: "pricing:read" },
   { to: "/admin/staff", label: "Staff & roles", permission: "staff:read" },
   { to: "/admin/audit", label: "Audit trail", permission: "audit:read" },

@@ -23,6 +23,13 @@ export class AppConfig {
   get databaseUrl() { return this.config.get('DATABASE_URL', { infer: true }); }
   get redisUrl() { return this.config.get('REDIS_URL', { infer: true }); }
   get paymentsMode() { return this.config.get('PAYMENTS_MODE', { infer: true }); }
+  get paystackSecretKey(): string { return this.config.get('PAYSTACK_SECRET_KEY', { infer: true }); }
+  get paystackPublicKey(): string { return this.config.get('PAYSTACK_PUBLIC_KEY', { infer: true }); }
+  get flutterwaveSecretKey(): string { return this.config.get('FLUTTERWAVE_SECRET_KEY', { infer: true }); }
+  get flutterwavePublicKey(): string { return this.config.get('FLUTTERWAVE_PUBLIC_KEY', { infer: true }); }
+  get flutterwaveWebhookHash(): string { return this.config.get('FLUTTERWAVE_WEBHOOK_HASH', { infer: true }); }
+  /** Where a gateway returns the customer after paying. */
+  get frontendUrl(): string { return this.config.get('FRONTEND_URL', { infer: true }); }
   get mapsProvider() { return this.config.get('MAPS_PROVIDER', { infer: true }); }
   /** Lower-cased provider for comparisons: 'stub' | 'google' | 'mapbox'. */
   get mapsProviderKey(): 'stub' | 'google' | 'mapbox' {

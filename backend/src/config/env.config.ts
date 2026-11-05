@@ -26,6 +26,7 @@ export const envSchema = z.object({
   TRACKING_LINK_SECRET: z.string().min(32, 'TRACKING_LINK_SECRET must be at least 32 characters'),
 
   CORS_ORIGINS: z.string().default('http://localhost:5173'),
+  FRONTEND_URL: z.string().default('http://localhost:5173'),
 
   PAYMENTS_MODE: z.enum(['DEVELOPMENT', 'SANDBOX', 'LIVE']).default('DEVELOPMENT'),
   PAYSTACK_SECRET_KEY: z.string().optional().default(''),

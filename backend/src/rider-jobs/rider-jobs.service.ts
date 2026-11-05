@@ -14,10 +14,13 @@ import { StorageService } from '../storage/storage.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { RT } from '../realtime/realtime.types';
 import { DispatchService } from '../dispatch/dispatch.service';
+import { LedgerService, type LedgerLineInput } from '../ledger/ledger.service';
+import { ACCOUNTS } from '../ledger/accounts';
+import { splitRevenue } from '../payments/payments.service';
 
 const hashOtp = (value: string) => createHash('sha256').update(value).digest('hex');
 
-/** How long a completed delivery's earnings stay PENDING before withdrawal. */
+/** Fallback hold window; the live value comes from `finance.earningsHoldHours`. */
 const EARNINGS_HOLD_HOURS = 24;
 
 /**
@@ -46,6 +49,7 @@ export class RiderJobsService {
     private readonly storage: StorageService,
     private readonly realtime: RealtimeGateway,
     private readonly dispatch: DispatchService,
+    private readonly ledger: LedgerService,
   ) {}
 
   /** The job the rider is currently working, if any. */
@@ -200,6 +204,15 @@ export class RiderJobsService {
     return { proofPhotoKey: stored.key, sizeBytes: stored.sizeBytes };
   }
 
+  /** Read the hold window from runtime settings so ops can change it without a deploy. */
+  private async earningsHoldHours(): Promise<number> {
+    const setting = await this.prisma.systemSetting.findUnique({
+      where: { key: 'finance.earningsHoldHours' },
+    });
+    const value = setting?.valueJson;
+    return typeof value === 'number' && value >= 0 ? value : EARNINGS_HOLD_HOURS;
+  }
+
   async complete(
     riderId: string,
     deliveryId: string,
@@ -256,13 +269,14 @@ export class RiderJobsService {
       ((delivery.commissionSnapshot as { commissionPct?: number } | null)?.commissionPct ?? this.config.commissionPercent);
     const commissionKobo = percentOfKobo(delivery.chargeKobo, commissionPct, 50);
     const netKobo = delivery.chargeKobo - commissionKobo;
-    const availableAt = new Date(Date.now() + EARNINGS_HOLD_HOURS * 60 * 60 * 1000);
+    const holdHours = await this.earningsHoldHours();
+    const availableAt = new Date(Date.now() + holdHours * 60 * 60 * 1000);
 
     const updated = await this.prisma.$transaction(async (tx) => {
       // Claim the delivery; two taps on "Complete" must not pay twice.
       const claim = await tx.delivery.updateMany({
         where: { id: delivery.id, riderId, status: 'ARRIVED_AT_DESTINATION' },
-        data: { status: 'DELIVERED', deliveredAt: new Date(), paymentStatus: 'PAID' },
+        data: { status: 'DELIVERED', deliveredAt: new Date() },
       });
       if (claim.count === 0) {
         throw AppError.conflict('This delivery has already been completed.', 'DUPLICATE_REQUEST');
@@ -304,6 +318,68 @@ export class RiderJobsService {
           availableAt,
         },
       });
+
+      // ── The money, posted the moment the job is done ──────────────────────
+      // If the customer did not prepay, the rider collected cash: that is a real
+      // payment, settled here so revenue is never recognised for money nobody got.
+      if (delivery.paymentStatus !== 'PAID') {
+        const cashPayment = await tx.payment.create({
+          data: {
+            deliveryId: delivery.id,
+            customerId: delivery.customerId,
+            provider: 'CASH',
+            providerReference: `CASH-${delivery.reference}-${Date.now()}`,
+            amountKobo: delivery.chargeKobo,
+            status: 'SUCCESS',
+            channel: 'cash-on-delivery',
+            paidAt: new Date(),
+            verifiedAt: new Date(),
+          },
+        });
+        const { deliveryRevenue, surchargeRevenue } = splitRevenue(
+          delivery.chargeKobo,
+          delivery.priceSnapshot,
+        );
+        const revenueLines: LedgerLineInput[] = [
+          { code: ACCOUNTS.CASH_CLEARING, debitKobo: delivery.chargeKobo, memo: `Cash collected on ${delivery.reference}` },
+          { code: ACCOUNTS.DELIVERY_REVENUE, creditKobo: deliveryRevenue, memo: 'Delivery revenue' },
+        ];
+        if (surchargeRevenue > 0n) {
+          revenueLines.push({
+            code: ACCOUNTS.SURCHARGE_REVENUE,
+            creditKobo: surchargeRevenue,
+            memo: 'Express / scheduled surcharge',
+          });
+        }
+        await this.ledger.post(
+          {
+            eventType: 'DELIVERY_PAYMENT',
+            description: `Cash collected for delivery ${delivery.reference}`,
+            idempotencyKey: `payment:${cashPayment.id}`,
+            deliveryId: delivery.id,
+            paymentId: cashPayment.id,
+            lines: revenueLines,
+          },
+          tx,
+        );
+        await tx.delivery.update({ where: { id: delivery.id }, data: { paymentStatus: 'PAID' } });
+      }
+
+      // The rider's share becomes a liability of the company, not an expense paid
+      // out of thin air: Dr rider commission cost / Cr rider earnings payable.
+      await this.ledger.post(
+        {
+          eventType: 'EARNING_ACCRUAL',
+          description: `Rider accrual for delivery ${delivery.reference}`,
+          idempotencyKey: `earning:${delivery.id}`,
+          deliveryId: delivery.id,
+          lines: [
+            { code: ACCOUNTS.RIDER_COMMISSION_COST, debitKobo: netKobo, memo: 'Rider net earnings' },
+            { code: ACCOUNTS.RIDER_EARNINGS_PAYABLE, creditKobo: netKobo, memo: 'Payable to rider' },
+          ],
+        },
+        tx,
+      );
 
       await tx.rider.update({
         where: { id: riderId },

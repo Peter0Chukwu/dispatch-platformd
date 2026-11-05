@@ -9,6 +9,10 @@ import { RedisModule } from './infra/redis/redis.module';
 import { HealthModule } from './health/health.module';
 import { AuthModule } from './auth/auth.module';
 import { AdminModule } from './admin/admin.module';
+import { LedgerModule } from './ledger/ledger.module';
+import { WalletModule } from './wallet/wallet.module';
+import { PaymentsModule } from './payments/payments.module';
+import { WithdrawalsModule } from './withdrawals/withdrawals.module';
 import { PricingModule } from './pricing/pricing.module';
 import { DeliveriesModule } from './deliveries/deliveries.module';
 import { StorageModule } from './storage/storage.module';
@@ -47,6 +51,10 @@ import { PermissionsGuard } from './auth/guards/permissions.guard';
     DispatchModule,
     RidersModule,
     RiderJobsModule,
+    LedgerModule,
+    WalletModule,
+    PaymentsModule,
+    WithdrawalsModule,
     DeliveriesModule,
     AdminModule,
     HealthModule,

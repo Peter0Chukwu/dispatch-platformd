@@ -31,6 +31,8 @@ const AdminCustomersPage = lazy(() => import("./pages/admin/CustomersPage"));
 const AdminPricingPage = lazy(() => import("./pages/admin/PricingPage"));
 const AdminStaffPage = lazy(() => import("./pages/admin/StaffPage"));
 const AdminAuditPage = lazy(() => import("./pages/admin/AuditPage"));
+const AdminFinancePage = lazy(() => import("./pages/admin/FinancePage"));
+const CustomerWalletPage = lazy(() => import("./pages/customer/WalletPage"));
 import {
   RedirectIfAuthenticated,
   RequireAuth,
@@ -95,16 +97,7 @@ export default function App() {
           <Route path="book" element={<BookDeliveryPage />} />
           <Route path="deliveries" element={<DeliveriesPage />} />
           <Route path="deliveries/:id" element={<DeliveryDetailPage />} />
-          <Route
-            path="wallet"
-            element={
-              <PortalPlaceholder
-                portal="Customer"
-                phase="Phase 7"
-                scope={["Wallet top-up and transaction history"]}
-              />
-            }
-          />
+          <Route path="wallet" element={<CustomerWalletPage />} />
         </Route>
 
         {/* Rider portal */}
@@ -139,18 +132,11 @@ export default function App() {
           <Route element={<RequirePermission permission="audit:read" />}>
             <Route path="audit" element={<AdminAuditPage />} />
           </Route>
-          {/* Finance is deliberately still a placeholder: the ledger, wallets and
-            withdrawals arrive in Phase 7. No numbers are faked in the meantime. */}
-          <Route
-            path="finance"
-            element={
-              <PortalPlaceholder
-                portal="Admin"
-                phase="Phase 7"
-                scope={["Ledger, withdrawals and refunds"]}
-              />
-            }
-          />
+          {/* Every number on the finance screen comes from the ledger, so it sits
+            behind the same permission its API routes demand. */}
+          <Route element={<RequirePermission permission="finance:read" />}>
+            <Route path="finance" element={<AdminFinancePage />} />
+          </Route>
         </Route>
 
         <Route

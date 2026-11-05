@@ -16,6 +16,7 @@ import {
   useToast,
 } from '../../components/ui';
 import { PriceBreakdown } from '../../components/PriceBreakdown';
+import { PaymentPanel } from '../../components/PaymentPanel';
 import { CUSTOMER_NAV } from './nav';
 import { useCancelDelivery, useDelivery } from '../../hooks/useDeliveries';
 import { useApiError } from '../../contexts/AuthContext';
@@ -124,6 +125,12 @@ export default function DeliveryDetailPage() {
               </CardBody>
             </Card>
 
+            <PaymentPanel
+              deliveryId={delivery.id}
+              amountKobo={delivery.chargeKobo}
+              paymentStatus={delivery.paymentStatus}
+            />
+
             <div className="grid gap-5 lg:grid-cols-2">
               <Card>
                 <CardHeader title="Price you were charged" subtitle="Frozen at booking — later rule changes cannot alter it" />
@@ -192,7 +199,7 @@ export default function DeliveryDetailPage() {
                   </ol>
                   {delivery.status === 'PENDING' && (
                     <p className="mt-4 rounded-lg bg-info-50 p-2.5 text-xs text-info-800">
-                      Waiting for a rider. Live tracking and rider assignment arrive in Phases 4 and 8.
+                      Waiting for a rider — the dispatch engine is offering this job to the closest riders. Live map tracking arrives in Phase 8.
                     </p>
                   )}
                 </CardBody>

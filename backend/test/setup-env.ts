@@ -23,6 +23,16 @@ if (existsSync(envPath)) {
 }
 
 process.env.NODE_ENV = 'test';
+
+// ── Payment credentials in tests are always fake ───────────────────────────────
+// The env file may carry real sandbox keys; the suite must never use them, and the
+// webhook tests need a known secret to sign with. These values are deterministic on
+// purpose so a signature can be reproduced.
+process.env.PAYSTACK_SECRET_KEY = 'sk_test_webhook_signature_key';
+process.env.PAYSTACK_PUBLIC_KEY = 'pk_test_webhook_signature_key';
+process.env.FLUTTERWAVE_SECRET_KEY = 'FLWSECK_TEST-fake';
+process.env.FLUTTERWAVE_WEBHOOK_HASH = 'test_flutterwave_verif_hash';
+process.env.PAYMENTS_MODE = 'DEVELOPMENT';
 if (process.env.TEST_DATABASE_URL) {
   process.env.DATABASE_URL = process.env.TEST_DATABASE_URL;
 } else {

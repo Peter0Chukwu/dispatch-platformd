@@ -19,6 +19,8 @@ export const RT = {
   /** A delivery was created, moved, assigned or cancelled. */
   DELIVERY_NEW: 'delivery:new',
   DELIVERY_UPDATED: 'delivery:updated',
+  /** Money moved: a payment settled, a wallet changed, a withdrawal advanced. */
+  PAYMENT_UPDATED: 'payment:updated',
   /** Dispatch has run out of riders to ask. Staff must intervene. */
   DISPATCH_EXHAUSTED: 'dispatch:exhausted',
   /** The account was suspended mid-session: the socket is closed immediately. */

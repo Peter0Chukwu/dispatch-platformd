@@ -228,8 +228,23 @@ export class RidersService {
     return { recorded: true, at: new Date().toISOString() };
   }
 
-  /** Earnings totals: everything a rider has earned, and what is withdrawable now. */
+  /**
+   * Earnings totals: everything a rider has earned, what is still on hold, and what
+   * is actually withdrawable now.
+   *
+   * The hold is real: an earning is only available once `availableAt` has passed
+   * (`finance.earningsHoldHours`). Money already committed to a withdrawal is
+   * subtracted, so the same naira cannot be requested twice — which is exactly the
+   * formula `WithdrawalsService` validates against.
+   */
   async earningsSummary(riderId: string) {
+    // Lazily release matured holds so the number a rider sees is right even if the
+    // background sweep has not fired yet (idempotent, one cheap statement).
+    await this.prisma.riderEarning.updateMany({
+      where: { riderId, status: 'PENDING', availableAt: { lte: new Date() } },
+      data: { status: 'AVAILABLE' },
+    });
+
     const [byStatus, adjustmentTotals, withdrawalTotals] = await Promise.all([
       this.prisma.riderEarning.groupBy({
         by: ['status'],
@@ -238,8 +253,9 @@ export class RidersService {
         _count: { _all: true },
       }),
       this.prisma.riderAdjustment.aggregate({ where: { riderId }, _sum: { amountKobo: true } }),
-      this.prisma.withdrawal.aggregate({
-        where: { riderId, status: { in: ['REQUESTED', 'APPROVED', 'PROCESSING', 'PAID'] } },
+      this.prisma.withdrawal.groupBy({
+        by: ['status'],
+        where: { riderId },
         _sum: { amountKobo: true },
       }),
     ]);
@@ -252,11 +268,17 @@ export class RidersService {
     const earned = ['PENDING', 'AVAILABLE', 'PAID'];
     const pendingKobo = sumFor(['PENDING'], 'netKobo');
     const availableKobo = sumFor(['AVAILABLE'], 'netKobo');
-    const paidKobo = sumFor(['PAID'], 'netKobo');
     const adjustmentsKobo = adjustmentTotals._sum?.amountKobo ?? 0n;
-    const withdrawnKobo = withdrawalTotals._sum?.amountKobo ?? 0n;
 
-    const withdrawable = availableKobo + adjustmentsKobo - withdrawnKobo;
+    const inFlight = ['REQUESTED', 'APPROVED', 'PROCESSING'];
+    const committedKobo = withdrawalTotals
+      .filter((row) => inFlight.includes(row.status))
+      .reduce((total, row) => total + (row._sum.amountKobo ?? 0n), 0n);
+    const withdrawnKobo = withdrawalTotals
+      .filter((row) => row.status === 'PAID')
+      .reduce((total, row) => total + (row._sum.amountKobo ?? 0n), 0n);
+
+    const withdrawable = availableKobo + adjustmentsKobo - committedKobo;
     const withdrawableKobo = withdrawable < 0n ? 0n : withdrawable;
 
     return {
@@ -265,15 +287,16 @@ export class RidersService {
       commissionKobo: sumFor(earned, 'commissionKobo').toString(),
       pendingKobo: pendingKobo.toString(),
       availableKobo: availableKobo.toString(),
-      paidKobo: paidKobo.toString(),
+      paidKobo: withdrawnKobo.toString(),
       adjustmentsKobo: adjustmentsKobo.toString(),
       withdrawnKobo: withdrawnKobo.toString(),
+      committedKobo: committedKobo.toString(),
       /** What the rider could actually request today. */
       withdrawableKobo: withdrawableKobo.toString(),
       formatted: {
         available: formatNaira(availableKobo),
         pending: formatNaira(pendingKobo),
-        paid: formatNaira(paidKobo),
+        paid: formatNaira(withdrawnKobo),
         withdrawable: formatNaira(withdrawableKobo),
       },
     };

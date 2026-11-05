@@ -19,9 +19,16 @@ export async function createTestApp(): Promise<{
   passwords: PasswordService;
 }> {
   process.env.DISPATCH_SCHEDULER = 'off';
+  // The earnings sweep is a timer too; tests call releaseMatured() themselves.
+  process.env.FINANCE_SCHEDULER = 'off';
+  // Webhook signature verification needs a secret to HMAC against. This is a
+  // throwaway test value, never a real key.
+  process.env.PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY || 'sk_test_webhook_signature_key';
+  process.env.PAYMENTS_MODE = process.env.PAYMENTS_MODE || 'DEVELOPMENT';
 
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
-  const app = moduleRef.createNestApplication({ logger: ['error'] });
+  // rawBody mirrors main.ts: webhook signatures cover the exact bytes received.
+  const app = moduleRef.createNestApplication({ logger: ['error'], rawBody: true });
   app.setGlobalPrefix('api/v1');
   // Same root page as main.ts, so the suite exercises what production serves.
   registerIndexPage(app, { appName: 'Dispatch Platform', apiPrefix: 'api/v1', nodeEnv: 'test', apiPort: 0 });
