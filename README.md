@@ -48,7 +48,8 @@ npm run dev           # API → http://localhost:4000 · Web → http://localhos
 Then open:
 - **http://localhost:5173** — portal landing page with live system checks
 - **http://localhost:5173/styleguide** — the design system
-- **http://localhost:4000/api/v1/health** — API + database + Redis status
+- **http://localhost:4000/** — the API index: live Postgres/Redis checks and every route the server registered
+- **http://localhost:4000/api/v1/health** — the same checks as JSON
 
 ```bash
 npm test              # 149 tests (dispatch race, rider workflow, admin review, pricing, booking, auth, RBAC)
