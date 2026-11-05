@@ -142,7 +142,7 @@ localhost, not the sandbox's. Sign in with the same three accounts as above.
 
 ### Configuration
 
-Copy `backend/.env.example` to `backend/.env` and fill in what you have. **Nothing is required to run
+Copy `.env.example` (repository root) to `backend/.env` and fill in what you have. **Nothing is required to run
 locally** — the defaults use stub maps, simulated payments and console messages, so the app is fully
 usable with no accounts anywhere.
 

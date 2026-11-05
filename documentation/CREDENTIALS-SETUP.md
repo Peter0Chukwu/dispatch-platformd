@@ -25,12 +25,17 @@ create and which value to copy.
 ## Where every credential lives
 
 All secrets live in **one file**: `backend/.env`. That file is git-ignored, is never sent to the browser, and
-is the only place the API reads them from. `backend/.env.example` documents the variable names.
+is the only place the API reads them from. The template at the repository root — `.env.example` — documents
+every variable name with placeholders.
 
 ```
-backend/.env          ← the only place secrets belong
-backend/.env.example  ← the template you can commit
+cp .env.example backend/.env      # create your own file from the template
+backend/.env                      ← the only place secrets belong (git-ignored)
+.env.example                      ← the template you commit, placeholders only
 ```
+
+The API reads `.env` from its working directory and falls back to the repository root (`envFilePath:
+['.env', '../.env']` in `app.module.ts`), so either location works — `backend/.env` is the convention.
 
 ---
 
@@ -200,7 +205,7 @@ so documents are never publicly guessable.)
 ## 8. Rules this project will keep
 
 * **No secret ever reaches the browser.** Only public keys do (`pk_…`, the Maps *browser* key).
-* **No secret in git.** `backend/.env` is ignored; `.env.example` carries names only.
+* **No secret in git.** `backend/.env` is ignored; the root `.env.example` carries names only.
 * **No secret in a chat, a screenshot, or a support ticket.** If one is exposed, rotate it in the provider
   dashboard — the code needs no change.
 * **Sandbox before live, always.** Live mode is a deliberate one-line change, never a default.
