@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { api, setAccessToken, ApiError } from '../lib/api';
+import { connectLive, disconnectLive } from '../lib/live';
 
 export type Audience = 'CUSTOMER' | 'RIDER' | 'ADMIN';
 
@@ -106,6 +107,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setAccessToken(null);
     setUser(null);
     setProfile(null);
+  }, []);
+
+  /**
+   * The live channel follows the session: it opens when a user exists and closes on
+   * sign-out, so no tab keeps a socket open for a user who has left. Suspension or a
+   * global sign-out arrives as `session:revoked` and clears the session here.
+   */
+  useEffect(() => {
+    if (!user) {
+      disconnectLive();
+      return;
+    }
+    connectLive();
+  }, [user]);
+
+  useEffect(() => {
+    const onRevoked = () => {
+      setAccessToken(null);
+      setUser(null);
+      setProfile(null);
+    };
+    window.addEventListener('live:session-revoked', onRevoked);
+    return () => window.removeEventListener('live:session-revoked', onRevoked);
   }, []);
 
   const hasPermission = useCallback(

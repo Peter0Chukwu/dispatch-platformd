@@ -11,6 +11,9 @@ import { PrismaService } from '../infra/prisma/prisma.service';
 import { AppError } from '../common/errors/app-error';
 import { AppConfig } from '../config/app.config';
 import { StorageService } from '../storage/storage.service';
+import { RealtimeGateway } from '../realtime/realtime.gateway';
+import { RT } from '../realtime/realtime.types';
+import { DispatchService } from '../dispatch/dispatch.service';
 
 const hashOtp = (value: string) => createHash('sha256').update(value).digest('hex');
 
@@ -41,6 +44,8 @@ export class RiderJobsService {
     private readonly prisma: PrismaService,
     private readonly config: AppConfig,
     private readonly storage: StorageService,
+    private readonly realtime: RealtimeGateway,
+    private readonly dispatch: DispatchService,
   ) {}
 
   /** The job the rider is currently working, if any. */
@@ -151,6 +156,7 @@ export class RiderJobsService {
       return result;
     });
 
+    this.pushStatus(updated, riderId);
     return this.toJob(updated);
   }
 
@@ -315,6 +321,13 @@ export class RiderJobsService {
       `Delivery ${delivery.reference} completed by rider ${riderId} — rider earns ${formatNaira(netKobo)}`,
     );
 
+    this.pushStatus(updated.delivery, riderId);
+    // This rider is free again: anything still waiting for a rider deserves a
+    // fresh attempt right now rather than on the next tick.
+    void this.dispatch
+      .offerWaitingDeliveries(10)
+      .catch((error) => this.logger.warn(`Post-delivery dispatch sweep failed: ${(error as Error).message}`));
+
     return {
       ...this.toJob(updated.delivery),
       earning: {
@@ -360,7 +373,31 @@ export class RiderJobsService {
       return result;
     });
 
+    this.pushStatus(updated, riderId);
+    void this.dispatch
+      .offerWaitingDeliveries(10)
+      .catch((error) => this.logger.warn(`Post-failure dispatch sweep failed: ${(error as Error).message}`));
+
     return this.toJob(updated);
+  }
+
+  /**
+   * One status change, three audiences: the customer watching their parcel, the
+   * dispatch desk, and the rider's own other devices.
+   */
+  private pushStatus(
+    delivery: { id: string; reference: string; status: string; customerId?: string },
+    riderId: string,
+  ): void {
+    this.realtime.deliveryPush(
+      {
+        id: delivery.id,
+        reference: delivery.reference,
+        status: delivery.status,
+        at: new Date().toISOString(),
+      },
+      { staff: true, customerId: delivery.customerId ?? null, riderIds: [riderId] },
+    );
   }
 
   /** Shared projection: the rider app never sees internal ids it does not need. */

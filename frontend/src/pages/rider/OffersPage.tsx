@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { PortalShell } from '../../layouts/PortalShell';
 import {
@@ -14,6 +14,7 @@ import {
   useToast,
 } from '../../components/ui';
 import { OfferCountdown } from '../../components/OfferCountdown';
+import { LIVE_EVENTS, useLiveEvent } from '../../lib/live';
 import { RIDER_NAV } from './nav';
 import { useApiError } from '../../contexts/AuthContext';
 import {
@@ -33,6 +34,29 @@ export default function OffersPage() {
   const accept = useAcceptOffer();
   const reject = useRejectOffer();
   const [busyId, setBusyId] = useState<string | null>(null);
+
+  /**
+   * Live offers. The push only carries enough to announce the job; the list itself
+   * comes from the API, so the screen can never show an offer the server would refuse.
+   */
+  const onOffer = useCallback(
+    (payload: unknown) => {
+      const offer = payload as { reference?: string; distanceToPickupKm?: number; netFormatted?: string };
+      void offers.refetch();
+      notify({
+        tone: 'info',
+        title: 'New job nearby',
+        description: [offer.reference, offer.distanceToPickupKm !== undefined ? `${offer.distanceToPickupKm.toFixed(1)} km to pickup` : null, offer.netFormatted ? `${offer.netFormatted} net` : null]
+          .filter(Boolean)
+          .join(' · '),
+      });
+    },
+    [notify, offers],
+  );
+
+  useLiveEvent(LIVE_EVENTS.OFFER_NEW, onOffer);
+  // An offer pulled back (taken by someone else, or expired) must leave the list.
+  useLiveEvent(LIVE_EVENTS.OFFER_REVOKED, useCallback(() => void offers.refetch(), [offers]));
 
   const take = async (offer: Offer) => {
     setBusyId(offer.assignmentId);

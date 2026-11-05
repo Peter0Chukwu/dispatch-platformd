@@ -39,4 +39,7 @@ export class AppConfig {
   get commissionPercent() { return this.config.get('DEFAULT_COMMISSION_PCT', { infer: true }); }
   get offerTimeoutSeconds() { return this.config.get('DISPATCH_OFFER_TIMEOUT_SECONDS', { infer: true }); }
   get maxActivePerRider() { return this.config.get('DISPATCH_MAX_ACTIVE_PER_RIDER', { infer: true }); }
+  get offerBatchSize() { return this.config.get('DISPATCH_OFFER_BATCH_SIZE', { infer: true }); }
+  get dispatchTickMs() { return this.config.get('DISPATCH_TICK_MS', { infer: true }); }
+  get dispatchMaxRounds() { return this.config.get('DISPATCH_MAX_ROUNDS', { infer: true }); }
 }

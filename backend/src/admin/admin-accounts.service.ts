@@ -5,6 +5,7 @@ import { AppError } from "../common/errors/app-error";
 import { AuditService } from "../audit/audit.service";
 import { TokenService } from "../auth/token.service";
 import { PasswordService } from "../auth/password.service";
+import { RealtimeGateway } from "../realtime/realtime.gateway";
 
 /**
  * CUSTOMERS AND STAFF — the two account directories staff work with.
@@ -23,6 +24,7 @@ export class AdminAccountsService {
     private readonly audit: AuditService,
     private readonly tokens: TokenService,
     private readonly passwords: PasswordService,
+    private readonly realtime: RealtimeGateway,
   ) {}
 
   /* ───────────────────────────── customers ───────────────────────────── */
@@ -157,6 +159,9 @@ export class AdminAccountsService {
     let sessionsRevoked = 0;
     if (params.status === "SUSPENDED") {
       sessionsRevoked = await this.tokens.revokeAllForUser(customer.userId);
+      // Live sockets die with the session, so a suspended customer stops seeing
+      // updates immediately instead of until their tab happens to reconnect.
+      this.realtime.revokeUser(customer.userId, "Your account has been suspended. Contact support.");
     }
 
     await this.audit.record({
@@ -440,6 +445,9 @@ export class AdminAccountsService {
       params.status === "SUSPENDED"
         ? await this.tokens.revokeAllForUser(staff.userId)
         : 0;
+    if (params.status === "SUSPENDED") {
+      this.realtime.revokeUser(staff.userId, "Your account has been suspended.");
+    }
 
     await this.audit.record({
       actorUserId: params.actorUserId ?? null,

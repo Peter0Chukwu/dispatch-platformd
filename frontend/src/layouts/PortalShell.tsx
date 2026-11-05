@@ -2,6 +2,7 @@ import { Link, NavLink, useNavigate } from 'react-router-dom';
 import { useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { Avatar, Badge, Button, ConfirmDialog } from '../components/ui';
+import { LiveIndicator } from '../components/LiveIndicator';
 import { cn } from '../lib/cn';
 
 export interface NavItem {
@@ -96,6 +97,7 @@ export function PortalShell({
             <Link to="/styleguide" className="hidden text-xs font-medium text-ink-500 hover:text-ink-800 sm:block">
               Design system
             </Link>
+            <LiveIndicator />
             <Button variant="secondary" size="sm" onClick={() => setConfirmLogout(true)}>
               Sign out
             </Button>

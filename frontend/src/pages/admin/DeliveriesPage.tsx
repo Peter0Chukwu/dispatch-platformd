@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { PortalShell } from "../../layouts/PortalShell";
 import {
   Alert,
@@ -28,6 +29,7 @@ import {
   type AdminDeliveryRow,
 } from "../../hooks/useAdmin";
 import { downloadFile } from "../../lib/download";
+import { LIVE_EVENTS, useLiveEvent } from "../../lib/live";
 
 const STATUSES = [
   "PENDING",
@@ -69,6 +71,36 @@ export default function DeliveriesPage() {
   const [page, setPage] = useState(1);
   const [openId, setOpenId] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+  const queryClient = useQueryClient();
+
+  /**
+   * The dispatch board is the fallback for when automation cannot finish a job, so it
+   * has to be current: every delivery event refreshes the list, and an exhausted
+   * search raises a toast that points the dispatcher at the manual assignment flow.
+   */
+  useLiveEvent(
+    LIVE_EVENTS.DELIVERY_NEW,
+    useCallback(() => void queryClient.invalidateQueries({ queryKey: ["admin", "deliveries"] }), [queryClient]),
+  );
+  useLiveEvent(
+    LIVE_EVENTS.DELIVERY_UPDATED,
+    useCallback(() => void queryClient.invalidateQueries({ queryKey: ["admin", "deliveries"] }), [queryClient]),
+  );
+  useLiveEvent(
+    LIVE_EVENTS.DISPATCH_EXHAUSTED,
+    useCallback(
+      (payload: unknown) => {
+        const info = payload as { reference?: string; rounds?: number };
+        void queryClient.invalidateQueries({ queryKey: ["admin", "deliveries"] });
+        notify({
+          tone: "warning",
+          title: "No rider found automatically",
+          description: `${info.reference ?? "A delivery"} went through ${info.rounds ?? "several"} rounds. Assign a rider by hand.`,
+        });
+      },
+      [notify, queryClient],
+    ),
+  );
 
   const deliveries = useAdminDeliveries({
     status: status || undefined,

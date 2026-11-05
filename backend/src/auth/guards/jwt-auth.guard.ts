@@ -1,10 +1,9 @@
 import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import type { Request } from 'express';
-import { PrismaService } from '../../infra/prisma/prisma.service';
-import { RedisService } from '../../infra/redis/redis.service';
 import { AppError } from '../../common/errors/app-error';
 import { TokenService } from '../token.service';
+import { PrincipalService } from '../principal.service';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
 import { TYPES_KEY } from '../decorators/require-type.decorator';
 import type { UserType } from '@dispatch/shared';
@@ -19,16 +18,17 @@ import type { AuthPrincipal } from '../auth.types';
  * user id, account type, portal, session id, profile ids, roles and permissions.
  * Controllers then never need to look the user up again.
  *
- * Staff permissions are cached in Redis for 60 seconds: permission changes take
- * effect within a minute without a database round-trip on every request.
+ * Every request resolves the account from the database (one indexed lookup), so
+ * a suspension or a permission change takes effect on the very next call rather
+ * than whenever a cache happens to expire. That is a deliberate trade: this is a
+ * dispatch platform, where "suspended" must mean suspended immediately.
  */
 @Injectable()
 export class JwtAuthGuard implements CanActivate {
   constructor(
     private readonly reflector: Reflector,
     private readonly tokenService: TokenService,
-    private readonly prisma: PrismaService,
-    private readonly redis: RedisService,
+    private readonly principals: PrincipalService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -46,68 +46,15 @@ export class JwtAuthGuard implements CanActivate {
 
     const payload = await this.tokenService.verifyAccessToken(header.slice(7).trim());
 
-    const user = await this.prisma.user.findUnique({
-      where: { id: payload.sub },
-      select: {
-        id: true,
-        type: true,
-        status: true,
-        deletedAt: true,
-        customer: { select: { id: true } },
-        rider: { select: { id: true, approvalStatus: true } },
-        staff: {
-          select: {
-            id: true,
-            isSuperAdmin: true,
-            roles: { select: { role: { select: { key: true, permissions: { select: { permission: { select: { key: true } } } } } } } },
-          },
-        },
-      },
-    });
-
-    if (!user || user.deletedAt) {
-      throw new AppError('UNAUTHORIZED', 'This account no longer exists', 401);
-    }
-    if (user.status === 'SUSPENDED' || user.status === 'DELETED') {
-      throw new AppError('FORBIDDEN', 'This account has been suspended. Please contact support.', 403);
-    }
-    if (user.status === 'PENDING' && user.type === 'STAFF') {
-      throw new AppError('FORBIDDEN', 'This staff account is not active', 403);
-    }
-
-    const roles: string[] = [];
-    const permissions = new Set<string>();
-    if (user.staff) {
-      for (const staffRole of user.staff.roles) {
-        roles.push(staffRole.role.key);
-        for (const rp of staffRole.role.permissions) permissions.add(rp.permission.key);
-      }
-      if (user.staff.isSuperAdmin) permissions.add('*');
-    }
-
-    const principal: AuthPrincipal = {
-      userId: user.id,
-      type: user.type as UserType,
-      audience: payload.aud,
-      sessionId: payload.sid,
-      customerId: user.customer?.id,
-      riderId: user.rider?.id,
-      staffId: user.staff?.id,
-      roles,
-      permissions: [...permissions],
-    };
-
-    // Account type must match the portal the token was issued for.
-    const expectedType: Record<string, UserType> = { CUSTOMER: 'CUSTOMER', RIDER: 'RIDER', ADMIN: 'STAFF' };
-    if (expectedType[payload.aud] !== user.type) {
-      throw new AppError('FORBIDDEN', 'This session cannot access this portal', 403);
-    }
+    // One resolver, shared with the WebSocket gateway: the socket and the API can
+    // never disagree about who a token belongs to.
+    const principal = await this.principals.fromPayload(payload);
 
     const allowedTypes = this.reflector.getAllAndOverride<UserType[] | undefined>(TYPES_KEY, [
       context.getHandler(),
       context.getClass(),
     ]);
-    if (allowedTypes && !allowedTypes.includes(user.type as UserType)) {
+    if (allowedTypes && !allowedTypes.includes(principal.type as UserType)) {
       throw new AppError('FORBIDDEN', 'You do not have access to this resource', 403);
     }
 

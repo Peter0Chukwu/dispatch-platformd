@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router-dom';
 import { DELIVERY_STATUS_LABELS, formatNaira, formatNgPhone } from '@dispatch/shared';
 import { PortalShell } from '../../layouts/PortalShell';
@@ -19,6 +20,7 @@ import { CUSTOMER_NAV } from './nav';
 import { useCancelDelivery, useDelivery } from '../../hooks/useDeliveries';
 import { useApiError } from '../../contexts/AuthContext';
 import { cn } from '../../lib/cn';
+import { LIVE_EVENTS, useLiveEvent } from '../../lib/live';
 
 export default function DeliveryDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -27,6 +29,21 @@ export default function DeliveryDetailPage() {
   const cancelDelivery = useCancelDelivery(id ?? '');
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [reason, setReason] = useState('');
+  const queryClient = useQueryClient();
+
+  // A rider accepting, arriving or delivering updates this page while it is open.
+  useLiveEvent(
+    LIVE_EVENTS.DELIVERY_UPDATED,
+    useCallback(
+      (payload: unknown) => {
+        const update = payload as { deliveryId?: string };
+        if (update.deliveryId && id && update.deliveryId !== id) return;
+        void queryClient.invalidateQueries({ queryKey: ['delivery', id] });
+        void queryClient.invalidateQueries({ queryKey: ['deliveries'] });
+      },
+      [id, queryClient],
+    ),
+  );
 
   const cancellable = delivery && ['PENDING', 'ASSIGNED', 'ACCEPTED', 'ARRIVED_AT_PICKUP'].includes(delivery.status);
 

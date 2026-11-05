@@ -37,6 +37,7 @@ import { AdminDashboardService } from "./admin-dashboard.service";
 import { AdminDeliveriesService } from "./admin-deliveries.service";
 import { AdminAccountsService } from "./admin-accounts.service";
 import { AdminPricingService } from "./admin-pricing.service";
+import { AdminDispatchService } from "./admin-dispatch.service";
 import type { AuthPrincipal } from "../auth/auth.types";
 
 /**
@@ -54,6 +55,7 @@ export class AdminOpsController {
     private readonly deliveries: AdminDeliveriesService,
     private readonly accounts: AdminAccountsService,
     private readonly pricing: AdminPricingService,
+    private readonly dispatchBoard: AdminDispatchService,
   ) {}
 
   /* ─────────────────────────── dashboard ─────────────────────────── */
@@ -110,6 +112,29 @@ export class AdminOpsController {
   @RequirePermissions("delivery:read")
   deliveryDetail(@Param("id", new ParseUUIDPipe()) id: string) {
     return this.deliveries.detail(id);
+  }
+
+  /* ──────────────────────── dispatch board (Phase 6) ──────────────────────── */
+
+  /**
+   * What the engine is doing right now: every booking still waiting for a rider,
+   * how far the search has widened, and who has already been asked.
+   */
+  @Get("dispatch/board")
+  @RequirePermissions("delivery:read")
+  dispatchBoardView() {
+    return this.dispatchBoard.board();
+  }
+
+  /**
+   * Run the next round immediately instead of waiting for the current batch to
+   * expire. Same engine method the scheduler uses — the desk cannot bypass a rule
+   * by pressing a button, it only skips the wait.
+   */
+  @Post("dispatch/deliveries/:id/run")
+  @RequirePermissions("delivery:assign")
+  runDispatchRound(@Param("id", new ParseUUIDPipe()) id: string) {
+    return this.dispatchBoard.runNow(id);
   }
 
   @Post("deliveries/:id/assign")

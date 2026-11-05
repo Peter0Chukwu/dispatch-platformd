@@ -13,6 +13,7 @@ import { PricingModule } from './pricing/pricing.module';
 import { DeliveriesModule } from './deliveries/deliveries.module';
 import { StorageModule } from './storage/storage.module';
 import { RidersModule } from './riders/riders.module';
+import { RealtimeModule } from './realtime/realtime.module';
 import { DispatchModule } from './dispatch/dispatch.module';
 import { RiderJobsModule } from './rider-jobs/rider-jobs.module';
 import { UsersModule } from './users/users.module';
@@ -42,6 +43,7 @@ import { PermissionsGuard } from './auth/guards/permissions.guard';
     AuthModule,
     StorageModule,
     PricingModule,
+    RealtimeModule,
     DispatchModule,
     RidersModule,
     RiderJobsModule,

@@ -12,6 +12,8 @@ import { PrismaService } from '../infra/prisma/prisma.service';
 import { AppError } from '../common/errors/app-error';
 import { PricingService, type Quote } from '../pricing/pricing.service';
 import { DispatchService } from '../dispatch/dispatch.service';
+import { RealtimeGateway } from '../realtime/realtime.gateway';
+import { RT } from '../realtime/realtime.types';
 
 const hashOtp = (value: string) => createHash('sha256').update(value).digest('hex');
 
@@ -141,6 +143,7 @@ export class DeliveriesService {
     private readonly prisma: PrismaService,
     private readonly pricing: PricingService,
     private readonly dispatch: DispatchService,
+    private readonly realtime: RealtimeGateway,
   ) {}
 
   /** Price preview. No writes — safe to call on every pin drag. */
@@ -264,12 +267,21 @@ export class DeliveriesService {
       `Delivery ${delivery.reference} created for ${formatNaira(delivery.chargeKobo)} (${quote.distanceKm} km)`,
     );
 
+    // The dispatch desk hears about it immediately, before any rider does.
+    this.realtime.toStaff(RT.DELIVERY_NEW, {
+      id: delivery.id,
+      reference: delivery.reference,
+      status: delivery.status,
+      deliveryType: delivery.deliveryType,
+      chargeFormatted: formatNaira(delivery.chargeKobo),
+      at: new Date().toISOString(),
+    });
+
     // Hand it to the offer engine immediately. A booking that silently sits
     // unassigned because dispatch threw would be the worst outcome for the
-    // customer, so a dispatch failure is logged rather than thrown. The delivery
-    // stays PENDING, and `DispatchService.offerWaitingDeliveries` picks it up the
-    // next time a rider comes online (and from the scheduled sweep in Phase 6).
-    // rather than failing the booking the customer just paid for.
+    // customer, so a dispatch failure is logged rather than thrown: the delivery
+    // stays PENDING and the dispatch scheduler's next tick (and every rider coming
+    // online) will keep trying until somebody takes it.
     try {
       const offers = await this.dispatch.offerDelivery(delivery.id);
       this.logger.log(`Delivery ${delivery.reference} offered to ${offers} rider(s)`);

@@ -7,7 +7,14 @@ export interface OutboundMessage {
   subject?: string;
   body: string;
   /** Only used by the console driver to label the log line. */
-  kind: 'EMAIL_VERIFICATION' | 'PHONE_OTP' | 'PASSWORD_RESET' | 'WELCOME' | 'SECURITY_ALERT';
+  kind:
+    | 'EMAIL_VERIFICATION'
+    | 'PHONE_OTP'
+    | 'PASSWORD_RESET'
+    | 'WELCOME'
+    | 'SECURITY_ALERT'
+    /** A dispatch offer, sent because a rider may not have the app open. */
+    | 'DISPATCH_OFFER';
 }
 
 /**

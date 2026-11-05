@@ -3,6 +3,7 @@ import type { LoginInput, RegisterCustomerInput, RegisterRiderInput } from '@dis
 import { PrismaService } from '../infra/prisma/prisma.service';
 import { AppError } from '../common/errors/app-error';
 import { AuditService } from '../audit/audit.service';
+import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { PasswordService } from './password.service';
 import { TokenService } from './token.service';
 import { VerificationService } from './verification.service';
@@ -27,6 +28,7 @@ export class AuthService {
     private readonly tokens: TokenService,
     private readonly verification: VerificationService,
     private readonly audit: AuditService,
+    private readonly realtime: RealtimeGateway,
   ) {}
 
   // ───────────────────────────── REGISTRATION ──────────────────────────────
@@ -486,6 +488,8 @@ export class AuthService {
 
   async logoutAll(principal: AuthPrincipal): Promise<{ revokedSessions: number }> {
     const revokedSessions = await this.tokens.revokeAllForUser(principal.userId);
+    // Signing out of every device must close the live channels too.
+    this.realtime.revokeUser(principal.userId, 'You signed out of all devices.');
     await this.audit.record({
       actorUserId: principal.userId,
       action: 'LOGOUT_ALL_DEVICES',

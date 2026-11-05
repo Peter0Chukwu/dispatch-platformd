@@ -25,6 +25,7 @@ import RiderDocumentsPage from "./pages/rider/DocumentsPage";
  */
 const AdminHome = lazy(() => import("./pages/admin/AdminHome"));
 const AdminDeliveriesPage = lazy(() => import("./pages/admin/DeliveriesPage"));
+const AdminDispatchBoardPage = lazy(() => import("./pages/admin/DispatchBoardPage"));
 const AdminRidersPage = lazy(() => import("./pages/admin/RidersPage"));
 const AdminCustomersPage = lazy(() => import("./pages/admin/CustomersPage"));
 const AdminPricingPage = lazy(() => import("./pages/admin/PricingPage"));
@@ -121,6 +122,7 @@ export default function App() {
           {/* Each screen sits behind the permission its API routes demand. */}
           <Route element={<RequirePermission permission="delivery:read" />}>
             <Route path="deliveries" element={<AdminDeliveriesPage />} />
+            <Route path="dispatch" element={<AdminDispatchBoardPage />} />
           </Route>
           <Route element={<RequirePermission permission="rider:read" />}>
             <Route path="riders" element={<AdminRidersPage />} />

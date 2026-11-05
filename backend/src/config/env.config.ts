@@ -52,6 +52,12 @@ export const envSchema = z.object({
   DEFAULT_COMMISSION_PCT: z.coerce.number().min(0).max(100).default(20),
   DISPATCH_OFFER_TIMEOUT_SECONDS: z.coerce.number().int().positive().default(45),
   DISPATCH_MAX_ACTIVE_PER_RIDER: z.coerce.number().int().positive().default(2),
+  /** How many riders receive the same offer at once. First to accept wins. */
+  DISPATCH_OFFER_BATCH_SIZE: z.coerce.number().int().positive().max(20).default(3),
+  /** How often the dispatcher looks for work that needs a rider. */
+  DISPATCH_TICK_MS: z.coerce.number().int().positive().default(5000),
+  /** After this many rounds with nobody available, dispatch stops and raises an alert. */
+  DISPATCH_MAX_ROUNDS: z.coerce.number().int().positive().max(20).default(4),
   TRACKING_PING_INTERVAL_SECONDS: z.coerce.number().int().positive().default(15),
   LOCATION_RETENTION_DAYS: z.coerce.number().int().positive().default(30),
 });

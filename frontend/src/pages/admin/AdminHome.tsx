@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import {
   Area,
@@ -23,6 +24,7 @@ import {
   StatusPill,
   type Column,
 } from "../../components/ui";
+import { LIVE_EVENTS, useLiveEvent } from "../../lib/live";
 import { useAuth } from "../../contexts/AuthContext";
 import { adminNav } from "./nav";
 import {
@@ -65,6 +67,18 @@ const RANGES = [
 export default function AdminHome() {
   const { hasPermission, profile } = useAuth();
   const [days, setDays] = useState<string>("30");
+  const queryClient = useQueryClient();
+
+  // Bookings, assignments and completions arrive here as they happen, so the
+  // operations dashboard stays a live picture of the floor rather than a snapshot.
+  useLiveEvent(
+    LIVE_EVENTS.DELIVERY_NEW,
+    useCallback(() => void queryClient.invalidateQueries({ queryKey: ["admin"] }), [queryClient]),
+  );
+  useLiveEvent(
+    LIVE_EVENTS.DELIVERY_UPDATED,
+    useCallback(() => void queryClient.invalidateQueries({ queryKey: ["admin"] }), [queryClient]),
+  );
 
   const range = useMemo(() => {
     const to = new Date();

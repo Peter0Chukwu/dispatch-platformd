@@ -145,7 +145,7 @@ async function main() {
     method: 'GET',
     token: adminToken,
   });
-  const application = queue.items[0];
+  const application = queue.data[0];
   if (!application) throw new Error('Rider application not found in the review queue');
 
   const detail = await call(`/admin/riders/${application.id}`, { method: 'GET', token: adminToken });

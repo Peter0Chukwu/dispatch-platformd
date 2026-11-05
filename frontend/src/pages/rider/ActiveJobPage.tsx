@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { PortalShell } from '../../layouts/PortalShell';
 import {
@@ -19,6 +20,7 @@ import {
   useToast,
 } from '../../components/ui';
 import { RIDER_NAV } from './nav';
+import { LIVE_EVENTS, useLiveEvent } from '../../lib/live';
 import { useApiError } from '../../contexts/AuthContext';
 import {
   useActiveJob,
@@ -56,6 +58,17 @@ export default function ActiveJobPage() {
   const [params] = useSearchParams();
   const { notify } = useToast();
   const requestedId = params.get('job') ?? undefined;
+  const queryClient = useQueryClient();
+
+  // The office can cancel or reassign a job under the rider's feet; the screen must
+  // follow the server instead of insisting on a status that no longer exists.
+  useLiveEvent(
+    LIVE_EVENTS.DELIVERY_UPDATED,
+    useCallback(() => {
+      void queryClient.invalidateQueries({ queryKey: ['rider', 'active-job'] });
+      void queryClient.invalidateQueries({ queryKey: ['rider', 'profile'] });
+    }, [queryClient]),
+  );
 
   const active = useActiveJob();
   const id = requestedId ?? active.data?.id;

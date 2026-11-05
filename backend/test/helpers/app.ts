@@ -7,12 +7,19 @@ import { PasswordService } from '../../src/auth/password.service';
 import { registerIndexPage } from '../../src/common/api-index-page';
 
 /** Boots the real application against the real test database and Redis. */
+/**
+ * The dispatch heartbeat is a wall-clock timer; in the suite it is switched off and
+ * the tests call `DispatchService.tick()` themselves, so a background sweep can
+ * never change the world halfway through an assertion.
+ */
 export async function createTestApp(): Promise<{
   app: INestApplication;
   prisma: PrismaService;
   redis: RedisService;
   passwords: PasswordService;
 }> {
+  process.env.DISPATCH_SCHEDULER = 'off';
+
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
   const app = moduleRef.createNestApplication({ logger: ['error'] });
   app.setGlobalPrefix('api/v1');

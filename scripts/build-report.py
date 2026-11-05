@@ -9,14 +9,22 @@ from PIL import Image
 
 OUT = "documentation/BUILD-REPORT.html"
 SHOTS = [
-    ("screenshots/41-rider-offers-countdown.png", "Phase 4 — a live offer, with 18 of 20 seconds left", "This offer exists because a customer booked a delivery and the rider was online. The ring counts down from expiresAt on the server — the browser never decides when an offer dies. Accepting takes a Redis lock, so if two riders tap at once exactly one wins and the other is told the job is gone."),
-    ("screenshots/42-rider-active-job.png", "Phase 4 — the active job and its six-step workflow", "Accepted → at pickup → collected → in transit → at destination → delivered. Every step is a separate authenticated call that the shared state machine validates; the UI can only ever offer the next legal step, and a hand-crafted request that skips one gets 409."),
-    ("screenshots/43-rider-workflow-progress.png", "Phase 4 — the workflow after four recorded steps", "Each tap wrote a delivery_status_history row and a timestamp on the delivery. The customer's tracking page reads the same rows, so rider and customer can never disagree about where the package is."),
-    ("screenshots/44-rider-proof-of-delivery.png", "Phase 4 — proving delivery with a photo", "The recipient's 6-digit code is the default proof; a photo plus the recipient's name is the fallback. The photo is uploaded to private storage first and the completion call carries only its key. Completing twice returns 409 — the rider is paid exactly once."),
-    ("screenshots/45-rider-earnings.png", "Phase 4 — earnings, after real commission", "₦3,201.50 charge, 20% commission, ₦2,561.00 to the rider — frozen into the delivery at the moment of acceptance, so a later rate change cannot rewrite this rider's pay. Earnings sit PENDING for 24 hours before they become withdrawable."),
-    ("screenshots/46-rider-documents.png", "Phase 4 — documents, reviewed by a human", "Three documents, each approved by staff through /admin/riders/:id/documents/:id/review. The bytes live in private storage and are streamed only to a staff member holding rider:document:read — there is no public URL to guess."),
-    ("screenshots/47-rider-overview-mobile.png", "Phase 4 — the rider overview on a phone (390px)", "Riders work from phones. Availability is the first control on the screen, and it refuses to go online while a required document is unapproved — naming the document rather than failing silently."),
-    ("screenshots/40-rider-overview-online.png", "Phase 4 — the rider overview on desktop", "Every figure is read from the database: approval status, the online toggle, today's earnings, completed count and each document's review state. Nothing on this screen is a placeholder."),
+    ("screenshots/phase-6/01-dispatch-board.png", "Phase 6 — the dispatch board", "Four bookings waiting, three offers out and one job the engine could not place. The round, the radius and the countdown all come from rows the engine wrote — the board is a window on the scheduler, not a second source of truth."),
+    ("screenshots/phase-6/02-rider-offers.png", "Phase 6 — the same offers, pushed to the phone", "These cards arrived over a Socket.IO connection authenticated with the rider's own token; the ring counts down from expiresAt on the server. The green badge in the header says Live only while the socket is actually connected."),
+    ("screenshots/phase-6/04-exhausted.png", "Phase 6 — when automation gives up, it says so", "The rider declined everything, so the engine spent its rounds — 5 km, 12 km, 25 km, then the whole branch — and raised one alert for the desk. Red means a human has to decide; nothing pretends a rider is still being found."),
+    ("screenshots/phase-6/05-manual-assign.png", "Phase 6 — the fallback: assign by hand", "The dispatcher picks an approved rider, gives a reason, and the assignment attempts below show exactly what the engine already tried: RDR-00001, auto, rejected \u201cPassed by rider\u201d. The override is audited like any other action."),
+    ("screenshots/phase-6/06-delivery-history.png", "Phase 6 — the trail the engine leaves behind", "Every delivery keeps its status timeline and assignment attempts, so support can answer \u201cwhy was nobody sent?\u201d months later with records rather than memory."),
+    ("screenshots/phase-5/01-overview.png", "Phase 5 — the operations dashboard, computed in SQL", "Every card is a PostgreSQL aggregate at request time: ₦3,201.50 gross, ₦640.30 commission, 100% success. Empty database → honest zeros."),
+    ("screenshots/phase-5/02-deliveries.png", "Phase 5 — the delivery board before Phase 6", "Search, status filter, pagination, CSV export, and the manual assign/cancel drawer that Phase 6 now treats as the fallback."),
+    ("screenshots/phase-5/09-audit.png", "Phase 5 — the audit trail", "Every sensitive action with actor, IP and before/after values. Suspension, assignment and pricing changes are all in here."),
+    ("screenshots/phase-4/41-rider-offers-countdown.png", "Phase 4 — a live offer, with 18 of 20 seconds left", "This offer exists because a customer booked a delivery and the rider was online. The ring counts down from expiresAt on the server — the browser never decides when an offer dies. Accepting takes a Redis lock, so if two riders tap at once exactly one wins and the other is told the job is gone."),
+    ("screenshots/phase-4/42-rider-active-job.png", "Phase 4 — the active job and its six-step workflow", "Accepted → at pickup → collected → in transit → at destination → delivered. Every step is a separate authenticated call that the shared state machine validates; the UI can only ever offer the next legal step, and a hand-crafted request that skips one gets 409."),
+    ("screenshots/phase-4/43-rider-workflow-progress.png", "Phase 4 — the workflow after four recorded steps", "Each tap wrote a delivery_status_history row and a timestamp on the delivery. The customer's tracking page reads the same rows, so rider and customer can never disagree about where the package is."),
+    ("screenshots/phase-4/44-rider-proof-of-delivery.png", "Phase 4 — proving delivery with a photo", "The recipient's 6-digit code is the default proof; a photo plus the recipient's name is the fallback. The photo is uploaded to private storage first and the completion call carries only its key. Completing twice returns 409 — the rider is paid exactly once."),
+    ("screenshots/phase-4/45-rider-earnings.png", "Phase 4 — earnings, after real commission", "₦3,201.50 charge, 20% commission, ₦2,561.00 to the rider — frozen into the delivery at the moment of acceptance, so a later rate change cannot rewrite this rider's pay. Earnings sit PENDING for 24 hours before they become withdrawable."),
+    ("screenshots/phase-4/46-rider-documents.png", "Phase 4 — documents, reviewed by a human", "Three documents, each approved by staff through /admin/riders/:id/documents/:id/review. The bytes live in private storage and are streamed only to a staff member holding rider:document:read — there is no public URL to guess."),
+    ("screenshots/phase-4/47-rider-overview-mobile.png", "Phase 4 — the rider overview on a phone (390px)", "Riders work from phones. Availability is the first control on the screen, and it refuses to go online while a required document is unapproved — naming the document rather than failing silently."),
+    ("screenshots/phase-4/40-rider-overview-online.png", "Phase 4 — the rider overview on desktop", "Every figure is read from the database: approval status, the online toggle, today's earnings, completed count and each document's review state. Nothing on this screen is a placeholder."),
     ("screenshots/33-book-review.png", "Phase 3 — review step with the server's price", "₦4,341.00 for Lekki → Yaba, 18.47 km. Every line — base fee, distance beyond the 2 free km, express surcharge — was computed in integer kobo by the API. The browser sent two coordinates and nothing else."),
     ("screenshots/34-delivery-detail.png", "Phase 3 — the booking, with its frozen price", "The breakdown on this page comes from deliveries.priceSnapshot, written at booking time. Changing the pricing rules tomorrow cannot rewrite what this customer was charged."),
     ("screenshots/35-deliveries-list.png", "Phase 3 — delivery history", "Real rows from the customer's own bookings, status-filtered and paginated by the API. Another customer's deliveries are unreachable: the query is scoped by customerId, and a probe returns 404 rather than confirming a reference exists."),
@@ -82,7 +90,7 @@ html = f"""<!doctype html>
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Dispatch Platform — Build Report (Phase 4)</title>
+<title>Dispatch Platform — Build Report (through Phase 6)</title>
 <style>
   :root {{
     --navy:#0B1F3A; --navy-2:#16304F; --green:#12B76A; --ink:#334155;
@@ -139,7 +147,7 @@ html = f"""<!doctype html>
 <body>
 <header>
   <div class="wrap">
-    <p class="eyebrow">Phase 4 complete · build report</p>
+    <p class="eyebrow">Through Phase 6 · build report</p>
     <h1>Dispatch &amp; Logistics Platform</h1>
     <p>Customer portal, rider portal and admin command centre on one NestJS API and one PostgreSQL
        database. This page is a static snapshot with real screenshots captured from the running
@@ -176,6 +184,24 @@ html = f"""<!doctype html>
     in this database were created by running the product: the demo seed registers a real rider through the
     public API, a staff member approves each document, the rider goes online, a customer books, the rider
     accepts and delivers. No figure on any dashboard is typed in, and the seed refuses to invent revenue.</p>
+  </div>
+
+  <h2>Phase 6 — the dispatch engine</h2>
+  <div class="panel">
+    <p><strong>A booking must find a rider without anyone watching the screen.</strong> Phase 4 proved
+    that two riders cannot hold the same job. Phase 6 makes that race run itself: it offers in batches,
+    widens when nobody answers, and finally tells a human instead of going quiet.</p>
+    <table>
+      <tr><th>Decision</th><th>How it works</th></tr>
+      <tr><td>The search widens in rounds</td><td>Round 1 asks the three closest riders within 5 km; then 12 km, 25 km and finally the whole branch. Each round lasts one offer window, and a round that finds nobody still counts — that is what lets the next one reach further out.</td></tr>
+      <tr><td>The round is data, not memory</td><td><code>deliveries.dispatchRound</code> survives restarts, deploys and any number of API processes. No worker holds the state of a live dispatch in a variable.</td></tr>
+      <tr><td>A no is permanent</td><td>A rider who rejects a job is never asked about it again. Riders asked in the round that just ended sit out one round, then return to the pool — a rider who was driving is not a rider who refused.</td></tr>
+      <tr><td>Eligibility is a filter, not a score</td><td>Approved documents, approved application, online, active account, and under the active-job limit. Capacity is enforced by the query, so a rider at their limit is never offered work.</td></tr>
+      <tr><td>Ranking is transparent</td><td>Distance to the pickup, plus 25 km for a stale location ping, plus a small 3 km penalty for being outside the delivery's zone.</td></tr>
+      <tr><td>One round at a time</td><td>A per-delivery Redis lock (<code>SET PX 15000 NX</code>) means two API processes, or a double click, cannot double-offer. A concurrent test drives two ticks at once.</td></tr>
+      <tr><td>Giving up is loud</td><td>When the schedule is spent the engine raises one <code>DISPATCH_EXHAUSTED</code> alert (guarded by a 10-minute Redis key) and stops. It will not restart by itself when a rider frees up — that job needs a decision.</td></tr>
+      <tr><td>The socket never owns the truth</td><td>Pushes say only <em>something changed</em>; the screen refetches through the REST API. Every action still needs a bearer token and a permission — the live channel is notification, not authority.</td></tr>
+    </table>
   </div>
 
   <h2>Phase 4 — the rider portal, offers and the delivery workflow</h2>

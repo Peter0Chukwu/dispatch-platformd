@@ -734,6 +734,11 @@ model Delivery {
   cancelledById      String?   @db.Uuid
 
   ratingsDeadlineAt DateTime?
+  /// How many dispatch rounds this delivery has been through (Phase 6). Incremented
+  /// by the engine whether or not a round found anybody, so escalation can widen
+  /// even when the search comes back empty.
+  dispatchRound     Int       @default(0)
+  lastRoundAt       DateTime?
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 

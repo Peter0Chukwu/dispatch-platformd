@@ -31,7 +31,7 @@ export function PriceBreakdown({
               <dd
                 className={cn(
                   'shrink-0 font-medium tabular-nums',
-                  line.kind === 'discount' ? 'text-success-700' : 'text-ink-800',
+                  line.kind === 'discount' ? 'text-accent-700' : 'text-ink-800',
                 )}
               >
                 {line.kind === 'discount' ? '−' : ''}

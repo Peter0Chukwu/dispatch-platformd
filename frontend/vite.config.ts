@@ -27,6 +27,15 @@ export default defineConfig({
         target: 'http://127.0.0.1:4000',
         changeOrigin: false,
       },
+      // The live dispatch channel. Same origin as the page, so the HttpOnly
+      // refresh cookie travels with the handshake and no CORS rule is needed.
+      // `ws: true` lets Vite proxy the WebSocket upgrade, not just the polling
+      // fallback — without it the socket silently degrades or never connects.
+      '/socket.io': {
+        target: 'http://127.0.0.1:4000',
+        changeOrigin: false,
+        ws: true,
+      },
     },
   },
   preview: { host: '0.0.0.0', port: 4173, allowedHosts: true },

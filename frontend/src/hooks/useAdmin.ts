@@ -632,3 +632,94 @@ export function useSetRiderApproval() {
       }),
   );
 }
+
+/* ───────────────────────── dispatch board (Phase 6) ───────────────────────── */
+
+export interface DispatchBoardOffer {
+  assignmentId: string;
+  rider: string;
+  riderCode: string;
+  rank: number | null;
+  expiresAt: string;
+  secondsLeft: number;
+}
+
+export interface DispatchBoardRow {
+  id: string;
+  reference: string;
+  createdAt: string;
+  waitingMinutes: number;
+  deliveryType: string;
+  chargeFormatted: string;
+  distanceKm: number | null;
+  pickup: { address: string; lat: number; lng: number };
+  destination: { address: string };
+  zone: string | null;
+  customer: { name: string; phone: string } | null;
+  dispatch: {
+    round: number;
+    radiusLabel: string;
+    maxRounds: number;
+    lastRoundAt: string | null;
+    exhausted: boolean;
+    offersOut: number;
+    liveOffers: DispatchBoardOffer[];
+    askedCount: number;
+    history: Array<{
+      id: string;
+      rider: string;
+      riderCode: string;
+      status: string;
+      method: string;
+      rank: number | null;
+      offeredAt: string;
+      expiresAt: string;
+      respondedAt: string | null;
+      rejectionReason: string | null;
+    }>;
+  };
+}
+
+export interface DispatchBoard {
+  summary: {
+    waiting: number;
+    offersOut: number;
+    onlineRiders: number;
+    exhaustedToday: number;
+    batchSize: number;
+    offerTimeoutSeconds: number;
+    maxRounds: number;
+  };
+  waiting: DispatchBoardRow[];
+  justAssigned: Array<{
+    id: string;
+    reference: string;
+    status: string;
+    at: string;
+    rider: { code: string; name: string } | null;
+  }>;
+}
+
+export function useDispatchBoard(options?: { refetchIntervalMs?: number }) {
+  return useQuery({
+    queryKey: ["admin", "dispatch", "board"],
+    queryFn: () => api.get<DispatchBoard>("/admin/dispatch/board"),
+    // The board is a live floor view; the socket invalidates it instantly, and this
+    // poll is the safety net for the seconds around a network blip.
+    refetchInterval: options?.refetchIntervalMs ?? 15000,
+  });
+}
+
+export function useRunDispatchRound() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (deliveryId: string) =>
+      api.post<{ reference: string; round: number; offered: number }>(
+        `/admin/dispatch/deliveries/${deliveryId}/run`,
+      ),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["admin", "dispatch"] });
+      void queryClient.invalidateQueries({ queryKey: ["admin", "deliveries"] });
+    },
+  });
+}
