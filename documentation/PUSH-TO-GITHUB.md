@@ -4,7 +4,7 @@
 
 | | |
 |---|---|
-| Commits | **11**, one per phase (Phase 1–10), on branch `main` |
+| Commits | one per phase (Phase 1–10) plus documentation commits — count them with `git log --oneline | wc -l` |
 | Branch | `main` |
 | Tracked files | **393** |
 | Total history size | 35 MB (mostly the screenshots and the build report) |
@@ -47,7 +47,7 @@ does the push. Same result, nothing to revoke afterwards.
 1. In the workspace file list, find **`dispatch-platform.bundle`** and download it.
 2. Move it somewhere sensible — e.g. `~/Downloads/dispatch-platform.bundle`.
 
-That one file contains all 11 commits, every file, and the full history. It is not a zip: it is a
+That one file contains every commit, every file, and the full history. It is not a zip: it is a
 portable Git repository, which is exactly why the history survives the trip.
 
 ## Part 3 — Push it from your computer (3 minutes)
@@ -82,15 +82,16 @@ dispatch-platform**, and set **Contents: Read and write**. Paste it when Git ask
 | **macOS** | `brew install gh` then `gh auth login` and `gh auth setup-git`. After that `git push` simply works. (Keychain may also prompt you — either is fine.) |
 | **Linux** | `gh auth login` if you have the GitHub CLI, otherwise a fine-grained token as the password, as above. |
 
-> **Sanity check before you push.** Run `git log --oneline` inside the cloned folder. You should see
-> **11 commits**, the newest being `docs: how to open the platform in a real browser`, the oldest
-> `Initial commit — dispatch platform, Phases 1 and 2`. If you see the same, you have the whole history.
+> > **Sanity check before you push.** Run `git log --oneline` inside the cloned folder. The oldest commit
+> should be `Initial commit — dispatch platform, Phases 1 and 2`, and you should see one commit per phase
+> after it. If the log looks complete, you have the whole history.
 
 ## Part 4 — Verify it landed (1 minute)
 
 Refresh your repository page on GitHub. You should see:
 
-- **11 commits** (click *commits* to check), **393 files**
+- the full commit history — click *commits* and compare the count with `git log --oneline | wc -l`
+- **393 files**
 - Folders `backend/`, `frontend/`, `packages/`, `scripts/`, `documentation/`, `docs/`, `deploy/`, `e2e/`
 - `README.md` rendered on the landing page, with the amber-and-green badges block
 - A green **main** badge — GitHub sets the default branch automatically on first push
@@ -110,7 +111,7 @@ Then check three things yourself, because they are the ones that matter:
 
 Every commit is currently authored as `Dispatch Build <build@dispatch.local>`, which is why GitHub will
 not attribute them to your profile. If you want the history to read as yours, say so **before** you
-clone and I will rewrite the author on all 11 commits to your name and the email on your GitHub account.
+clone and I will rewrite the author on every commit to your name and the email on your GitHub account.
 Thirty seconds of work, and it is much easier before the repository exists than after.
 
 ---
