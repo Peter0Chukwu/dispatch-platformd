@@ -204,6 +204,55 @@ you never have to make that trade.
 
 ---
 
+## Keeping GitHub current from now on
+
+Part 3 is a one-off. This is the recurring habit.
+
+**The rule:** every change made in the workspace is committed there, and the bundle is rebuilt in the same
+step. So `dispatch-platform.bundle` is always the newest version of the repository — you never have to ask
+"is the bundle current?".
+
+**To bring GitHub up to date, three commands.** Download the fresh bundle first, then:
+
+```powershell
+# Windows PowerShell — from inside your clone of the repo
+git fetch C:\Users\YOU\Downloads\dispatch-platform.bundle main
+git merge FETCH_HEAD
+git push
+```
+
+```bash
+# macOS / Linux
+git fetch ~/Downloads/dispatch-platform.bundle main
+git merge FETCH_HEAD
+git push
+```
+
+Then confirm the top commit matches what you were told:
+
+```powershell
+git log --oneline -3
+```
+
+If the newest commit there is the one from the bundle, GitHub now has it too.
+
+**Before you do this, make sure your clone has no work of its own.** If you have edited files or committed
+locally since the last sync, run `git status` first. A merge will then either fast-forward cleanly or stop
+and ask you to reconcile — and it is much easier to see that coming than to undo it. Two safe habits:
+
+- Pull before you push: `git pull --rebase`, then fetch and merge the bundle.
+- Or tell me what you changed locally, and I will merge from your repository instead of writing over it.
+
+**What the bundle does not carry.** It contains the branches and their commits — history, not the working
+directory. Untracked things (your `backend/.env`, `node_modules`, uploaded files, any new file you have not
+committed) are not in it, by design: the bundle is a git object store, and secrets have no business in one.
+
+**If you would rather not run this by hand every time**, there are two options: keep your own work in your
+clone and push it yourself while I only touch documentation, or use the scoped token in the appendix so I
+push directly. Neither is required — the three commands above take about twenty seconds.
+
+---
+
 ## If a secret is ever committed by mistake
 
 1. **Rotate it first.** Treat it as public: changing the code afterwards does not un-leak it.

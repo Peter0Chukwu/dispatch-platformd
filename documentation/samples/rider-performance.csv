@@ -1,12 +1,12 @@
 # Rider performance
 # Acceptance is offers accepted ÷ offers received. Average time is measured from acceptance to delivery, not from booking.
-# Period: 2026-09-21 → 2026-11-05
-# Generated: 2026-11-05 13:16 UTC
-# Report id: fb5a3e3d-c708-4634-88f3-4490347ca8c9
+# Period: 2026-09-23 → 2026-11-07
+# Generated: 2026-11-07 09:35 UTC
+# Report id: 602073b5-53a3-4d32-96c9-3ff50a476a71
 #
 Rider,Name,Offered,Accepted,Acceptance,Delivered,Cancelled,Failed,Completion,Avg min,Rating
-RDR-00001,Rita Adeyemi,23,21,91.3%,18,0,3,85.7%,0,—
+RDR-00001,Rita Adeyemi,15,11,73.3%,9,0,2,81.8%,0,—
 
 # Totals
-Deliveries completed,18
-Offers accepted,21
+Deliveries completed,9
+Offers accepted,11

@@ -1,0 +1,61 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# LOCAL MACHINE ONLY — Postgres and Redis in containers, the app run with npm.
+#
+# This is NOT the deployment stack. `docker-compose.yml` is the deployment stack
+# (it serves the app through Nginx and publishes no database port). This file
+# exists so that a developer on Windows or macOS can get the two services the
+# API needs without installing a database server by hand — Redis in particular
+# has no official Windows build.
+#
+#   docker compose -f docker-compose.local.yml up -d
+#   docker compose -f docker-compose.local.yml ps
+#   docker compose -f docker-compose.local.yml down          # stop, keep data
+#   docker compose -f docker-compose.local.yml down -v       # stop and WIPE data
+#
+# Credentials here are fixed and deliberately weak: they only ever answer on
+# 127.0.0.1 of a laptop. They must match DATABASE_URL / REDIS_URL in
+# backend/.env. Do not copy this file to a server.
+#
+# The volume names are prefixed `local-` so they can never collide with the
+# volumes of the deployment compose file in the same directory.
+# ─────────────────────────────────────────────────────────────────────────────
+name: dispatch-local
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: dispatch-local-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: dispatch
+      POSTGRES_PASSWORD: dispatch_dev_password
+      POSTGRES_DB: dispatch_dev
+    ports:
+      # Bound to loopback only: not reachable from the rest of the network.
+      - '127.0.0.1:5432:5432'
+    volumes:
+      - local-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U dispatch -d dispatch_dev']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:8-alpine
+    container_name: dispatch-local-redis
+    restart: unless-stopped
+    command: ['redis-server', '--appendonly', 'yes']
+    ports:
+      - '127.0.0.1:6379:6379'
+    volumes:
+      - local-redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  local-postgres-data:
+  local-redis-data:
