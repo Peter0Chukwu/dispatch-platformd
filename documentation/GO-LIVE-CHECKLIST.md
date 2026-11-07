@@ -34,6 +34,10 @@ Copy this file to a ticket or a text note and fill in the date and initials as y
 - [ ] **Secrets stored in a password manager**, not only on the server (you will need them to rotate, and to restore on a new box)
 - [ ] **`CORS_ORIGINS` and `FRONTEND_URL` are the exact public origin**, e.g. `https://dispatch.example.com` — no trailing slash, correct scheme ⛔ BLOCKER (a mismatch breaks sign-in in the browser only, which is maddening to debug later)
 - [ ] **`APP_TIMEZONE=Africa/Lagos`**
+- [ ] **`TRUST_PROXY` matches the real proxy chain** (2 = Caddy → nginx → API, 3 = Cloudflare in front).
+      Wrong value = every visitor shares one rate-limit bucket, which shows up as "too many sign-in
+      attempts" for everyone at once. Prove it with the 12-rapid-logins check in `DEPLOYMENT-ROADMAP.md`
+      Stage 4.
 - [ ] **`PAYMENTS_MODE`** is `DEVELOPMENT` for the dress rehearsal and only becomes `LIVE` at item D-6 ⛔ BLOCKER
 - [ ] **`DEFAULT_COMMISSION_PCT`, dispatch timeouts and `LOCATION_RETENTION_DAYS`** reviewed against the business's actual policy — these are policy, not code
 

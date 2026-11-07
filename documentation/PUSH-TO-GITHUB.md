@@ -11,7 +11,7 @@
 | Secrets in the history | **none** — scanned every tracked file for `sk_live_`, `FLWSECK-`, `ghp_`, `github_pat_`, AWS keys, Google keys and private keys; the single hit is the *word* `sk_live_…` inside `CREDENTIALS-SETUP.md` |
 | `.env` in the repo | **no** — only `.env.example` files, with placeholders |
 | `node_modules` / `dist` | excluded by `.gitignore` |
-| Prepared for you | `dispatch-platform.bundle` (35 MB) — a single file containing the entire repository, history included |
+| Prepared for you | **two** files: `dispatch-platform.bundle` (35 MB, the repository as a portable bundle) and `dispatch-platform-github.zip` (66 MB, the same repository as an ordinary folder, `.git` included) |
 
 There is **nothing to configure first** and **no account to set up in this chat**. You need about ten
 minutes, and your own GitHub credentials never leave your computer.
@@ -29,6 +29,9 @@ does the push. Same result, nothing to revoke afterwards.
 
 ## Part 1 — Create the empty repository (2 minutes)
 
+> **Skip this part if you are using GitHub Desktop (Route 1 below)** — *Publish repository* creates the
+> repository for you, private, with the right name. Creating it twice will only confuse things.
+
 1. Sign in at <https://github.com>.
 2. Click **+** (top right) → **New repository**.
 3. Fill in exactly this:
@@ -44,11 +47,62 @@ does the push. Same result, nothing to revoke afterwards.
 
 ## Part 2 — Get the code out of this workspace (1 minute)
 
+Download **`dispatch-platform-github.zip`** if you are using GitHub Desktop (Route 1), or
+**`dispatch-platform.bundle`** if you are using the terminal (Route 2 / Part 3).
+
 1. In the workspace file list, find **`dispatch-platform.bundle`** and download it.
 2. Move it somewhere sensible — e.g. `~/Downloads/dispatch-platform.bundle`.
 
 That one file contains every commit, every file, and the full history. It is not a zip: it is a
 portable Git repository, which is exactly why the history survives the trip.
+
+## Part 2b — If Git is not installed on your computer
+
+`git` not being available is not a problem, and you do **not** need a terminal. There are three ways
+forward; the first one needs nothing installed at all.
+
+### Route 1 — GitHub Desktop (no terminal, no install of Git, keeps the full history)
+
+GitHub Desktop ships its own copy of Git, so this works on a machine where `git` has never existed.
+
+1. Download and install **GitHub Desktop** from <https://desktop.github.com> — sign in with your GitHub
+   account when it opens.
+2. Download **`dispatch-platform-github.zip`** from the workspace (66 MB) and **extract it** — you get a
+   folder called `dispatch-platform`. (Windows: right-click → *Extract All*. macOS: double-click.)
+   Extract it somewhere simple like `Documents\dispatch-platform`, **not** inside OneDrive or iCloud.
+3. In GitHub Desktop: **File → Add local repository…** → choose the extracted `dispatch-platform`
+   folder. It recognises it immediately, with all the commit history intact.
+4. Click **Publish repository** (top bar). Set:
+   - **Name:** `dispatch-platform`
+   - **Description:** optional
+   - **Keep this code private:** ✅ **tick it**
+5. **Publish repository.** Wait for it to finish — 35 MB is a minute on a slow connection.
+
+That is the whole job: no terminal, no token, no Git installation, and the history is preserved
+because the `.git` folder travelled inside the zip.
+
+> **Do not use GitHub's "upload files" web page instead.** It would flatten thirteen commits into one,
+> drop the phase-by-phase history, and struggle with 393 files including large images.
+
+### Route 2 — Install Git, then follow Part 3
+
+Two minutes, and it is the most useful thing to have on a development machine anyway.
+
+| System | Command / step |
+|---|---|
+| **Windows** | Open **PowerShell** and run `winget install --id Git.Git -e --source winget`. No winget? Download from <https://git-scm.com/download/win> and accept the defaults. **Then close and reopen the terminal** so it finds the new PATH entry. |
+| **macOS** | `xcode-select --install` (this includes Git), or `brew install git` |
+| **Ubuntu / Debian** | `sudo apt update && sudo apt install -y git` |
+
+Check it with `git --version`, then continue from Part 3. Note that the terminal **must be reopened**
+after installing — "not recognised" almost always means an old terminal window with an old PATH.
+
+### Route 3 — I push it for you
+
+Covered in the appendix at the bottom. It requires a 1-day token in this chat, which is exactly what the
+other two routes exist to avoid — but it is there if you prefer it.
+
+---
 
 ## Part 3 — Push it from your computer (3 minutes)
 

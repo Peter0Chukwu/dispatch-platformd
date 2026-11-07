@@ -19,6 +19,13 @@ async function bootstrap(): Promise<void> {
   //    the SPA gets its own CSP from the reverse proxy / hosting layer.
   app.use(helmet({ contentSecurityPolicy: false, crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 
+  // ── Real client IPs behind the proxy. nginx (and optionally Caddy/Cloudflare)
+  //    append the caller to X-Forwarded-For; without this Express reports the
+  //    proxy's own address, which silently merges every user into a single
+  //    rate-limit bucket and fills the audit log with one IP. The hop count is
+  //    configuration (TRUST_PROXY) because it depends on the deployment shape.
+  app.set('trust proxy', config.trustProxy);
+
   // ── CORS: explicit allowlist. A browser on any other origin cannot call us.
   app.enableCors({
     origin: (

@@ -9,6 +9,11 @@
  *
  *   · reads `npm audit --omit=dev --json`;
  *   · drops packages on the documented BUILD_ONLY list (with the reason);
+ *
+ * IMPORTANT: entries on that list are NOT absent from the image. `prisma` ships
+ * because @prisma/client depends on it. They are allowlisted because the vulnerable
+ * code is only reachable by the CLI, which the server never runs. Verify that claim
+ * again whenever Prisma is upgraded.
  *   · fails on any remaining high or critical finding.
  *
  * The allowlist is deliberately tiny and must stay justified: if a package in it

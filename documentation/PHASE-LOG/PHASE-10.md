@@ -133,7 +133,7 @@ which is exactly what was designed in Phase 9.
 |---|---|
 | Blocking findings | **none** |
 | Shipping dependencies | **clean** |
-| `npm audit --omit=dev` | 3 high, **all Prisma CLI** (`prisma`, `@prisma/config`, `deepmerge-ts`) — build-time only, absent from the runtime image |
+| `npm audit --omit=dev` | 3 high, **all Prisma CLI** (`prisma`, `@prisma/config`, `deepmerge-ts`). They *do* ship — the CLI is a dependency of `@prisma/client` — but the vulnerable code is CLI-only config parsing that the server never runs. Verified by inspecting an isolated production install; see `SECURITY-REVIEW.md` §7, which corrects an earlier claim that they were absent |
 | Accepted with reasons | 2 medium (no MFA; off-box backup wiring), 4 low |
 
 The deliverable is not the report, it is the **gate**: `scripts/audit-runtime.mjs` fails the
@@ -241,7 +241,7 @@ untested is labelled **UNTESTED** in plain words.
 
 | File | Shows |
 |---|---|
-| `01-runtime-dependency-audit.png` | the audit gate running, 3 build-only highs, exit 0 |
+| `01-runtime-dependency-audit.png` | the audit gate running, 3 allowlisted highs (Prisma CLI path), exit 0 |
 | `02-load-smoke.png` | 40-concurrency transcript with latencies |
 | `03-backup-restore-drill.png` | dump → restore → row-count and ledger comparison → PASS |
 | `04-master-scenario.png` | the Playwright run, 1 passed, with timings |

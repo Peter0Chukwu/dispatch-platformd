@@ -81,7 +81,7 @@ const render = async (item, file, caption) => {
 await render(
   runs[0],
   '01-runtime-dependency-audit.png',
-  'npm audit, filtered to what actually ships — three high findings remain, all inside the Prisma CLI, which is not in the runtime image',
+  'npm audit, filtered by an explicit allowlist — three high findings remain, all in the Prisma CLI's config path, which the server never executes',
 );
 await render(
   runs[1],

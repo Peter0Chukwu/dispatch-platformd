@@ -1,0 +1,66 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# TLS in front of the containers — Caddy, on the host.
+#
+#   sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https curl
+#   curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \
+#     | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+#   curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \
+#     | sudo tee /etc/apt/sources.list.d/caddy-stable.list
+#   sudo apt update && sudo apt install -y caddy
+#
+#   sudo cp deploy/Caddyfile.example /etc/caddy/Caddyfile     # edit the domain first
+#   sudo systemctl reload caddy
+#
+# Why Caddy rather than nginx+certbot on the host:
+#   · certificates are obtained and renewed automatically, with no cron job to forget
+#   · one file, no server blocks to keep in sync with the container's nginx
+#   · WebSocket upgrades (the dispatch socket) work without extra config
+#
+# Why a proxy at all, rather than exposing the web container directly:
+#   · the containers stay bound to 127.0.0.1, so only 80/443 are reachable
+#   · TLS terminates here; inside the compose network everything is plain HTTP
+#   · it is one place to add rate limits, security headers or IP allow-listing later
+#
+# Replace dispatch.example.com with your real domain, and set CORS_ORIGINS +
+# FRONTEND_URL in deploy/.env to exactly this origin (scheme and host, no trailing
+# slash) — a mismatch breaks sign-in in the browser while every curl test passes.
+# ─────────────────────────────────────────────────────────────────────────────
+
+dispatch.example.com {
+	# Compress what the container sends uncompressed. Assets are already
+	# fingerprinted and cached, so this mainly helps the JSON API.
+	encode zstd gzip
+
+	# Backstop headers. The container's nginx sets the full policy; these cover the
+	# case where a future route bypasses it.
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		-Server
+	}
+
+	# Everything — the SPA, /api/v1 and /socket.io — goes to the same container.
+	# WebSocket upgrades are handled transparently.
+	reverse_proxy 127.0.0.1:8080 {
+		# Tell the API which scheme the client actually used, so cookies marked
+		# Secure behave and generated links are https://.
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Real-IP {remote_host}
+	}
+
+	# Certificate renewal and errors are logged here; useful in the incident playbook.
+	log {
+		output file /var/log/caddy/dispatch.log {
+			roll_size 50MiB
+			roll_keep 5
+		}
+	}
+}
+
+# ── Note on proxy hops ───────────────────────────────────────────────────────
+# With Caddy in front, the chain is: client -> Caddy -> nginx -> API, so set
+#   TRUST_PROXY=2
+# in deploy/.env. If you put Cloudflare in front of Caddy as well, it becomes 3.
+# Getting this wrong does not break the app, but it does make every user share one
+# rate-limit bucket — which shows up as "too many sign-in attempts" for everyone at
+# once. See documentation/RUNBOOK.md section 6.

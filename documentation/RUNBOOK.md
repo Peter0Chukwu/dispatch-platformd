@@ -68,14 +68,22 @@ curl -fsS http://127.0.0.1:${WEB_PORT:-8080}/api/v1/health | jq
 
 ## 2. Deploy
 
+> **Starting from nothing?** Follow `DEPLOYMENT-ROADMAP.md` instead — it is the guided, staged version of
+> this section, with the gates and the long-lead items (payment KYC, SMS sender ID) that decide the date.
+> What follows is the reference version, for someone who already has a server.
+
 ### 2.1 First deploy, from a clean VPS
 
 Assumes Ubuntu 22.04/24.04, a DNS record already pointing at the box, and Docker installed.
 
 ```bash
-# 1. Docker (skip if already installed)
-curl -fsSL https://get.docker.com | sh
-sudo usermod -aG docker "$USER" && newgrp docker
+# 0. Prepare the box (timezone, Docker, swap if small, log rotation, firewall — in
+#    that order, and SSH is allowed before the firewall is enabled). Dry-run first.
+sudo bash deploy/bootstrap-vps.sh
+sudo bash deploy/bootstrap-vps.sh --apply
+
+# 1. Docker is installed by the script above; to do it by hand:
+#    curl -fsSL https://get.docker.com | sh
 
 # 2. Code
 git clone <your-repo-url> dispatch-platform && cd dispatch-platform
@@ -90,9 +98,17 @@ docker compose up -d --build
 docker compose logs -f migrate   # expect a clean "migrations applied" and exit 0
 docker compose logs -f api       # expect "Dispatch Platform API listening on …"
 
-# 5. Prove it
+# 5. Reference data + your own super admin (never the demo fixtures in production)
+docker compose run --rm seed
+
+# 6. Prove it
 curl -fsS http://127.0.0.1:8080/api/v1/health | jq
 ```
+
+> **Two settings that bite silently.** `TRUST_PROXY` must match the number of proxies in front of the API
+> (2 with Caddy → nginx → API); get it wrong and every user shares one rate-limit bucket.
+> `WEB_BIND` defaults to `127.0.0.1`, which is right when Caddy terminates TLS on the host — but if you
+> skip Caddy and expect the site to be reachable, you need `WEB_BIND=0.0.0.0` *and* your own TLS.
 
 > **`migrate` is a one-shot service.** It must exit `0` before `api` starts
 > (`service_completed_successfully`). This is why an API restart never runs migrations, and
@@ -425,7 +441,7 @@ with a name on it.
 | 1 | **Scheduled email is not built.** Emails send immediately when an event fires; there is no digest or "email me tomorrow" scheduling. | No scheduled marketing/digest mail. Transactional mail is unaffected. | deliberate scope decision, recorded in the Phase 9 log |
 | 2 | **Docker images are authored but unbuilt in the build environment.** `deploy/Dockerfile.*`, `docker-compose.yml` and `deploy/nginx.conf` have never been built here (no Docker in the sandbox). | First `docker compose up --build` must be treated as a real test, not a formality. | **UNTESTED — verify on the VPS before trusting** |
 | 3 | **Staff roles list shows "super admin" twice.** A cosmetic duplicate in admin → Team → Roles. | Cosmetic only; permissions are correct. | known cosmetic bug, not yet fixed (not authorised to change UI) |
-| 4 | **`npm audit` reports 3 high findings** in `prisma`, `@prisma/config`, `deepmerge-ts`. | All three are Prisma **CLI** dependencies, absent from the runtime image. Nothing that ships is affected. | gated by `scripts/audit-runtime.mjs`, documented in `SECURITY-REVIEW.md` |
+| 4 | **`npm audit` reports 3 high findings** in `prisma`, `@prisma/config`, `deepmerge-ts`. | The CLI ships inside the image (it is a dependency of @prisma/client) but is never executed by the server; the advisory is in CLI-only config parsing, so it needs prior RCE to reach. | allowlisted with that reason in `scripts/audit-runtime.mjs`; re-check on every Prisma upgrade — `SECURITY-REVIEW.md` §7 |
 | 5 | **Sign-in is rate limited to 10 attempts / 5 min per account.** | Automated tests must log in once and reuse the token. | by design; the E2E suite works this way |
 | 6 | **A just-rotated refresh token can be replayed for 30 s** by the same browser and is answered with a sibling token instead of a logout. | Removes a real-world "two tabs refreshed at once" logout. Replays after 30 s still revoke the whole family. | by design — justified in `SECURITY-REVIEW.md` §3 |
 | 7 | **Maps and messaging are env-gated**, and default to stub/console. | Correct and safe by default; must be switched on deliberately. | by design |

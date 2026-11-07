@@ -13,7 +13,7 @@
 | | |
 |---|---|
 | **Blocking findings (P1)** | **none** |
-| **High findings** | **0 in shipping code.** `npm audit --omit=dev` reports 3 high, all three inside the Prisma **CLI** (build-time only, absent from the runtime image) — see §7 |
+| **High findings** | **3, all in Prisma CLI code that never executes at runtime**, and all allowlisted with a written reason by `scripts/audit-runtime.mjs`. They are *not* absent from the image — see §7, which corrects an earlier draft of this review |
 | **Medium findings** | 2, both accepted with a reason and a trigger for fixing them (§8) |
 | **Low / hygiene** | 4, listed in §8 |
 | **What is genuinely strong** | money paths (append-only ledger, no in-place edits), authentication (argon2id, rotating refresh tokens with family revocation), tenant separation (every read is scoped by owner, not filtered in the client), file handling (MIME allowlist, size cap, path-escape guard), deployment (one published port) |
@@ -205,25 +205,55 @@ $ npm audit --omit=dev
 3 high severity vulnerabilities
 ```
 
-| Package | Severity | Ships to production? | Why it is a build-only concern |
+| Package | Severity | Advisory | Where it comes from |
 |---|---|---|---|
-| `prisma` | high | **no** | CLI used at build/migrate time only; not copied into the runtime image |
-| `@prisma/config` | high | **no** | configuration loader for the CLI |
-| `deepmerge-ts` | high | **no** | transitive dependency of the CLI |
+| `deepmerge-ts` | high | stack exhaustion when merging recursive object graphs | dependency of `@prisma/config` |
+| `@prisma/config` | high | via `deepmerge-ts` | dependency of `prisma` |
+| `prisma` | high | via `@prisma/config` | **a dependency of `@prisma/client`**, which the API uses |
 
-**The gate, not the report, is the deliverable.** `scripts/audit-runtime.mjs` maintains an
-explicit `BUILD_ONLY` allowlist. It fails the build on **any** high or critical advisory that is
-not on that list — so the day a vulnerable package enters the *shipping* tree, CI goes red
-without anyone remembering to look. Run it yourself:
+### The correction that matters
 
-```bash
-node scripts/audit-runtime.mjs      # ✓ exit 0 — 3 high, all build-only
+An earlier draft of this review said these three were "build-time only, absent from the runtime
+image". **That was wrong, and it was checked rather than assumed.** A clean
+`npm ci --omit=dev` tree was built in isolation and inspected:
+
+```
+199 packages installed
+node_modules/.bin/prisma           PRESENT   ← the CLI ships
+node_modules/@prisma/client        PRESENT
+node_modules/.prisma              PRESENT   ← but only the "did you generate?" stub, 0 engine binaries
 ```
 
-**Toolchain is current:** zod **4.6.7** everywhere (the zod 3 → 4 migration was completed, not
-worked around), `@hookform/resolvers` 7.x, vitest 4.1.12, multer 2.5.0, React 19, NestJS 11.
+npm installs `prisma` in a production tree because `@prisma/client` declares it as a dependency. So the
+three advisories **are inside the runtime image**, and no `--omit=dev` flag removes them.
 
----
+### Why the finding is still low risk
+
+The vulnerable code path is `deepmerge-ts` invoked while the **CLI** parses a Prisma configuration —
+that is, during `prisma generate`, `prisma migrate` or `prisma studio`. The running API never invokes
+the CLI: it imports `@prisma/client`, which talks to the query engine binary, not to the config parser.
+Reaching the vulnerable function therefore requires an attacker to already be able to execute commands
+inside the container — at which point they hold the database credentials and this is the least of the
+problems.
+
+So the disposition is **allowlisted and monitored**, not "not present".
+
+### The gate, which is the actual deliverable
+
+`scripts/audit-runtime.mjs` maintains an explicit `BUILD_ONLY` allowlist with a reason per entry, and
+fails the build on **any** high or critical advisory that is not on it:
+
+```bash
+node scripts/audit-runtime.mjs      # ✓ exit 0 — 3 high, all allowlisted as CLI-path-only
+```
+
+That means the day a vulnerable package enters the tree through a path anyone can reach — a parser, an
+HTTP client, a template engine — CI goes red without anyone remembering to look. The allowlist is
+reviewed whenever Prisma is upgraded, and shrinks to nothing if a future Prisma release stops depending
+on the CLI from the client package.
+
+**Toolchain is current:** zod **4.6.7** everywhere (the zod 3 → 4 migration was completed, not worked
+around), `@hookform/resolvers` 7.x, vitest 4.1.12, multer 2.5.0, React 19, NestJS 11, Prisma 6.19.3.
 
 ## 8. Findings register
 

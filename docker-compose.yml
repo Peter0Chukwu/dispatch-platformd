@@ -54,14 +54,42 @@ services:
     build:
       context: .
       dockerfile: deploy/Dockerfile.api
-    image: dispatch-api:local
-    command: ['npx', 'prisma', 'migrate', 'deploy']
+      # The `migrate` target is built FROM the build stage so the Prisma CLI is a
+      # first-class, version-locked part of this image instead of a transitive
+      # dependency of @prisma/client that a future release might drop.
+      target: migrate
+    image: dispatch-api:migrate
     environment:
       DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in deploy/.env}
     depends_on:
       postgres:
         condition: service_healthy
     restart: 'no'
+
+  # Reference data: permissions, roles, a branch, service zones, ledger accounts,
+  # settings — and ONE super admin whose email/password come from the environment.
+  # Idempotent, so it is safe to re-run. It is a tool, not part of `up`, hence the
+  # profile: it only runs when asked.
+  #
+  #   docker compose run --rm seed
+  #
+  # Never run the demo seeds (scripts/seed-demo-phase*.mjs) on production: they
+  # invent riders, customers and deliveries that are not real.
+  seed:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.api
+      target: migrate
+    image: dispatch-api:migrate
+    profiles: ['tools']
+    command: ['sh', '-lc', 'cd backend && npx tsx prisma/seed.ts']
+    env_file:
+      - deploy/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
   api:
     build:
@@ -98,8 +126,12 @@ services:
     depends_on:
       api:
         condition: service_started
+    # Bound to loopback by default: TLS is terminated in front of it (Caddy on the
+    # host, or Cloudflare), so the container is not itself internet-facing. Set
+    # WEB_BIND=0.0.0.0 in deploy/.env to expose it directly instead — which you
+    # should only do while testing, or if TLS is handled by an external proxy.
     ports:
-      - '${WEB_PORT:-8080}:80'
+      - '${WEB_BIND:-127.0.0.1}:${WEB_PORT:-8080}:80'
 
 volumes:
   postgres-data:

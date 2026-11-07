@@ -35,6 +35,8 @@ export class AppConfig {
   get mapsProviderKey(): 'stub' | 'google' | 'mapbox' {
     return this.config.get('MAPS_PROVIDER', { infer: true }).toLowerCase() as 'stub' | 'google' | 'mapbox';
   }
+  /** Number of proxy hops to trust when reading X-Forwarded-For. */
+  get trustProxy(): number { return this.config.get('TRUST_PROXY', { infer: true }); }
   get storageDriver() { return this.config.get('STORAGE_DRIVER', { infer: true }); }
   get storageLocalDir() { return this.config.get('STORAGE_LOCAL_DIR', { infer: true }); }
   get googleMapsApiKey(): string | undefined {

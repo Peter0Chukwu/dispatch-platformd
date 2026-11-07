@@ -47,6 +47,17 @@ export const envSchema = z.object({
   RESEND_API_KEY: z.string().optional().default(''),
   EMAIL_FROM: z.string().default('no-reply@example.com'),
 
+  /**
+   * How many reverse proxies sit in front of the API. Express needs this to read
+   * `X-Forwarded-For` and report the real client IP; without it every request
+   * appears to come from the proxy, which turns per-IP rate limiting into one
+   * shared bucket and writes the proxy's address into the audit log.
+   *   0 = exposed directly (development)
+   *   1 = one proxy hop   (nginx in the compose network)
+   *   2 = two hops        (Caddy/Cloudflare -> nginx -> API)
+   */
+  TRUST_PROXY: z.coerce.number().int().min(0).max(10).default(1),
+
   STORAGE_DRIVER: z.enum(['LOCAL', 'S3', 'CLOUDINARY']).default('LOCAL'),
   STORAGE_LOCAL_DIR: z.string().default('./storage'),
 

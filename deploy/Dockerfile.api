@@ -1,12 +1,29 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # API image — NestJS + Prisma
 #
-# Multi-stage on purpose: the build stage carries TypeScript, the Prisma CLI and
-# every dev dependency; the runtime stage carries only what the server needs to run.
-# A smaller final image is a smaller attack surface, and it makes `npm audit` on the
-# shipped image meaningful (the CLI's dev-only findings never enter it).
+# Multi-stage on purpose: the build stage carries TypeScript and every dev
+# dependency; the runtime stage carries only production dependencies. A smaller
+# final image is a smaller attack surface and a faster pull.
+#
+# Note, because it is easy to assume otherwise: the `prisma` CLI *is* present in
+# the production tree, because @prisma/client depends on it. Verified — a
+# `npm ci --omit=dev` tree contains node_modules/.bin/prisma. Those CLI-only
+# packages are the three high `npm audit` advisories, and they are allowlisted in
+# scripts/audit-runtime.mjs on the grounds of *unreachability* (the CLI is never
+# executed by the server), not absence. See documentation/SECURITY-REVIEW.md §7.
+#
+# Four targets, not one:
+#   deps        installs everything (dev included)
+#   build       compiles shared + API, and GENERATES THE PRISMA CLIENT
+#   prod-deps   installs production dependencies only
+#   runtime     default — what serves traffic. No compiler, no CLI, runs as uid 10001
+#   migrate     the one-shot migration runner. It reuses `build` rather than
+#               `runtime` so the CLI is a first-class, version-locked part of the
+#               image rather than an accident of @prisma/client's dependency list.
+#               It also means a future Prisma release that drops that transitive
+#               dependency cannot silently break migrations at 02:00.
 # ─────────────────────────────────────────────────────────────────────────────
-FROM node:20-bookworm-slim AS base
+FROM node:22-bookworm-slim AS base
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
@@ -18,11 +35,16 @@ COPY packages/shared/package.json packages/shared/
 COPY backend/package.json backend/
 COPY frontend/package.json frontend/
 RUN npm ci --workspace @dispatch/api --workspace @dispatch/shared --include-workspace-root
+# npm hoists almost everything to the root node_modules and only creates a nested
+# one for a version conflict. The later `COPY --from` steps would fail outright if
+# those directories happened not to exist, so create them unconditionally.
+RUN mkdir -p backend/node_modules packages/shared/node_modules
 
 # ── 2. build ─────────────────────────────────────────────────────────────────
 FROM base AS build
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=deps /app/backend/node_modules ./backend/node_modules
+COPY --from=deps /app/packages/shared/node_modules ./packages/shared/node_modules
 COPY package.json package-lock.json tsconfig.base.json ./
 COPY packages/shared ./packages/shared
 COPY backend ./backend
@@ -31,6 +53,12 @@ RUN npm run build:shared \
  && npx prisma generate \
  && npm run build
 
+# ── 2b. the migration runner ─────────────────────────────────────────────────
+# `docker compose run --rm migrate` / the one-shot `migrate` service use this.
+FROM build AS migrate
+RUN chmod -R a+rX /app
+CMD ["npx", "prisma", "migrate", "deploy", "--schema", "backend/prisma/schema.prisma"]
+
 # ── 3. production dependencies only ──────────────────────────────────────────
 FROM base AS prod-deps
 COPY package.json package-lock.json ./
@@ -38,6 +66,7 @@ COPY packages/shared/package.json packages/shared/
 COPY backend/package.json backend/
 COPY frontend/package.json frontend/
 RUN npm ci --omit=dev --workspace @dispatch/api --workspace @dispatch/shared --include-workspace-root
+RUN mkdir -p backend/node_modules packages/shared/node_modules
 
 # ── 4. runtime ───────────────────────────────────────────────────────────────
 FROM base AS runtime
@@ -46,12 +75,18 @@ ENV NODE_ENV=production
 RUN useradd --system --uid 10001 --create-home dispatch
 COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=prod-deps /app/backend/node_modules ./backend/node_modules
+COPY --from=prod-deps /app/packages/shared/node_modules ./packages/shared/node_modules
+# The Prisma client is GENERATED, not installed: `prisma generate` wrote it into
+# node_modules/.prisma during the build stage, and the production dependency tree
+# does not contain it. Without this line the container starts and then dies on the
+# first query with "PrismaClientInitializationError".
+COPY --from=build /app/node_modules/.prisma ./node_modules/.prisma
 COPY --from=build /app/backend/dist ./backend/dist
 COPY --from=build /app/packages/shared/dist ./packages/shared/dist
 COPY --from=build /app/packages/shared/package.json ./packages/shared/package.json
 COPY backend/package.json ./backend/package.json
-# The generated Prisma client lives in node_modules; copy the schema + migrations so
-# `prisma migrate deploy` can run against the real database on first boot.
+# The schema comes along so operators can inspect it inside the container; the
+# migrations themselves are applied by the `migrate` target, not by this image.
 COPY backend/prisma ./backend/prisma
 RUN mkdir -p backend/storage && chown -R dispatch:dispatch /app
 USER dispatch
