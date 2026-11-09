@@ -1,0 +1,115 @@
+diff --git a/frontend/src/pages/customer/BookDeliveryPage.tsx b/frontend/src/pages/customer/BookDeliveryPage.tsx
+index 1de20ac..7c6c0f7 100644
+--- a/frontend/src/pages/customer/BookDeliveryPage.tsx
++++ b/frontend/src/pages/customer/BookDeliveryPage.tsx
+@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
+ import { PACKAGE_CATEGORIES, formatNaira } from '@dispatch/shared';
+ import { PortalShell } from '../../layouts/PortalShell';
+ import { Alert, Button, Card, CardBody, CardHeader, Field, Input, Select, Textarea, useToast } from '../../components/ui';
++import { PackagePhotoInput } from '../../components/PackagePhotoInput';
+ import { LocationPicker } from '../../components/LocationPicker';
+ import { PriceBreakdown } from '../../components/PriceBreakdown';
+ import { CUSTOMER_NAV } from './nav';
+@@ -53,6 +54,7 @@ export default function BookDeliveryPage() {
+   const [packageCategory, setPackageCategory] = useState('DOCUMENTS');
+   const [packageDescription, setPackageDescription] = useState('');
+   const [packageWeightKg, setPackageWeightKg] = useState('');
++  const [packagePhotoKey, setPackagePhotoKey] = useState<string | undefined>(undefined);
+   const [isFragile, setIsFragile] = useState(false);
+   const [specialInstructions, setSpecialInstructions] = useState('');
+   const [promoCode, setPromoCode] = useState('');
+@@ -146,6 +148,7 @@ export default function BookDeliveryPage() {
+       packageCategory,
+       packageDescription,
+       packageWeightKg: packageWeightKg ? Number(packageWeightKg) : undefined,
++      ...(packagePhotoKey ? { packagePhotoKey } : {}),
+       isFragile,
+       specialInstructions: specialInstructions || undefined,
+       ...(deliveryType === 'SCHEDULED' && scheduledFor ? { scheduledFor: new Date(scheduledFor) } : {}),
+@@ -288,6 +291,13 @@ export default function BookDeliveryPage() {
+                     </Field>
+                   </div>
+ 
++                  <Field
++                    label="Photo of the parcel"
++                    hint="Optional, but it protects you: the rider knows exactly what they are collecting, and the photo settles any damage dispute."
++                  >
++                    <PackagePhotoInput value={packagePhotoKey} onChange={setPackagePhotoKey} />
++                  </Field>
++
+                   <Field
+                     label="What is inside?"
+                     required
+diff --git a/frontend/src/pages/customer/DeliveryDetailPage.tsx b/frontend/src/pages/customer/DeliveryDetailPage.tsx
+index 4c6963e..4a4170c 100644
+--- a/frontend/src/pages/customer/DeliveryDetailPage.tsx
++++ b/frontend/src/pages/customer/DeliveryDetailPage.tsx
+@@ -1,7 +1,7 @@
+ import { useCallback, useState } from 'react';
+ import { useQueryClient } from '@tanstack/react-query';
+ import { Link, useParams } from 'react-router-dom';
+-import { DELIVERY_STATUS_LABELS, formatNaira, formatNgPhone } from '@dispatch/shared';
++import { CHAT_OPEN_STATUSES, DELIVERY_STATUS_LABELS, formatNaira, formatNgPhone } from '@dispatch/shared';
+ import { PortalShell } from '../../layouts/PortalShell';
+ import {
+   Alert,
+@@ -18,6 +18,7 @@ import {
+ import { PriceBreakdown } from '../../components/PriceBreakdown';
+ import { PaymentPanel } from '../../components/PaymentPanel';
+ import { DeliveryTrackingCard } from '../../components/DeliveryTrackingCard';
++import { ContactCard } from '../../components/ContactCard';
+ import { CUSTOMER_NAV } from './nav';
+ import { useCancelDelivery, useDelivery } from '../../hooks/useDeliveries';
+ import { useApiError } from '../../contexts/AuthContext';
+@@ -134,6 +135,13 @@ export default function DeliveryDetailPage() {
+ 
+             <DeliveryTrackingCard deliveryId={delivery.id} status={delivery.status} />
+ 
++            <ContactCard
++              deliveryId={delivery.id}
++              perspective="CUSTOMER"
++              counterpartName={delivery.riderFirstName ?? undefined}
++              enabled={(CHAT_OPEN_STATUSES as readonly string[]).includes(delivery.status)}
++            />
++
+             <div className="grid gap-5 lg:grid-cols-2">
+               <Card>
+                 <CardHeader title="Price you were charged" subtitle="Frozen at booking — later rule changes cannot alter it" />
+diff --git a/frontend/src/pages/rider/ActiveJobPage.tsx b/frontend/src/pages/rider/ActiveJobPage.tsx
+index 419e839..19f6e53 100644
+--- a/frontend/src/pages/rider/ActiveJobPage.tsx
++++ b/frontend/src/pages/rider/ActiveJobPage.tsx
+@@ -1,6 +1,7 @@
+ import { useCallback, useMemo, useState } from 'react';
+ import { useQueryClient } from '@tanstack/react-query';
+ import { useNavigate, useSearchParams } from 'react-router-dom';
++import { CHAT_OPEN_STATUSES } from '@dispatch/shared';
+ import { PortalShell } from '../../layouts/PortalShell';
+ import {
+   Alert,
+@@ -20,6 +21,8 @@ import {
+   useToast,
+ } from '../../components/ui';
+ import { RIDER_NAV } from './nav';
++import { DeliveryPhoto } from '../../components/DeliveryPhoto';
++import { ContactCard } from '../../components/ContactCard';
+ import { LocationReporter } from '../../components/LocationReporter';
+ import { LIVE_EVENTS, useLiveEvent } from '../../lib/live';
+ import { useApiError } from '../../contexts/AuthContext';
+@@ -275,9 +278,16 @@ export default function ActiveJobPage() {
+               <Badge tone="neutral">{data.package.weightKg ? `${data.package.weightKg} kg` : 'weight not stated'}</Badge>
+               {data.package.isFragile && <Badge tone="warning">fragile — handle with care</Badge>}
+             </div>
++            <DeliveryPhoto deliveryId={data.id} className="h-44 w-full rounded-xl object-cover" />
+           </CardBody>
+         </Card>
+ 
++        <ContactCard
++          deliveryId={data.id}
++          perspective="RIDER"
++          enabled={(CHAT_OPEN_STATUSES as readonly string[]).includes(data.status)}
++        />
++
+         {next && (
+           <Card>
+             <CardBody className="space-y-3">

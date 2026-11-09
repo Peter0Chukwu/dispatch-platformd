@@ -35,6 +35,8 @@ export interface DeliveryTimelineEntry {
 }
 
 export interface Delivery {
+  /** Present on the customer's own view once a rider is assigned. Never a phone number. */
+  riderFirstName?: string | null;
   id: string;
   reference: string;
   status: string;

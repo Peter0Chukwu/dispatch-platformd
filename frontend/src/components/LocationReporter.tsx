@@ -106,7 +106,7 @@ export function LocationReporter({ deliveryId }: { deliveryId?: string | null })
   if (state === 'denied') {
     return (
       <Alert tone="warning" title="Location permission is blocked">
-        Dispatch cannot see you, so you will not receive offers. Allow location for this site in your browser
+        We cannot see you, so you will not receive any offers. Allow location for this site in your browser
         settings, then{' '}
         <button type="button" className="font-semibold underline" onClick={() => setAttempt((value) => value + 1)}>
           try again

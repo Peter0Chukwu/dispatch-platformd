@@ -104,7 +104,7 @@ export class VerificationService {
     await this.messaging.sendSms({
       to: user.phone,
       kind: 'PHONE_OTP',
-      body: `Your Dispatch verification code is ${code}. It expires in 10 minutes. Never share it.`,
+      body: `Your TWL verification code is ${code}. It expires in 10 minutes. Never share it.`,
     });
     return {
       ...(this.exposeCodes ? { devCode: code } : {}),

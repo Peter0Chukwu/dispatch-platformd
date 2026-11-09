@@ -12,7 +12,7 @@ export const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().positive().default(4000),
   API_PREFIX: z.string().default('api/v1'),
-  APP_NAME: z.string().default('Dispatch Platform'),
+  APP_NAME: z.string().default('Traders Welfare Logistics'),
   APP_TIMEZONE: z.string().default('Africa/Lagos'),
 
   DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
@@ -40,8 +40,10 @@ export const envSchema = z.object({
   GOOGLE_MAPS_API_KEY: z.string().optional().default(''),
 
   SMS_MODE: z.enum(['CONSOLE', 'TERMII']).default('CONSOLE'),
+  /** Masked voice calling. CONSOLE = not connected yet; TERMII = number masking live. */
+  VOICE_MODE: z.enum(['CONSOLE', 'TERMII']).default('CONSOLE'),
   TERMII_API_KEY: z.string().optional().default(''),
-  TERMII_SENDER_ID: z.string().default('Dispatch'),
+  TERMII_SENDER_ID: z.string().default('TWL'),
 
   EMAIL_MODE: z.enum(['CONSOLE', 'RESEND']).default('CONSOLE'),
   RESEND_API_KEY: z.string().optional().default(''),

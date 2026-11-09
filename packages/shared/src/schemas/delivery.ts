@@ -64,6 +64,36 @@ export const createDeliverySchema = z.object({
   );
 export type CreateDeliveryInput = z.infer<typeof createDeliverySchema>;
 
+/** POST /deliveries/package-photo — photograph the parcel before booking, get a key back. */
+export const packagePhotoSchema = z.object({
+  mimeType: z.enum(['image/jpeg', 'image/png', 'image/webp']),
+  base64: z.string().min(16, 'Attach a photo of the parcel'),
+});
+export type PackagePhotoInput = z.infer<typeof packagePhotoSchema>;
+
+/**
+ * CHAT — the customer and the rider talking without either learning the other's
+ * phone number. The guard below is the promise kept in code.
+ */
+export const MESSAGE_MAX_LENGTH = 1000;
+const PHONE_LIKE = /(?:\+?234|0)[789][01]\d{8}/;
+
+export const sendMessageSchema = z.object({
+  body: z
+    .string()
+    .trim()
+    .min(1, 'Type a message')
+    .max(MESSAGE_MAX_LENGTH, `Keep it under ${MESSAGE_MAX_LENGTH} characters`)
+    .refine((value) => !PHONE_LIKE.test(value.replace(/[\s()-]/g, '')),
+      { message: 'Phone numbers cannot be shared here. Use the Call button to reach each other.' }),
+});
+export type SendMessageInput = z.infer<typeof sendMessageSchema>;
+
+/** Statuses in which the two parties may still talk to each other. */
+export const CHAT_OPEN_STATUSES = [
+  'ASSIGNED', 'ACCEPTED', 'ARRIVED_AT_PICKUP', 'PICKED_UP', 'IN_TRANSIT', 'ARRIVED_AT_DESTINATION',
+] as const;
+
 export const cancelDeliverySchema = z.object({
   reason: z.string().trim().min(5, 'Give a short reason').max(300),
 });

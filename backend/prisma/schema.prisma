@@ -759,6 +759,8 @@ model Delivery {
   locations       RiderLocation[]
   promoRedemption PromoRedemption?
   journalEntries  JournalEntry[]
+  messages        Message[]
+  callSessions    CallSession[]
   cancelledBy     User?                   @relation("DeliveryCanceller", fields: [cancelledById], references: [id])
 
   @@index([customerId, createdAt(sort: Desc)])
@@ -1363,4 +1365,51 @@ model SystemSetting {
   updatedAt   DateTime @updatedAt
 
   @@map("system_settings")
+}
+
+/// A message between the customer who booked and the rider carrying it.
+///
+/// There is no direct phone number exchange anywhere in this flow: chat is the
+/// reason both parties can stay in touch without either learning the other's
+/// number. Rows are append-only from the app's point of view — nothing edits a
+/// message after it is sent, because it is evidence of what was said.
+model Message {
+  id           String   @id @default(uuid()) @db.Uuid
+  deliveryId   String   @db.Uuid
+  /// CUSTOMER | RIDER — which side of the delivery spoke.
+  senderType   String
+  senderUserId String   @db.Uuid
+  body         String   @db.VarChar(1000)
+  readAt       DateTime?
+  createdAt    DateTime @default(now())
+
+  delivery Delivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+
+  @@index([deliveryId, createdAt])
+  @@map("messages")
+}
+
+/// A masked-call pairing for one delivery.
+///
+/// The customer and the rider each dial the same proxy number and the provider
+/// bridges them, so neither ever sees the other's real number. One live session
+/// per delivery; it is released when the delivery ends or when it expires, and
+/// the release is recorded rather than deleted so billing can be reconciled.
+model CallSession {
+  id           String    @id @default(uuid()) @db.Uuid
+  deliveryId   String    @db.Uuid
+  /// The number both parties dial. Issued by the voice provider.
+  proxyNumber  String
+  /// Provider-side identifier, needed to release the pairing.
+  providerRef  String?
+  provider     String    @default("CONSOLE")
+  expiresAt    DateTime
+  releasedAt   DateTime?
+  createdAt    DateTime  @default(now())
+
+  delivery Delivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+
+  @@index([deliveryId])
+  @@index([expiresAt])
+  @@map("call_sessions")
 }

@@ -389,7 +389,7 @@ export class WithdrawalsService {
           },
           body: JSON.stringify({
             source: 'balance',
-            reason: `Dispatch rider payout ${withdrawal.id.slice(0, 8)}`,
+            reason: `TWL rider payout ${withdrawal.id.slice(0, 8)}`,
             amount: Number(withdrawal.netAmountKobo),
             recipient: {
               type: 'nuban',

@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { PACKAGE_CATEGORIES, formatNaira } from '@dispatch/shared';
 import { PortalShell } from '../../layouts/PortalShell';
 import { Alert, Button, Card, CardBody, CardHeader, Field, Input, Select, Textarea, useToast } from '../../components/ui';
+import { PackagePhotoInput } from '../../components/PackagePhotoInput';
 import { LocationPicker } from '../../components/LocationPicker';
 import { PriceBreakdown } from '../../components/PriceBreakdown';
 import { CUSTOMER_NAV } from './nav';
@@ -53,6 +54,7 @@ export default function BookDeliveryPage() {
   const [packageCategory, setPackageCategory] = useState('DOCUMENTS');
   const [packageDescription, setPackageDescription] = useState('');
   const [packageWeightKg, setPackageWeightKg] = useState('');
+  const [packagePhotoKey, setPackagePhotoKey] = useState<string | undefined>(undefined);
   const [isFragile, setIsFragile] = useState(false);
   const [specialInstructions, setSpecialInstructions] = useState('');
   const [promoCode, setPromoCode] = useState('');
@@ -146,6 +148,7 @@ export default function BookDeliveryPage() {
       packageCategory,
       packageDescription,
       packageWeightKg: packageWeightKg ? Number(packageWeightKg) : undefined,
+      ...(packagePhotoKey ? { packagePhotoKey } : {}),
       isFragile,
       specialInstructions: specialInstructions || undefined,
       ...(deliveryType === 'SCHEDULED' && scheduledFor ? { scheduledFor: new Date(scheduledFor) } : {}),
@@ -287,6 +290,13 @@ export default function BookDeliveryPage() {
                       />
                     </Field>
                   </div>
+
+                  <Field
+                    label="Photo of the parcel"
+                    hint="Optional, but it protects you: the rider knows exactly what they are collecting, and the photo settles any damage dispute."
+                  >
+                    <PackagePhotoInput value={packagePhotoKey} onChange={setPackagePhotoKey} />
+                  </Field>
 
                   <Field
                     label="What is inside?"

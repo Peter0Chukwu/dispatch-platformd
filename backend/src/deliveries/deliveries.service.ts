@@ -13,6 +13,8 @@ import { AppError } from '../common/errors/app-error';
 import { PricingService, type Quote } from '../pricing/pricing.service';
 import { DispatchService } from '../dispatch/dispatch.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
+import { StorageService } from '../storage/storage.service';
+import type { AuthPrincipal } from '../auth/auth.types';
 import { RT } from '../realtime/realtime.types';
 
 const hashOtp = (value: string) => createHash('sha256').update(value).digest('hex');
@@ -144,7 +146,60 @@ export class DeliveriesService {
     private readonly pricing: PricingService,
     private readonly dispatch: DispatchService,
     private readonly realtime: RealtimeGateway,
+    private readonly storage: StorageService,
   ) {}
+
+  /* ─────────────────────── parcel photo (pre-booking) ─────────────────────── */
+
+  /** Store the customer's photo of the parcel and return its key. */
+  async uploadPackagePhoto(customerId: string, input: { mimeType: string; base64: string }) {
+    const stored = await this.storage.saveBase64({
+      keyPrefix: `packages/${customerId}`,
+      fileName: 'parcel',
+      mimeType: input.mimeType,
+      base64: input.base64,
+    });
+    return { packagePhotoKey: stored.key, sizeBytes: stored.sizeBytes };
+  }
+
+  /**
+   * Read the parcel photo back for exactly the people entitled to it: the
+   * customer who booked, the rider carrying it (or currently offered it), and
+   * staff holding delivery:read. Everyone else gets NOT FOUND, never FORBIDDEN:
+   * a 403 would confirm the delivery exists, which is itself a leak.
+   */
+  async readPackagePhoto(user: AuthPrincipal, deliveryId: string) {
+    const delivery = await this.prisma.delivery.findUnique({
+      where: { id: deliveryId },
+      select: { id: true, customerId: true, riderId: true, packagePhotoKey: true },
+    });
+    if (!delivery?.packagePhotoKey) throw AppError.notFound('Parcel photo not found');
+
+    let allowed = false;
+    if (user.type === 'CUSTOMER') {
+      allowed = delivery.customerId === user.customerId;
+    } else if (user.type === 'RIDER' && user.riderId) {
+      if (delivery.riderId === user.riderId) {
+        allowed = true;
+      } else {
+        const offer = await this.prisma.deliveryAssignment.findFirst({
+          where: { deliveryId, riderId: user.riderId, status: 'OFFERED', expiresAt: { gt: new Date() } },
+          select: { id: true },
+        });
+        allowed = Boolean(offer);
+      }
+    } else if (user.type === 'STAFF') {
+      allowed = user.permissions.includes('delivery:read');
+    }
+
+    if (!allowed) throw AppError.notFound('Parcel photo not found');
+
+    const key = delivery.packagePhotoKey;
+    const buffer = await this.storage.readBuffer(key);
+    const ext = key.split('.').pop()?.toLowerCase();
+    const mimeType = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
+    return { buffer, mimeType };
+  }
 
   /** Price preview. No writes — safe to call on every pin drag. */
   async quote(customerId: string | undefined, input: QuoteDeliveryInput): Promise<Quote> {
@@ -364,10 +419,19 @@ export class DeliveriesService {
   async getMine(customerId: string, id: string) {
     const delivery = await this.prisma.delivery.findFirst({
       where: { id, customerId },
-      include: { statusHistory: { orderBy: { createdAt: 'asc' } } },
+      include: {
+        statusHistory: { orderBy: { createdAt: 'asc' } },
+        // The rider's FIRST NAME only. The customer needs to know who is
+        // carrying the parcel and who is messaging them; the phone number stays
+        // on the server, which is the whole point of the masked contact card.
+        rider: { select: { user: { select: { firstName: true } } } },
+      },
     });
     if (!delivery) throw AppError.notFound('Delivery');
-    return toDeliveryDto({ ...delivery, status: delivery.status as DeliveryStatus });
+    return {
+      ...toDeliveryDto({ ...delivery, status: delivery.status as DeliveryStatus }),
+      riderFirstName: delivery.rider?.user.firstName ?? null,
+    };
   }
 
   /** Staff list across every customer. Paginated; the permission gate is the guard. */

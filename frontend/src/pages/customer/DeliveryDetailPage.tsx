@@ -1,7 +1,7 @@
 import { useCallback, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router-dom';
-import { DELIVERY_STATUS_LABELS, formatNaira, formatNgPhone } from '@dispatch/shared';
+import { CHAT_OPEN_STATUSES, DELIVERY_STATUS_LABELS, formatNaira, formatNgPhone } from '@dispatch/shared';
 import { PortalShell } from '../../layouts/PortalShell';
 import {
   Alert,
@@ -18,6 +18,7 @@ import {
 import { PriceBreakdown } from '../../components/PriceBreakdown';
 import { PaymentPanel } from '../../components/PaymentPanel';
 import { DeliveryTrackingCard } from '../../components/DeliveryTrackingCard';
+import { ContactCard } from '../../components/ContactCard';
 import { CUSTOMER_NAV } from './nav';
 import { useCancelDelivery, useDelivery } from '../../hooks/useDeliveries';
 import { useApiError } from '../../contexts/AuthContext';
@@ -133,6 +134,13 @@ export default function DeliveryDetailPage() {
             />
 
             <DeliveryTrackingCard deliveryId={delivery.id} status={delivery.status} />
+
+            <ContactCard
+              deliveryId={delivery.id}
+              perspective="CUSTOMER"
+              counterpartName={delivery.riderFirstName ?? undefined}
+              enabled={(CHAT_OPEN_STATUSES as readonly string[]).includes(delivery.status)}
+            />
 
             <div className="grid gap-5 lg:grid-cols-2">
               <Card>

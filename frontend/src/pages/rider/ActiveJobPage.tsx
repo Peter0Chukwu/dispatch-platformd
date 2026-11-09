@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+import { CHAT_OPEN_STATUSES } from '@dispatch/shared';
 import { PortalShell } from '../../layouts/PortalShell';
 import {
   Alert,
@@ -20,6 +21,8 @@ import {
   useToast,
 } from '../../components/ui';
 import { RIDER_NAV } from './nav';
+import { DeliveryPhoto } from '../../components/DeliveryPhoto';
+import { ContactCard } from '../../components/ContactCard';
 import { LocationReporter } from '../../components/LocationReporter';
 import { LIVE_EVENTS, useLiveEvent } from '../../lib/live';
 import { useApiError } from '../../contexts/AuthContext';
@@ -275,8 +278,15 @@ export default function ActiveJobPage() {
               <Badge tone="neutral">{data.package.weightKg ? `${data.package.weightKg} kg` : 'weight not stated'}</Badge>
               {data.package.isFragile && <Badge tone="warning">fragile — handle with care</Badge>}
             </div>
+            <DeliveryPhoto deliveryId={data.id} className="h-44 w-full rounded-xl object-cover" />
           </CardBody>
         </Card>
+
+        <ContactCard
+          deliveryId={data.id}
+          perspective="RIDER"
+          enabled={(CHAT_OPEN_STATUSES as readonly string[]).includes(data.status)}
+        />
 
         {next && (
           <Card>

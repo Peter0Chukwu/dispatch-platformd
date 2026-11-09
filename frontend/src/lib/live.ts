@@ -21,6 +21,8 @@ export const LIVE_EVENTS = {
   OFFER_REVOKED: 'offer:revoked',
   DELIVERY_NEW: 'delivery:new',
   DELIVERY_UPDATED: 'delivery:updated',
+  /** A chat message arrived on a delivery this client is party to. */
+  MESSAGE_NEW: 'message:new',
   /** A rider reported a position on an active delivery (Phase 8). */
   TRACKING_PING: 'tracking:update',
   DISPATCH_EXHAUSTED: 'dispatch:exhausted',

@@ -38,8 +38,8 @@ export function PortalShell({
             </svg>
           </span>
           <div>
-            <p className="text-sm font-bold text-ink-900">Traders Welfare</p>
-            <p className="text-[11px] font-medium uppercase tracking-wide text-ink-400">Logistics . {portal}</p>
+            <p className="text-sm font-bold text-ink-900">Traders Welfare Logistics</p>
+            <p className="text-[11px] font-medium uppercase tracking-wide text-ink-400">{portal} portal</p>
           </div>
         </div>
 
@@ -82,7 +82,7 @@ export function PortalShell({
         {/* Top bar */}
         <header className="sticky top-0 z-30 flex items-center justify-between gap-3 border-b border-ink-200 bg-white/95 px-4 py-3 backdrop-blur sm:px-6">
           <div className="flex items-center gap-2">
-            <span className="text-sm font-semibold text-ink-900 lg:hidden">Traders Welfare Logistics · {portal}</span>
+            <span className="text-sm font-semibold text-ink-900 lg:hidden">TWL · {portal}</span>
             {profile?.isSuperAdmin && <Badge tone="brand">Super admin</Badge>}
             {profile?.roles
               ?.filter((role) => !(role === 'SUPER_ADMIN' && profile?.isSuperAdmin))

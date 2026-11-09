@@ -3,7 +3,7 @@ import type { Config } from 'tailwindcss';
 /**
  * DESIGN SYSTEM TOKENS
  * ─────────────────────────────────────────────────────────────────────────────
- * brand  : deep navy — the operational, trustworthy base (sidebars, headers)
+ * brand  : deep green — the operational, trustworthy base (sidebars, headers)
  * accent : logistics green — action, success, "moving" states
  * The full scale exists so components never hardcode hex values.
  */

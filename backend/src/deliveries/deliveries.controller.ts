@@ -3,8 +3,10 @@ import {
   DeliveryStatus,
   cancelDeliverySchema,
   createDeliverySchema,
+  packagePhotoSchema,
   quoteDeliverySchema,
   type CreateDeliveryInput,
+  type PackagePhotoInput,
   type QuoteDeliveryInput,
 } from '@dispatch/shared';
 import type { z } from 'zod';
@@ -34,6 +36,16 @@ export class DeliveriesController {
     @Body(new ZodValidationPipe(quoteDeliverySchema)) input: QuoteDeliveryInput,
   ) {
     return this.deliveries.quote(customerId, input);
+  }
+
+  /** Photograph the parcel BEFORE booking; the booking then references the key. */
+  @Post('package-photo')
+  @RateLimit({ points: 20, windowSeconds: 60, keyBy: 'ip+route' })
+  async uploadPackagePhoto(
+    @CurrentUser('customerId') customerId: string,
+    @Body(new ZodValidationPipe(packagePhotoSchema)) input: PackagePhotoInput,
+  ) {
+    return this.deliveries.uploadPackagePhoto(customerId, input);
   }
 
   /** Create a booking. The price is recomputed server-side — the client never sends one. */

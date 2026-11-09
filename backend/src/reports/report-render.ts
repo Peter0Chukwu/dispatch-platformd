@@ -79,7 +79,7 @@ export function renderCsv(table: ReportTable): Buffer {
 /* ───────────────────────────────── PDF ───────────────────────────────── */
 
 const PAGE_MARGIN = 36;
-const NAVY = '#0B1F3A';
+const NAVY = '#0C3627';
 const INK = '#1F2937';
 const MUTED = '#64748B';
 const LINE = '#E2E8F0';
@@ -94,7 +94,7 @@ export async function renderPdf(table: ReportTable): Promise<Buffer> {
   const contentWidth = pageWidth - PAGE_MARGIN * 2;
 
   /* header */
-  doc.fillColor(NAVY).font('Helvetica-Bold').fontSize(18).text('Dispatch Platform', PAGE_MARGIN, PAGE_MARGIN);
+  doc.fillColor(NAVY).font('Helvetica-Bold').fontSize(18).text('Traders Welfare Logistics', PAGE_MARGIN, PAGE_MARGIN);
   doc.font('Helvetica-Bold').fontSize(14).fillColor(INK).text(table.title, PAGE_MARGIN, PAGE_MARGIN + 26);
   doc.font('Helvetica').fontSize(9).fillColor(MUTED).text(table.subtitle, PAGE_MARGIN, PAGE_MARGIN + 46, { width: contentWidth });
 

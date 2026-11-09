@@ -221,8 +221,9 @@ describe('Phase 6 — the dispatch engine', () => {
 
     it('records the round even when there is nobody to ask, so the search can widen', async () => {
       const customer = await registerAndActivateCustomer(app);
-      // A rider 15 km away: outside round 1's 5 km, inside round 3's 25 km.
-      const distant = await onlineRider({ km: 15 });
+      // A rider 25 km away: outside round 1's 10 km and round 2's 20 km,
+      // inside round 3's 35 km.
+      const distant = await onlineRider({ km: 25 });
 
       const delivery = await book(customer.accessToken);
       expect(await offersFor(delivery.id)).toHaveLength(0);
@@ -231,13 +232,13 @@ describe('Phase 6 — the dispatch engine', () => {
       expect(afterFirst.dispatchRound).toBe(1);
       expect(afterFirst.status).toBe('PENDING');
 
-      // Round 2 reaches 12 km — still not far enough.
+      // Round 2 reaches 20 km — still not far enough.
       await dispatch.tick();
       let live = await offersFor(delivery.id);
       expect(live).toHaveLength(0);
       expect((await prisma.delivery.findUniqueOrThrow({ where: { id: delivery.id } })).dispatchRound).toBe(2);
 
-      // Round 3 reaches 25 km and finds them.
+      // Round 3 reaches 35 km and finds them.
       await dispatch.tick();
       live = await offersFor(delivery.id);
       expect(live).toHaveLength(1);
@@ -562,9 +563,9 @@ describe('Phase 6 — the dispatch engine', () => {
         dispatch: { round: number; radiusLabel: string; offersOut: number; askedCount: number; exhausted: boolean };
       };
       // Booking ran round 1 and found nobody online — that empty round still counts,
-      // so the board shows the search already widened to round 2 (12 km).
+      // so the board shows the search already widened to round 2 (20 km).
       expect(waiting.dispatch.round).toBe(2);
-      expect(waiting.dispatch.radiusLabel).toBe('12 km');
+      expect(waiting.dispatch.radiusLabel).toBe('20 km');
       expect(waiting.dispatch.offersOut).toBe(0);
       expect(waiting.dispatch.exhausted).toBe(false);
       expect(board.body.summary.batchSize).toBeGreaterThan(0);

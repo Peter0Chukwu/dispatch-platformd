@@ -23,7 +23,7 @@ export function AuthLayout({
               <circle cx="22" cy="25" r="1.6" fill="currentColor" stroke="none" />
             </svg>
           </span>
-          <span className="text-lg font-bold text-white">Dispatch Platform</span>
+          <span className="text-lg font-bold text-white">Traders Welfare Logistics</span>
         </Link>
 
         <div>
@@ -56,7 +56,7 @@ export function AuthLayout({
       <main className="flex min-h-screen flex-col justify-center px-5 py-10 sm:px-10">
         <div className="mx-auto w-full max-w-md">
           <Link to="/" className="mb-8 inline-flex items-center gap-2 text-sm font-medium text-brand-700 lg:hidden">
-            ← Dispatch Platform
+            ← Traders Welfare Logistics
           </Link>
           <h1 className="text-2xl font-bold tracking-tight text-ink-900">{title}</h1>
           {subtitle && <p className="mt-1.5 text-sm text-ink-500">{subtitle}</p>}

@@ -19,7 +19,7 @@ const LOCATION_FRESHNESS_MINUTES = 10;
  * reaches further out. The job is worth more to the business than the petrol is
  * worth to the rider, so "nobody within 5 km" must never mean "nobody at all".
  */
-const RADIUS_SCHEDULE_KM = [5, 12, 25, Number.POSITIVE_INFINITY] as const;
+const RADIUS_SCHEDULE_KM = [10, 20, 35, Number.POSITIVE_INFINITY] as const;
 
 /**
  * THE DISPATCH ENGINE
