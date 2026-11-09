@@ -49,11 +49,11 @@ export default function TrackPage() {
       <div className="mx-auto max-w-2xl space-y-4">
         <header className="flex items-center justify-between">
           <div>
-            <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">Dispatch · live tracking</p>
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">Traders Welfare Logistic · live tracking</p>
             <h1 className="text-xl font-bold text-ink-900">Where is my parcel?</h1>
           </div>
           <Link to="/" className="text-xs font-medium text-brand-700 hover:underline">
-            dispatch.app
+            traderswelfarelogistics.app
           </Link>
         </header>
 

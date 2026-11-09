@@ -61,8 +61,8 @@ export default function LandingPage() {
               </svg>
             </span>
             <div>
-              <p className="text-lg font-bold text-white">Dispatch Platform</p>
-              <p className="text-xs text-brand-300">Rider &amp; logistics management · Lagos, Nigeria</p>
+              <p className="text-lg font-bold text-white">Traders Welfare Logistics</p>
+              <p className="text-xs text-brand-300">Rider &amp; logistics management · Edo, Nigeria</p>
             </div>
           </div>
 
