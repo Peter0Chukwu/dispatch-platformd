@@ -1,5 +1,11 @@
 # Nginx in front of the SPA.
 #
+# This file is a TEMPLATE. It is copied to /etc/nginx/templates/ and rendered to
+# /etc/nginx/conf.d/default.conf at start-up, with ${API_UPSTREAM} taken from the
+# environment. Only that one variable is substituted: nginx's own $uri, $host and
+# $http_upgrade are left alone because envsubst is given only the variables that
+# actually exist in the container.
+#
 # Everything the browser needs is same-origin: the static app, the API under
 # /api/v1, and the socket under /socket.io. That is what keeps the HttpOnly
 # refresh cookie first-party and lets CORS stay a closed list.
@@ -22,8 +28,12 @@
 # Kept at the top level because `include` inside `server` is allowed but these
 # must be re-applied per location.
 
+# The API's address comes from the environment, so the same image works on a
+# compose network (api:4000, the default), on a hosted platform where services
+# find each other by an internal DNS name, or beside an API on another machine.
+# nginx renders this file through envsubst at container start; see Dockerfile.web.
 upstream dispatch_api {
-    server api:4000;
+    server ${API_UPSTREAM};
     keepalive 32;
 }
 

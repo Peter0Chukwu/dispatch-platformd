@@ -1,63 +1,30 @@
-TWL DISPATCH — BENIN CITY
-=========================
+TWL — SMALL DEPLOY FIX (2 files)
+================================
 
-What this changes
------------------
-The platform no longer starts from Lagos. It starts from Benin City, Edo State.
+Why you are extracting this
+---------------------------
+The website container needs to know where the API container lives. Up to now that
+address was baked in as "api:4000", which only works when both run on the same
+Docker network. On the hosting platform each container gets its own internal
+address, so the address is now a setting instead.
 
-  Branch        BEN-01 · Benin City HQ · Ring Road (6.3329, 5.6222)
-  Zones         BEN-CENTRAL   Benin City Centre (Ring Road, New Benin, GRA)
-                BEN-UGBOWO    Ugbowo / UNIBEN / UBTH / Uselu
-                BEN-IKPOBA    Ikpoba Hill / Aduwawa
-                BEN-SAPELE    Sapele Road / Airport Road
-  Booking form  12 real Benin City streets instead of 12 Lagos ones
+What to do
+----------
+1. Extract into your project folder (C:\Users\USER\Documents\dispatch-platform).
+   Say YES to replace.
 
-Prices did NOT change. Same base fee, same per-km, same everything. This only
-moves the map. You can still edit every figure on the admin Pricing screen.
+2. ONE FILE MUST BE DELETED — your unzip will not delete it for you:
 
-How to apply it (3 steps)
--------------------------
-1. Extract this zip into your project folder. Say YES to replace.
-   One file is deliberately removed: frontend/src/lib/lagos-locations.ts
-   Delete it yourself if your unzip does not: it is replaced by
-   frontend/src/lib/benin-city-locations.ts
+       C:\Users\USER\Documents\dispatch-platform\deploy\nginx.conf
 
-2. In the backend folder, run the seed once:
+   It has moved to: deploy\nginx-templates\default.conf.template
+   If the old file stays behind, the new one is ignored. Delete it.
 
-       cd backend
-       npm run db:seed
+3. Commit and push:
 
-   You should see:
+       git add -A
+       git commit -m "deploy: configurable API address for the web image"
+       git push
 
-       branch BEN-01 — Benin City HQ
-       zones  BEN-CENTRAL, BEN-UGBOWO, BEN-IKPOBA, BEN-SAPELE
-
-   Anything left over from Lagos is switched OFF automatically (the row is kept,
-   so old deliveries still make sense). You do not need to delete anything.
-
-3. Restart your two dev windows (backend and frontend), then hard-refresh the
-   browser (Ctrl + Shift + R). Book a delivery: the saved locations are now
-   Ring Road, Ugbowo, Ikpoba Hill, Sapele Road and so on.
-
-If you are starting from a brand new database
-----------------------------------------------
-Just run, in the backend folder:
-
-    npx prisma migrate deploy
-    npm run db:seed
-
-What is in here
----------------
-backend/     the branch + zone data, the seed upgrade logic, the Benin City
-             place table, and the small change that stops a retired branch
-             from receiving new accounts
-frontend/    the new saved-locations file and the copy that said Lagos
-docs/, documentation/   the pages that named Lagos zones
-scripts/     the demo and screenshot scripts, moved to Benin City coordinates
-             (dev-only; never run on a live server)
-
-Tests
------
-273 of 273 pass. The integration tests were written against Lagos coordinates,
-so a TEST-ONLY fixture zone keeps them inside the service area. It is never
-loaded by the real seed.
+Nothing else changes. Your local Docker setup still works exactly as before,
+because the setting defaults to api:4000.
