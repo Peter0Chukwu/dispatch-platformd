@@ -46,7 +46,7 @@ export class MapsService {
    *
    * With Google configured this is Places Autocomplete. Without a key there is no
    * honest way to invent a geocoder, so the stub answers from the platform's own
-   * table of real Lagos locations — every one of them has surveyed-ish coordinates
+   * table of real Benin City locations — every one of them has surveyed-ish coordinates
    * that pricing and dispatch already use. The result says `source: 'STUB'`, and the
    * UI says so too.
    */
@@ -141,7 +141,7 @@ export class MapsService {
       }
     }
 
-    // Stub: name the nearest known Lagos location, and say how far away it is.
+    // Stub: name the nearest known Benin City location, and say how far away it is.
     const nearest = nearestStubLocation(point);
     if (!nearest) return null;
     const km = haversineKm(point, { lat: nearest.lat, lng: nearest.lng });
@@ -233,25 +233,23 @@ export class MapsService {
 /* ────────────────────────── the stub place table ────────────────────────── */
 
 /**
- * Real Lagos locations with coordinates the platform already prices against.
+ * Real Benin City locations with coordinates the platform already prices against.
  * Kept server-side so the API can answer without a maps key, and so a booking made
  * with `MAPS_PROVIDER=STUB` still records a true position rather than a fake one.
  */
 const STUB_PLACES: Array<{ id: string; name: string; address: string; landmark: string; lat: number; lng: number }> = [
-  { id: 'vi-adeola', name: 'Victoria Island — Adeola Odeku', address: '12 Adeola Odeku Street, Victoria Island, Lagos', landmark: 'Opposite Eko Hotel roundabout', lat: 6.4281, lng: 3.4219 },
-  { id: 'vi-ahmadu', name: 'Victoria Island — Ahmadu Bello Way', address: '4 Ahmadu Bello Way, Victoria Island, Lagos', landmark: 'Near Bar Beach Towers', lat: 6.4262, lng: 3.4205 },
-  { id: 'ikoyi-awolowo', name: 'Ikoyi — Awolowo Road', address: '28 Awolowo Road, Ikoyi, Lagos', landmark: 'By Falomo roundabout', lat: 6.4498, lng: 3.4283 },
-  { id: 'island-marina', name: 'Lagos Island — Marina', address: '5 Broad Street, Lagos Island, Lagos', landmark: 'Beside the old Secretariat', lat: 6.455, lng: 3.3958 },
-  { id: 'yaba-commercial', name: 'Yaba — Commercial Avenue', address: '9 Commercial Avenue, Yaba, Lagos', landmark: 'Opposite Tejuosho market', lat: 6.5095, lng: 3.3711 },
-  { id: 'surulere-bode', name: 'Surulere — Bode Thomas', address: '5 Bode Thomas Street, Surulere, Lagos', landmark: 'Near Adeniran Ogunsanya', lat: 6.4969, lng: 3.3481 },
-  { id: 'gbagada-express', name: 'Gbagada — Expressway', address: '17 Gbagada Expressway, Gbagada, Lagos', landmark: 'Beside the pedestrian bridge', lat: 6.556, lng: 3.383 },
-  { id: 'ikeja-alausa', name: 'Ikeja — Alausa Secretariat', address: '8 Obafemi Awolowo Way, Ikeja, Lagos', landmark: 'Opposite Alausa Secretariat', lat: 6.6134, lng: 3.3539 },
-  { id: 'maryland-mall', name: 'Maryland — Mall', address: '1 Maryland Mall, Ikorodu Road, Lagos', landmark: 'Maryland Mall entrance', lat: 6.5719, lng: 3.3672 },
-  { id: 'lekki-phase1', name: 'Lekki — Phase 1', address: '16 Admiralty Way, Lekki Phase 1, Lagos', landmark: 'Near Lekki Phase 1 roundabout', lat: 6.441, lng: 3.474 },
-  { id: 'ajah-addo', name: 'Ajah — Addo Road', address: '22 Addo Road, Ajah, Lagos', landmark: 'By Ajah bus terminal', lat: 6.4692, lng: 3.5658 },
-  { id: 'sangotedo-novare', name: 'Sangotedo — Novare Mall', address: 'Novare Mall, Sangotedo, Lekki-Epe Expressway', landmark: 'Novare Mall main gate', lat: 6.4667, lng: 3.6 },
-  { id: 'apapa-wharf', name: 'Apapa — Wharf Road', address: '14 Wharf Road, Apapa, Lagos', landmark: 'Opposite the port gate', lat: 6.4478, lng: 3.3597 },
-  { id: 'festac-town', name: 'Festac Town — 2nd Avenue', address: '2nd Avenue, Festac Town, Lagos', landmark: 'By Festac fountain', lat: 6.4667, lng: 3.2833 },
+  { id: 'ring-road', name: 'Ring Road — Oba Ovonramwen Square', address: 'Ring Road, Oba Ovonramwen Square, Benin City', landmark: 'By the palace roundabout', lat: 6.333, lng: 5.622 },
+  { id: 'new-benin', name: 'New Benin — Mission Road', address: 'Mission Road, New Benin Market, Benin City', landmark: 'Opposite the market gate', lat: 6.3373, lng: 5.6337 },
+  { id: 'akpakpava', name: 'Akpakpava Road', address: 'Akpakpava Road, Benin City', landmark: 'Near the Central Mosque', lat: 6.3395, lng: 5.628 },
+  { id: 'gra-adesuwa', name: 'GRA — Adesuwa Road', address: 'Adesuwa Road, GRA, Benin City', landmark: 'By Adesuwa Primary School', lat: 6.3312, lng: 5.6392 },
+  { id: 'siluko', name: 'Siluko Road', address: 'Siluko Road, Benin City', landmark: 'Off Sapele Road, by Siluko junction', lat: 6.318, lng: 5.629 },
+  { id: 'ugbowo-complex', name: 'Ugbowo — Shopping Complex', address: 'Ugbowo-Lagos Road, Ugbowo, Benin City', landmark: 'Ugbowo Shopping Complex', lat: 6.396, lng: 5.611 },
+  { id: 'ubth', name: 'Ugbowo — UBTH', address: 'Ugbowo-Lagos Road, Benin City', landmark: 'University of Benin Teaching Hospital main gate', lat: 6.3906, lng: 5.6122 },
+  { id: 'uselu', name: 'Uselu — Market Road', address: 'Uselu Market Road, Benin City', landmark: 'By Uselu market', lat: 6.372, lng: 5.621 },
+  { id: 'ikpoba-hill', name: 'Ikpoba Hill', address: 'Benin-Auchi Road, Ikpoba Hill, Benin City', landmark: 'By the Ikpoba River bridge', lat: 6.3565, lng: 5.6691 },
+  { id: 'aduwawa', name: 'Aduwawa', address: 'Aduwawa, Benin-Auchi Road, Benin City', landmark: 'Near Aduwawa market', lat: 6.3629, lng: 5.6791 },
+  { id: 'airport-road', name: 'Airport Road — Benin Airport', address: 'Airport Road, Benin City', landmark: 'By the airport terminal', lat: 6.3169, lng: 5.5994 },
+  { id: 'sapele-road', name: 'Sapele Road — Oregbeni', address: 'Sapele Road, Benin City', landmark: 'By Oregbeni market', lat: 6.2771, lng: 5.6337 },
 ];
 
 const normalise = (value: string) => value.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();

@@ -11,6 +11,11 @@ import { AdminPricingService } from "./admin-pricing.service";
 import { AdminDispatchService } from "./admin-dispatch.service";
 import { AdminFinanceController } from "./admin-finance.controller";
 import { AdminFinanceService } from "./admin-finance.service";
+import { AdminInvitesService } from "./admin-invites.service";
+import {
+  AdminInvitesController,
+  StaffInviteAcceptController,
+} from "./admin-invites.controller";
 import { PaymentsModule } from "../payments/payments.module";
 import { WithdrawalsModule } from "../withdrawals/withdrawals.module";
 
@@ -21,7 +26,14 @@ import { WithdrawalsModule } from "../withdrawals/withdrawals.module";
   // PaymentsModule brings the refund service; WithdrawalsModule the approval and
   // payout workflow. Both post to the ledger, which is global.
   imports: [AuthModule, DispatchModule, PaymentsModule, WithdrawalsModule],
-  controllers: [AdminController, AdminOpsController, AdminFinanceController],
+  controllers: [
+    AdminController,
+    AdminOpsController,
+    AdminFinanceController,
+    AdminInvitesController,
+    // Public: the invitee has no account yet.
+    StaffInviteAcceptController,
+  ],
   providers: [
     AdminService,
     AdminDashboardService,
@@ -30,6 +42,7 @@ import { WithdrawalsModule } from "../withdrawals/withdrawals.module";
     AdminPricingService,
     AdminDispatchService,
     AdminFinanceService,
+    AdminInvitesService,
   ],
 })
 export class AdminModule {}

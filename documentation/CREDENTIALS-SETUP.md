@@ -11,7 +11,7 @@ each one, sitting one environment variable away from going live:
 |---|---|---|
 | Paystack | `PAYMENTS_MODE=DEVELOPMENT` (simulator) | `PAYMENTS_MODE=SANDBOX` (or `LIVE`) + `PAYSTACK_*` keys |
 | Flutterwave | same | `FLUTTERWAVE_*` keys |
-| Google Maps | `MAPS_PROVIDER=STUB` (real Lagos coordinates, straight-line distances) | `MAPS_PROVIDER=GOOGLE` + `GOOGLE_MAPS_API_KEY` |
+| Google Maps | `MAPS_PROVIDER=STUB` (real Benin City coordinates, straight-line distances) | `MAPS_PROVIDER=GOOGLE` + `GOOGLE_MAPS_API_KEY` |
 | SMS | `SMS_MODE=CONSOLE` (printed to the API log) | `SMS_MODE=TERMII` + `TERMII_API_KEY` + approved sender ID |
 | Email | `EMAIL_MODE=CONSOLE` | `EMAIL_MODE=RESEND` + `RESEND_API_KEY` + verified domain |
 
@@ -119,11 +119,11 @@ GOOGLE_MAPS_API_KEY="AIza... server key, IP-restricted"
 March 2025 with a *per-SKU* monthly free allowance: **10,000 free events per Essentials SKU** (Dynamic Maps,
 Geocoding, Autocomplete, Compute Routes) and 5,000/1,000 for Pro/Enterprise SKUs
 ([maps.guru](https://maps.guru/blog/google-maps-api-pricing-explained-2026), [mapatlas.eu](https://mapatlas.eu/blog/google-maps-api-pricing-2026)).
-Above that, roughly **$5 per 1,000** Essentials events at Tier 1. For a Lagos operation doing a few hundred
+Above that, roughly **$5 per 1,000** Essentials events at Tier 1. For a Benin City operation doing a few hundred
 deliveries a day, the free allowances typically cover the whole month — a booking costs one Geocoding call,
 one Compute Routes call and one map load.
 
-**Until then:** `MAPS_PROVIDER=STUB` uses real Lagos coordinates and haversine distance, so pricing,
+**Until then:** `MAPS_PROVIDER=STUB` uses real Benin City coordinates and haversine distance, so pricing,
 dispatch radii and ETAs are all computed honestly — they are simply not road-accurate yet. Nothing is faked.
 
 ---

@@ -19,6 +19,8 @@ const ALL: Array<NavItem & { permission?: string }> = [
   { to: "/admin/pricing", label: "Pricing", permission: "pricing:read" },
   { to: "/admin/staff", label: "Staff & roles", permission: "staff:read" },
   { to: "/admin/audit", label: "Audit trail", permission: "audit:read" },
+  // No permission: everybody can change their own picture, name and password.
+  { to: "/admin/settings", label: "Settings" },
 ];
 
 export function adminNav(

@@ -1,6 +1,8 @@
 import { Injectable } from "@nestjs/common";
 import { PrismaService } from "../infra/prisma/prisma.service";
 import { formatNaira } from "@dispatch/shared";
+import { LOCATION_FRESHNESS_MINUTES } from "../dispatch/dispatch.service";
+import { AppConfig } from "../config/app.config";
 
 /**
  * ADMIN DASHBOARD
@@ -14,7 +16,10 @@ import { formatNaira } from "@dispatch/shared";
  */
 @Injectable()
 export class AdminDashboardService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly config: AppConfig,
+  ) {}
 
   /** `from`/`to` are inclusive dates; the default window is the last 30 days. */
   async overview(range: { from?: Date; to?: Date }) {
@@ -29,6 +34,9 @@ export class AdminDashboardService {
       riderCounts,
       customerCounts,
       pendingDocuments,
+      pendingApplications,
+      onlineWithoutPing,
+      awaitingHuman,
       zoneRows,
       dailyRows,
       waiting,
@@ -53,6 +61,36 @@ export class AdminDashboardService {
       }),
       this.prisma.customer.count({ where: { deletedAt: null } }),
       this.prisma.riderDocument.count({ where: { status: "PENDING" } }),
+      // How many people are waiting on the desk to let them work at all.
+      this.prisma.rider.count({
+        where: { approvalStatus: "PENDING", deletedAt: null },
+      }),
+      // Online, approved riders the engine cannot use because their phone has not
+      // reported a position recently. Without this number "nobody accepted" and
+      // "nobody was reachable" look identical, and the desk guesses.
+      this.prisma.rider.count({
+        where: {
+          approvalStatus: "APPROVED",
+          availability: "ONLINE",
+          deletedAt: null,
+          user: { status: "ACTIVE" },
+          locations: {
+            none: {
+              recordedAt: {
+                gte: new Date(Date.now() - LOCATION_FRESHNESS_MINUTES * 60 * 1000),
+              },
+            },
+          },
+        },
+      }),
+      // Jobs the automatic search has given up on: a human must decide now.
+      this.prisma.delivery.count({
+        where: {
+          status: "PENDING",
+          riderId: null,
+          dispatchRound: { gte: this.config.dispatchMaxRounds },
+        },
+      }),
       this.prisma.delivery.groupBy({
         by: ["serviceZoneId"],
         where: { createdAt: window, status: "DELIVERED" },
@@ -200,6 +238,8 @@ export class AdminDashboardService {
         cancelled,
         active,
         awaitingAssignment: waiting,
+        // Past every dispatch round: the engine has stopped and is waiting for staff.
+        awaitingHuman,
         // Undefined (null) when nothing has reached a terminal state yet — 0% would
         // wrongly imply every order failed.
         successRate:
@@ -234,6 +274,10 @@ export class AdminDashboardService {
         onDelivery: availability("ON_DELIVERY"),
         offline: availability("OFFLINE"),
         pendingDocuments,
+        // The approval queue: riders who signed up and are waiting on a human.
+        pendingApplications,
+        // Online but unlocatable — the reason dispatch can stall while the roster looks busy.
+        onlineWithoutPing,
       },
       customers: { total: customerCounts },
       fleet: {

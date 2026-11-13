@@ -43,9 +43,10 @@ the rest later without a deploy.
 
 | # | Zone code | Zone name | Areas / LGAs it covers | Rule (see §3) |
 |---|---|---|---|---|
-| 1 | e.g. `LAG-ISL` | Lagos Island | Lagos Island, Ikoyi, Victoria Island | A |
-| 2 | e.g. `LAG-MAIN` | Mainland | Yaba, Surulere, Ikeja, Gbagada | A |
-| 3 | e.g. `LEK-AJK` | Lekki–Ajah | Lekki Phase 1, Ajah, Sangotedo | B |
+| 1 | seeded `BEN-CENTRAL` | Benin City Centre | Ring Road, New Benin, Akpakpava, GRA, Siluko Road | A |
+| 2 | seeded `BEN-UGBOWO` | Ugbowo / UNIBEN | Ugbowo-Lagos Road, UBTH, Uselu | A |
+| 3 | seeded `BEN-IKPOBA` | Ikpoba Hill / Aduwawa | Ikpoba Hill, Aduwawa, Benin-Auchi Road | B |
+| 4 | seeded `BEN-SAPELE` | Sapele Road / Airport | Airport Road, Sapele Road, Oregbeni | B |
 | 4 | | | | |
 | 5 | | | | |
 

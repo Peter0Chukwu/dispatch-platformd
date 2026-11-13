@@ -3,6 +3,7 @@ import type { LoginInput, RegisterCustomerInput, RegisterRiderInput } from '@dis
 import { PrismaService } from '../infra/prisma/prisma.service';
 import { AppError } from '../common/errors/app-error';
 import { AuditService } from '../audit/audit.service';
+import { StorageService } from '../storage/storage.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { PasswordService } from './password.service';
 import { TokenService } from './token.service';
@@ -29,6 +30,7 @@ export class AuthService {
     private readonly verification: VerificationService,
     private readonly audit: AuditService,
     private readonly realtime: RealtimeGateway,
+    private readonly storage: StorageService,
   ) {}
 
   // ───────────────────────────── REGISTRATION ──────────────────────────────
@@ -46,7 +48,10 @@ export class AuthService {
     }
 
     const passwordHash = await this.passwords.hash(input.password);
-    const branch = await this.prisma.branch.findFirst({ orderBy: { createdAt: 'asc' } });
+    const branch = await this.prisma.branch.findFirst({
+      where: { isActive: true },
+      orderBy: { createdAt: 'asc' },
+    });
 
     const user = await this.prisma.user.create({
       data: {
@@ -108,7 +113,10 @@ export class AuthService {
       throw AppError.conflict('This vehicle registration number is already registered');
     }
 
-    const branch = await this.prisma.branch.findFirstOrThrow({ orderBy: { createdAt: 'asc' } });
+    const branch = await this.prisma.branch.findFirstOrThrow({
+      where: { isActive: true },
+      orderBy: { createdAt: 'asc' },
+    });
     const passwordHash = await this.passwords.hash(input.password);
     const riderCount = await this.prisma.rider.count();
 
@@ -553,6 +561,69 @@ export class AuthService {
         : null,
       session: { id: principal.sessionId, audience: principal.audience },
     };
+  }
+
+  /**
+   * SET A DISPLAY PICTURE.
+   *
+   * The bytes go through the same private storage the parcel photos use, and the
+   * database holds only the key. The previous picture is deleted after the new one
+   * is safely written — in that order, so a failed upload never leaves a user with
+   * no avatar at all.
+   */
+  async setAvatar(principal: AuthPrincipal, input: { mimeType: string; base64: string }) {
+    const previous = await this.prisma.user.findUniqueOrThrow({
+      where: { id: principal.userId },
+      select: { avatarKey: true },
+    });
+
+    const stored = await this.storage.saveBase64({
+      keyPrefix: 'avatars',
+      fileName: 'avatar',
+      mimeType: input.mimeType,
+      base64: input.base64,
+    });
+
+    await this.prisma.user.update({
+      where: { id: principal.userId },
+      data: { avatarKey: stored.key },
+    });
+
+    if (previous.avatarKey && previous.avatarKey !== stored.key) {
+      await this.storage.remove(previous.avatarKey);
+    }
+
+    await this.audit.record({
+      actorUserId: principal.userId,
+      action: 'AVATAR_UPDATED',
+      entityType: 'User',
+      entityId: principal.userId,
+      after: { bytes: stored.sizeBytes },
+    });
+
+    return { avatarUrl: `/api/v1/files/${stored.key}` };
+  }
+
+  /** Remove a display picture. The UI falls back to initials, which is a valid avatar. */
+  async removeAvatar(principal: AuthPrincipal) {
+    const previous = await this.prisma.user.findUniqueOrThrow({
+      where: { id: principal.userId },
+      select: { avatarKey: true },
+    });
+    if (!previous.avatarKey) return { avatarUrl: null };
+
+    await this.prisma.user.update({
+      where: { id: principal.userId },
+      data: { avatarKey: null },
+    });
+    await this.storage.remove(previous.avatarKey);
+    await this.audit.record({
+      actorUserId: principal.userId,
+      action: 'AVATAR_REMOVED',
+      entityType: 'User',
+      entityId: principal.userId,
+    });
+    return { avatarUrl: null };
   }
 
   async updateProfile(principal: AuthPrincipal, input: { firstName?: string; lastName?: string }) {

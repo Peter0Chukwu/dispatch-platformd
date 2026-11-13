@@ -51,17 +51,17 @@ const unPaid = await fetch(`${API}/deliveries`, {
   body: JSON.stringify({
     deliveryType: 'STANDARD',
     pickup: {
-      address: '12 Adeola Odeku Street, Victoria Island, Lagos',
-      landmark: 'Opposite Eko Hotel roundabout',
+      address: 'Ring Road, Oba Ovonramwen Square, Benin City',
+      landmark: 'By the Oba’s palace roundabout roundabout',
       lat: 6.4281,
       lng: 3.4219,
       contactName: 'Ada Okafor',
       contactPhone: '+2348039876543',
     },
     destination: {
-      address: '7 Allen Avenue, Ikeja, Lagos',
-      lat: 6.6018,
-      lng: 3.3515,
+      address: 'Benin-Auchi Road, Ikpoba Hill, Benin City',
+      lat: 6.3565,
+      lng: 5.6691,
       contactName: 'Chinedu Eze',
       contactPhone: '+2348069876543',
     },

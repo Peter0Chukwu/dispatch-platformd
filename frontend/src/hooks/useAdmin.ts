@@ -29,6 +29,8 @@ export interface DashboardOverview {
     cancelled: number;
     active: number;
     awaitingAssignment: number;
+    /** Past every dispatch round: the engine has stopped and needs staff. */
+    awaitingHuman: number;
     successRate: number | null;
     avgDeliveryMinutes: number | null;
     byStatus: Record<string, number>;
@@ -52,6 +54,10 @@ export interface DashboardOverview {
     onDelivery: number;
     offline: number;
     pendingDocuments: number;
+    /** Signed up, waiting for a human to approve them. */
+    pendingApplications: number;
+    /** Online and approved, but their position is stale — unusable by dispatch. */
+    onlineWithoutPing: number;
   };
   customers: { total: number };
   fleet: { avgDistanceKm: number | null; openAlerts: number };
@@ -601,6 +607,68 @@ export function useUpdatePricingRule() {
   );
 }
 
+/* ─────────────────────────── staff invitations ─────────────────────────── */
+
+export interface AdminInviteRow {
+  id: string;
+  email: string;
+  firstName: string | null;
+  lastName: string | null;
+  roleKeys: string[];
+  jobTitle: string | null;
+  expiresAt: string;
+  usedAt: string | null;
+  revokedAt: string | null;
+  createdAt: string;
+  status: "PENDING" | "ACCEPTED" | "EXPIRED" | "REVOKED";
+}
+
+export function useStaffInvites() {
+  return useQuery({
+    queryKey: ["admin", "invites"],
+    queryFn: () => api.get<AdminInviteRow[]>("/admin/invites"),
+  });
+}
+
+/**
+ * Minting an invitation returns the link exactly once. Nothing re-reads it from
+ * the server, because the server cannot produce it again — that is the point of
+ * storing only the hash.
+ */
+export function useCreateStaffInvite() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (input: {
+      email: string;
+      roleKeys: string[];
+      firstName?: string;
+      lastName?: string;
+      jobTitle?: string;
+      expiresInHours?: number;
+    }) =>
+      api.post<{
+        id: string;
+        email: string;
+        roleKeys: string[];
+        expiresAt: string;
+        acceptUrl: string;
+      }>("/admin/invites", input),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: ["admin", "invites"] });
+    },
+  });
+}
+
+export function useRevokeStaffInvite() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.delete(`/admin/invites/${id}`),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: ["admin", "invites"] });
+    },
+  });
+}
+
 export function useReviewDocument() {
   return useAdminMutation(
     (input: {
@@ -662,6 +730,8 @@ export interface DispatchBoardRow {
     maxRounds: number;
     lastRoundAt: string | null;
     exhausted: boolean;
+    /** Null while the engine is still working; a sentence once it has stopped. */
+    blocking: string | null;
     offersOut: number;
     liveOffers: DispatchBoardOffer[];
     askedCount: number;
@@ -685,6 +755,7 @@ export interface DispatchBoard {
     waiting: number;
     offersOut: number;
     onlineRiders: number;
+    onlineWithoutPing: number;
     exhaustedToday: number;
     batchSize: number;
     offerTimeoutSeconds: number;

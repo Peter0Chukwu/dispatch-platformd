@@ -1,13 +1,24 @@
 import { Link } from 'react-router-dom';
 import { Badge } from '../components/ui';
+import { BrandMark } from '../components/BrandMark';
 import { useHealth } from '../hooks/useHealth';
 
+/**
+ * TWO DOORS, NOT THREE.
+ *
+ * The admin portal used to be advertised here like any other way in. Staff are
+ * not the public: they arrive by invitation, and an "Admin portal" tile on the
+ * front page is an invitation to try. What is left is what a stranger can
+ * legitimately do — sign up to send, or sign up to ride.
+ */
 const PORTALS = [
   {
-    to: '/app',
-    name: 'Customer',
-    tagline: 'Book a rider, track your package, pay securely.',
-    phase: 'Live tracking',
+    to: '/register',
+    signIn: '/login?portal=customer',
+    name: 'Send a package',
+    cta: 'Sign up as a Customer',
+    tagline: 'Book a rider, watch your package move, pay securely.',
+    points: ['Photo your parcel, riders nearby are alerted', 'Track live from pickup to doorstep', 'Chat and call without swapping numbers'],
     accent: 'from-accent-500 to-accent-700',
     icon: (
       <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
@@ -17,29 +28,18 @@ const PORTALS = [
     ),
   },
   {
-    to: '/rider',
-    name: 'Rider',
-    tagline: 'Accept deliveries, navigate, get paid.',
-    phase: 'Jobs & earnings',
+    to: '/register-rider',
+    signIn: '/login?portal=rider',
+    name: 'Earn on the road',
+    cta: 'Sign up as a Rider',
+    tagline: 'Get jobs near you, accept or decline, get paid into your wallet.',
+    points: ['Offers within 10–20 km of where you are', 'Your documents reviewed once, by a person', 'Withdraw earnings whenever you like'],
     accent: 'from-brand-600 to-brand-800',
     icon: (
       <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
         <circle cx="5.5" cy="17.5" r="3.5" />
         <circle cx="18.5" cy="17.5" r="3.5" />
         <path d="M8.5 17.5h7l-2-9h-4l-2 9Zm4-9V5h4" />
-      </svg>
-    ),
-  },
-  {
-    to: '/admin',
-    name: 'Admin',
-    tagline: 'Live operations, finance, riders and reports.',
-    phase: 'Operations & finance',
-    accent: 'from-ink-700 to-ink-900',
-    icon: (
-      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M3 3v18h18" />
-        <path d="M7 15l4-5 3 3 4-6" />
       </svg>
     ),
   },
@@ -53,16 +53,10 @@ export default function LandingPage() {
       <div className="mx-auto max-w-6xl px-5 py-10 sm:py-16">
         <header className="flex flex-wrap items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-accent-500 text-brand-950">
-              <svg width="24" height="24" viewBox="0 0 32 32" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M6 23h20M10 23v-9h8l5 5v4" />
-                <circle cx="12" cy="25" r="1.6" fill="currentColor" stroke="none" />
-                <circle cx="22" cy="25" r="1.6" fill="currentColor" stroke="none" />
-              </svg>
-            </span>
+            <BrandMark size="lg" />
             <div>
               <p className="text-lg font-bold text-white">Traders Welfare Logistics</p>
-              <p className="text-xs text-brand-300">Rider &amp; logistics management · Lagos, Nigeria</p>
+              <p className="text-xs text-brand-300">Rider &amp; logistics management · Benin City, Edo State</p>
             </div>
           </div>
 
@@ -82,14 +76,14 @@ export default function LandingPage() {
 
         <section className="mt-14 max-w-3xl">
           <h1 className="text-3xl font-bold leading-tight tracking-tight text-white sm:text-5xl">
-            One platform.
+            Send a package,
             <br />
-            <span className="text-accent-400">Three portals.</span> One database.
+            <span className="text-accent-400">or deliver one.</span>
           </h1>
           <p className="mt-5 text-base leading-relaxed text-brand-200 sm:text-lg">
-            Customer bookings, rider operations and administrative control all read from and write to the same
-            PostgreSQL database through the same authenticated API. Every figure on every screen is computed from real
-            records — no placeholder statistics.
+            Book a rider in a few taps, or earn by riding for us. Both sides of every delivery read from and write to
+            the same database through the same authenticated API, so the price you are quoted is the price the rider is
+            paid against — computed from real records, never placeholder figures.
           </p>
           <div className="mt-6 flex flex-wrap gap-2">
             <Badge tone="brand">NestJS 11 · Prisma 6 · PostgreSQL 17</Badge>
@@ -98,25 +92,40 @@ export default function LandingPage() {
           </div>
         </section>
 
-        <section className="mt-12 grid gap-4 sm:grid-cols-3">
+        <section className="mt-12 grid gap-4 sm:grid-cols-2">
           {PORTALS.map((portal) => (
-            <Link
+            <div
               key={portal.to}
-              to={portal.to}
-              className="group relative overflow-hidden rounded-2xl border border-brand-800 bg-brand-900/60 p-5 transition-all hover:-translate-y-0.5 hover:border-brand-600"
+              className="relative overflow-hidden rounded-2xl border border-brand-800 bg-brand-900/60 p-5"
             >
               <div className={`mb-4 inline-flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br ${portal.accent} text-white`}>
                 {portal.icon}
               </div>
-              <p className="text-base font-semibold text-white">{portal.name} portal</p>
+              <p className="text-base font-semibold text-white">{portal.name}</p>
               <p className="mt-1 text-sm leading-relaxed text-brand-300">{portal.tagline}</p>
-              <p className="mt-4 text-xs font-medium uppercase tracking-wide text-brand-400">
-                Built in {portal.phase}
-              </p>
-              <span className="absolute right-5 top-5 text-brand-500 transition-transform group-hover:translate-x-0.5">
-                →
-              </span>
-            </Link>
+              <ul className="mt-3 space-y-1.5 text-[13px] text-brand-200">
+                {portal.points.map((point) => (
+                  <li key={point} className="flex gap-2">
+                    <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-accent-400" />
+                    {point}
+                  </li>
+                ))}
+              </ul>
+              <div className="mt-5 flex flex-wrap items-center gap-2">
+                <Link
+                  to={portal.to}
+                  className="inline-flex h-10 items-center rounded-xl bg-accent-500 px-4 text-sm font-semibold text-brand-950 transition-colors hover:bg-accent-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+                >
+                  {portal.cta}
+                </Link>
+                <Link
+                  to={portal.signIn}
+                  className="inline-flex h-10 items-center rounded-xl border border-brand-700 px-4 text-sm font-medium text-brand-200 transition-colors hover:border-brand-500 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+                >
+                  Sign in
+                </Link>
+              </div>
+            </div>
           ))}
         </section>
 
@@ -147,8 +156,8 @@ export default function LandingPage() {
         </section>
 
         <footer className="mt-12 border-t border-brand-800 pt-6 text-xs text-brand-400">
-          Built through Phase 8 — authentication, bookings, dispatch, rider jobs, payments and the double-entry
-          ledger, and live tracking with a public share link. Reports and deployment hardening are next.
+          Traders Welfare Logistics · Benin City, Edo State · Prices in Naira, times in Africa/Lagos. Staff accounts are
+          created by invitation from a super admin — there is no public way in.
         </footer>
       </div>
     </div>

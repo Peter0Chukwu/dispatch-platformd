@@ -28,8 +28,8 @@ const CONCURRENCY = process.argv.includes('--concurrency')
 const ADMIN = { email: 'admin@dispatch.test', password: 'Admin@12345' };
 const CUSTOMER = { email: 'demo.customer@dispatch.test', password: 'Customer@12345' };
 
-const PICKUP = { address: '12 Adeola Odeku Street, Victoria Island, Lagos', lat: 6.4281, lng: 3.4219 };
-const DEST = { address: '5 Bode Thomas Street, Surulere, Lagos', lat: 6.4969, lng: 3.3481 };
+const PICKUP = { address: 'Ring Road, Oba Ovonramwen Square, Benin City', lat: 6.3329, lng: 5.6221 };
+const DEST = { address: 'Ugbowo-Lagos Road, Benin City', lat: 6.3960, lng: 5.6110 };
 
 async function call(path, { method = 'GET', token, body } = {}) {
   const started = performance.now();

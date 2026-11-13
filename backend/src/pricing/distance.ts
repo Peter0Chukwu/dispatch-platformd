@@ -27,7 +27,7 @@ export function haversineKm(from: Point, to: Point): number {
 }
 
 /**
- * Straight-line distance understates real driving distance, especially in Lagos
+ * Straight-line distance understates real driving distance, especially in Benin City
  * where you cannot cross the lagoon without a bridge. Until the Google Directions
  * API is wired up (Phase 4+), the stub multiplies by a road factor.
  *

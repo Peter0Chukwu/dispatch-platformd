@@ -4,7 +4,7 @@
  * Google, Mapbox or the built-in stub all answer with these objects, so nothing
  * downstream — the booking form, tracking, the admin map — needs to know which one
  * is configured. It also means the UI can label results honestly: `source: 'STUB'`
- * says "these are real coordinates from our own Lagos table, not a geocoder".
+ * says "these are real coordinates from our own Benin City table, not a geocoder".
  */
 export interface PlaceResult {
   /** Stable id ('vi-adeola' for the stub, `place_id` for Google). */

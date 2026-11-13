@@ -8,7 +8,7 @@ import { LocationPicker } from '../../components/LocationPicker';
 import { PriceBreakdown } from '../../components/PriceBreakdown';
 import { CUSTOMER_NAV } from './nav';
 import { useCreateDelivery, useQuote, type Quote } from '../../hooks/useDeliveries';
-import type { SavedLocation } from '../../lib/lagos-locations';
+import type { SavedLocation } from '../../lib/benin-city-locations';
 import { cn } from '../../lib/cn';
 import { useApiError } from '../../contexts/AuthContext';
 

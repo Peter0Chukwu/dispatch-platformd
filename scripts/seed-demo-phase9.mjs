@@ -39,18 +39,18 @@ const ADMIN_EMAIL = process.env.DEMO_ADMIN_EMAIL ?? 'admin@dispatch.test';
 const ADMIN_PASSWORD = process.env.DEMO_ADMIN_PASSWORD ?? 'Admin@12345';
 
 const PICKUPS = [
-  { address: '12 Adeola Odeku Street, Victoria Island, Lagos', lat: 6.4281, lng: 3.4219, landmark: 'Opposite Eko Hotel' },
-  { address: '4 Commercial Avenue, Yaba, Lagos', lat: 6.5095, lng: 3.3711, landmark: 'By Tejuosho market' },
-  { address: '1 Marina Road, Lagos Island, Lagos', lat: 6.4531, lng: 3.3958, landmark: 'Near Union Bank head office' },
+  { address: 'Ring Road, Oba Ovonramwen Square, Benin City', lat: 6.3329, lng: 5.6221, landmark: 'By the Oba’s palace roundabout' },
+  { address: 'Mission Road, New Benin Market, Benin City', lat: 6.3373, lng: 5.6337, landmark: 'By Tejuosho market' },
+  { address: 'Akpakpava Road, Benin City', lat: 6.3395, lng: 5.6280, landmark: 'Near Union Bank head office' },
 ];
 
 const DESTINATIONS = [
-  { address: '5 Bode Thomas Street, Surulere, Lagos', lat: 6.4969, lng: 3.3481 },
-  { address: '33 Awolowo Road, Ikoyi, Lagos', lat: 6.4501, lng: 3.4356 },
-  { address: '18 Admiralty Way, Lekki Phase 1, Lagos', lat: 6.4419, lng: 3.4723 },
-  { address: '7 Adebayo Doherty Street, Lekki Phase 1, Lagos', lat: 6.4471, lng: 3.4802 },
-  { address: '22 Awolowo Way, Ikeja, Lagos', lat: 6.6018, lng: 3.3515 },
-  { address: '8 Bode Thomas Street, Surulere, Lagos', lat: 6.4972, lng: 3.3498 },
+  { address: 'Ugbowo-Lagos Road, Benin City', lat: 6.3960, lng: 5.6110 },
+  { address: 'Adesuwa Road, GRA, Benin City', lat: 6.3312, lng: 5.6392 },
+  { address: 'Aduwawa, Benin-Auchi Road, Benin City', lat: 6.3629, lng: 5.6791 },
+  { address: 'Uselu Market Road, Benin City', lat: 6.3720, lng: 5.6210 },
+  { address: 'Benin-Auchi Road, Ikpoba Hill, Benin City', lat: 6.3565, lng: 5.6691 },
+  { address: 'Ugbowo Shopping Complex, Benin City', lat: 6.3972, lng: 5.6125 },
 ];
 
 /** Day offsets, in days before today, one per planned job. */
@@ -126,7 +126,7 @@ async function main() {
   // will offer anything — this is the same gate a real rider passes.
   await call('/rider/location', {
     token: riderToken,
-    body: { lat: 6.4301, lng: 3.4197, accuracyM: 12, speedKph: 0, batteryPct: 84 },
+    body: { lat: 6.3345, lng: 5.6240, accuracyM: 12, speedKph: 0, batteryPct: 84 },
   });
   await call('/rider/availability', { token: riderToken, body: { availability: 'ONLINE' } });
 
@@ -145,7 +145,7 @@ async function main() {
   };
 
   const deliver = async (deliveryId) => {
-    const pos = { lat: 6.4281, lng: 3.4219 };
+    const pos = { lat: 6.3329, lng: 5.6221 };
     await call(`/rider/jobs/${deliveryId}/arrive-pickup`, { token: riderToken, body: pos });
     await call(`/rider/jobs/${deliveryId}/pickup`, { token: riderToken, body: pos });
     await call(`/rider/jobs/${deliveryId}/start-transit`, { token: riderToken, body: pos });

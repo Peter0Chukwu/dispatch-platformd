@@ -7,4 +7,5 @@ export const RIDER_NAV: NavItem[] = [
   { to: '/rider/active', label: 'Active job' },
   { to: '/rider/earnings', label: 'Earnings' },
   { to: '/rider/documents', label: 'Documents' },
+  { to: '/rider/settings', label: 'Settings' },
 ];

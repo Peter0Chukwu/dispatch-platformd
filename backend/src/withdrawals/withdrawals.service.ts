@@ -126,7 +126,7 @@ export class WithdrawalsService {
       );
     }
 
-    const since = startOfDayLagos();
+    const since = startOfDayLocal();
     const today = await this.prisma.withdrawal.aggregate({
       where: {
         riderId,
@@ -520,8 +520,8 @@ function maskAccount(accountNumber: string): string {
   return `${'•'.repeat(Math.max(0, accountNumber.length - 4))}${accountNumber.slice(-4)}`;
 }
 
-/** Lagos is UTC+1 and has no DST; the daily cap resets at local midnight. */
-function startOfDayLagos(): Date {
+/** West Africa Time is UTC+1 with no DST; the daily cap resets at local midnight. */
+function startOfDayLocal(): Date {
   const now = new Date();
   const lagos = new Date(now.getTime() + 60 * 60 * 1000);
   lagos.setUTCHours(0, 0, 0, 0);

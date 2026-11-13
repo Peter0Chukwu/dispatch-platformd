@@ -39,5 +39,8 @@ export default function setup(): void {
   console.log('\n🧪 Preparing test database…');
   execSync('npx prisma migrate deploy', { cwd: resolve(__dirname, '..'), env, stdio: 'inherit' });
   execSync('npx tsx prisma/seed.ts', { cwd: resolve(__dirname, '..'), env, stdio: 'pipe' });
+  // One extra zone covering the old Lagos fixture coordinates, so the integration
+  // suites keep testing the same geometry. Test-only — see the file's own note.
+  execSync('npx tsx test/setup-test-zone.ts', { cwd: resolve(__dirname, '..'), env, stdio: 'pipe' });
   console.log('🧪 Test database ready\n');
 }

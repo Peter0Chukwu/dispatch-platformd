@@ -363,7 +363,7 @@ journal_entries 1──< ledger_lines >── ledger_accounts
 
 ### 4.6 Seed data required for a working system
 
-Exactly 5 roles + ~40 permissions, 1 branch, 2–3 service zones (Lagos: Lagos Island / Mainland / Lekki–Ajah), 1 `pricing_rules` row, the 14 ledger accounts, `system_settings` defaults, 1 super-admin (credentials printed once to the console, forced password change), and the FAQ starter set. **No fake deliveries, riders or revenue.**
+Exactly 5 roles + ~40 permissions, 1 branch, 4 service zones (Benin City: Centre / Ugbowo / Ikpoba Hill / Sapele Road), 1 `pricing_rules` row, the 14 ledger accounts, `system_settings` defaults, 1 super-admin (credentials printed once to the console, forced password change), and the FAQ starter set. **No fake deliveries, riders or revenue.**
 
 ---
 
@@ -679,7 +679,7 @@ Each phase ends with: code, migration, tests, a `documentation/PHASE-LOG/PHASE-N
 | R9 | **Rider fraud / collusion** (fake deliveries, POD abuse) | Revenue loss | OTP to recipient, geo-stamped POD, GPS trail plausibility check, earnings hold (T+1) before withdrawal, anomaly alerts to admins |
 | R10 | **Flaky mobile networks / GPS denial** | Broken UX for riders | Offline-tolerant rider UI (queue transitions, retry), HTTP fallback for GPS, optimistic UI with reconciliation, cached "last known" location clearly labelled |
 | R11 | **Device clock/OTP clock skew** | False OTP failures | Server-side expiry only, generous window, attempt caps + lockout |
-| R12 | **Single-city assumptions leaking into code** | Costly multi-city retrofit | `branchId`/`serviceZoneId` on every operational row from day one; no hardcoded Lagos logic outside seed data |
+| R12 | **Single-city assumptions leaking into code** | Costly multi-city retrofit | `branchId`/`serviceZoneId` on every operational row from day one; no hardcoded city logic outside seed data |
 | R13 | **Credential leakage** | Catastrophic | Backend-only secrets, `.env` git-ignored, `config` validation at boot, no secret in frontend bundle (verified by a test that greps the built assets for key patterns) |
 
 ### Deliberate non-goals for v1 (so you know what you're *not* paying for)
@@ -690,9 +690,10 @@ No multi-company marketplace, no customer app store binaries (PWA instead), no P
 ## 11. Decisions I need from you before Phase 1
 
 1. **Map provider** — Google Maps (best Nigerian address coverage & autocomplete, needs a card) vs Mapbox (generous free tier, cheaper at scale, slightly weaker local POIs). My recommendation: **Google Maps for launch**, geocoding cached server-side.
-2. **Launch scope** — I recommend **one branch, Lagos, 3 service zones**. Confirm, or give me your real city/zone list and base fee + per-km numbers (or approve placeholders you can edit in the admin UI).
+2. **Launch scope** — **Answered and delivered:** one branch, **Benin City, Edo State**, with four seeded service zones (Centre, Ugbowo, Ikpoba Hill, Sapele Road). Base fee and per-km figures are still placeholders you can edit in the admin Pricing screen. See `backend/prisma/seed-data/zones.ts`.
 3. **Wallet policy at launch** — customer wallet top-up enabled, but **cash-out disabled** (recommended), rider payouts via Paystack Transfers.
 4. **Branding** — business name, primary brand colour, and whether you already have a logo. Otherwise I'll ship a neutral professional palette (deep navy + logistics green) with a placeholder mark you can swap.
+   **Answered and delivered:** the name is *Traders Welfare Logistics*, the palette is the green scale in `frontend/tailwind.config.ts`, and the supplied logo artwork now ships as the mark on every screen plus the favicon set. See `documentation/BRAND.md`.
 5. **Provider keys** — do you have Paystack/Flutterwave accounts yet? If not, we build in `DEVELOPMENT` mode (real DB, simulated payments) and flip to sandbox/live when keys arrive.
 
 ---

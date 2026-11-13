@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { LAGOS_LOCATIONS, type SavedLocation } from '../lib/lagos-locations';
+import { BENIN_CITY_LOCATIONS, type SavedLocation } from '../lib/benin-city-locations';
 import { api } from '../lib/api';
 import { Button, Input, Field } from './ui';
 import { cn } from '../lib/cn';
@@ -9,7 +9,7 @@ import { cn } from '../lib/cn';
  * ADDRESS ENTRY
  *
  * Suggestions come from `GET /maps/places`, which is the server's map adapter:
- * Google Places when a key is configured, the platform's own Lagos table when it
+ * Google Places when a key is configured, the platform's own Benin City table when it
  * is not. Either way the coordinates are real, and the hint under the list says
  * which source answered so nobody assumes street-level accuracy that is not there.
  *
@@ -91,14 +91,14 @@ export function LocationPicker({
 
   const matches: SavedLocation[] = useMemo(() => {
     const needle = search.trim().toLowerCase();
-    if (!needle) return LAGOS_LOCATIONS;
+    if (!needle) return BENIN_CITY_LOCATIONS;
     const remote = suggestions.data?.data ?? [];
     if (remote.length > 0) {
       // Only what actually matched: padding the list with unrelated saved places
-      // would make a search for "lekki" appear to offer Victoria Island.
+      // would make a search for "ugbowo" appear to offer Ring Road.
       return remote.map(toSavedLocation).slice(0, 8);
     }
-    return LAGOS_LOCATIONS.filter(
+    return BENIN_CITY_LOCATIONS.filter(
       (location) =>
         location.name.toLowerCase().includes(needle) ||
         location.address.toLowerCase().includes(needle) ||
@@ -148,7 +148,7 @@ export function LocationPicker({
 
       <Input
         label="Search saved locations"
-        placeholder="e.g. Lekki, Yaba, Ikeja"
+        placeholder="e.g. Ring Road, Ugbowo, Ikpoba Hill"
         value={search}
         onChange={(event) => setSearch(event.target.value)}
       />
@@ -183,7 +183,7 @@ export function LocationPicker({
           ? 'Searching…'
           : provider === 'google'
             ? 'Suggestions from Google Places.'
-            : 'Suggestions from the platform’s saved Lagos locations — exact coordinates, no street-level geocoding until a maps key is configured.'}
+            : 'Suggestions from the platform’s saved Benin City locations — exact coordinates, no street-level geocoding until a maps key is configured.'}
       </p>
 
       <Field label="Street address" required error={errors.address} htmlFor={`${title}-address`}>

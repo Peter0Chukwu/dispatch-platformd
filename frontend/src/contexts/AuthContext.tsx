@@ -45,6 +45,8 @@ interface AuthContextValue {
   hasPermission: (permission: string) => boolean;
   hasRole: (role: string) => boolean;
   setSession: (session: SessionResponse) => void;
+  /** Patch the cached user after they edit their own profile or picture. */
+  updateUser: (patch: Partial<SessionUser>) => void;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -59,6 +61,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<SessionUser | null>(null);
   const [profile, setProfile] = useState<SessionProfile | null>(null);
   const [isBootstrapping, setBootstrapping] = useState(true);
+
+  const updateUser = useCallback((patch: Partial<SessionUser>) => {
+    setUser((previous) => (previous ? { ...previous, ...patch } : previous));
+  }, []);
 
   const setSession = useCallback((session: SessionResponse) => {
     setAccessToken(session.accessToken);
@@ -153,8 +159,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       hasPermission,
       hasRole,
       setSession,
+      updateUser,
     }),
-    [user, profile, isBootstrapping, login, logout, hasPermission, hasRole, setSession],
+    [user, profile, isBootstrapping, login, logout, hasPermission, hasRole, setSession, updateUser],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

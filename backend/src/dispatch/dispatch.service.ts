@@ -10,7 +10,8 @@ import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { MessagingService } from '../messaging/messaging.service';
 
 /** Ignore riders whose last location is older than this when ranking candidates. */
-const LOCATION_FRESHNESS_MINUTES = 10;
+/** How old a rider's last position may be before dispatch treats them as unlocatable. */
+export const LOCATION_FRESHNESS_MINUTES = 10;
 
 /**
  * HOW THE SEARCH WIDENS

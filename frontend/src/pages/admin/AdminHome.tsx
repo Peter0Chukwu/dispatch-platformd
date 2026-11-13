@@ -188,6 +188,9 @@ export default function AdminHome() {
           <LoadingBlock rows={8} />
         ) : (
           <>
+            {/* ── what needs a human, before any statistic ── */}
+            <AttentionPanel data={data} hasPermission={hasPermission} />
+
             {/* ── the numbers ── */}
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <StatCard
@@ -433,5 +436,113 @@ export default function AdminHome() {
         )}
       </div>
     </PortalShell>
+  );
+}
+
+/**
+ * NEEDS YOU.
+ *
+ * Three things only staff can do: let a rider start working, rescue a job the
+ * engine has given up on, and find out why it gave up. Each one was invisible
+ * here before — the numbers were all about what had already happened, so the
+ * work waiting to be done never showed. It renders nothing when the floor is
+ * clear, so a healthy dashboard does not grow a permanent empty box.
+ */
+function AttentionPanel({
+  data,
+  hasPermission,
+}: {
+  data: DashboardOverview;
+  hasPermission: (permission: string) => boolean;
+}) {
+  const items: Array<{
+    count: number;
+    title: string;
+    detail: string;
+    to: string;
+    cta: string;
+  }> = [];
+
+  if (data.riders.pendingApplications > 0) {
+    items.push({
+      count: data.riders.pendingApplications,
+      title:
+        data.riders.pendingApplications === 1
+          ? "rider is waiting for approval"
+          : "riders are waiting for approval",
+      detail:
+        "Nobody can be offered a job until their account and documents are approved. This is the only step that gates them.",
+      to: "/admin/riders",
+      cta: "Review applications",
+    });
+  }
+
+  if (data.deliveries.awaitingHuman > 0) {
+    items.push({
+      count: data.deliveries.awaitingHuman,
+      title:
+        data.deliveries.awaitingHuman === 1
+          ? "job is waiting on a human decision"
+          : "jobs are waiting on a human decision",
+      detail:
+        "The automatic search has been through every round. Assign a rider by hand, or find out below why nobody was reachable.",
+      to: "/admin/dispatch",
+      cta: "Open dispatch board",
+    });
+  }
+
+  if (data.riders.onlineWithoutPing > 0) {
+    items.push({
+      count: data.riders.onlineWithoutPing,
+      title:
+        data.riders.onlineWithoutPing === 1
+          ? "rider is online but cannot be located"
+          : "riders are online but cannot be located",
+      detail:
+        "Their phone has not reported a position recently, so dispatch cannot offer them work. Ask them to reopen the rider app with location allowed.",
+      to: "/admin/map",
+      cta: "See the map",
+    });
+  }
+
+  if (items.length === 0) return null;
+
+  return (
+    <Card>
+      <CardHeader
+        title="Needs you"
+        subtitle="Work that cannot move without staff action"
+      />
+      <CardBody className="space-y-3">
+        {items.map((item) => (
+          <div
+            key={item.title}
+            className="flex flex-wrap items-start justify-between gap-3 rounded-xl border border-warning-200 bg-warning-50 p-3"
+          >
+            <div className="flex items-start gap-3">
+              <span className="mt-0.5 inline-flex h-7 min-w-7 items-center justify-center rounded-full bg-warning-600 px-2 text-sm font-bold text-white">
+                {item.count}
+              </span>
+              <div>
+                <p className="text-sm font-semibold text-ink-900">
+                  {item.count} {item.title}
+                </p>
+                <p className="mt-1 max-w-xl text-xs leading-relaxed text-ink-600">
+                  {item.detail}
+                </p>
+              </div>
+            </div>
+            {hasPermission("rider:read") && (
+              <Link
+                to={item.to}
+                className="shrink-0 rounded-lg border border-warning-300 bg-white px-3 py-1.5 text-xs font-semibold text-ink-800 hover:bg-warning-100"
+              >
+                {item.cta}
+              </Link>
+            )}
+          </div>
+        ))}
+      </CardBody>
+    </Card>
   );
 }

@@ -32,8 +32,8 @@ export default function RegisterRiderPage() {
       phone: '',
       password: '',
       addressLine: '',
-      city: 'Lagos',
-      state: 'Lagos',
+      city: 'Benin City',
+      state: 'Edo',
       vehicleType: 'MOTORCYCLE',
       vehicleRegistrationNumber: '',
       emergencyContactName: '',
@@ -109,7 +109,7 @@ export default function RegisterRiderPage() {
         />
         <Input
           label="Residential address"
-          placeholder="14 Adeola Odeku Street, Victoria Island"
+          placeholder="12 Adesuwa Road, GRA, Benin City"
           error={errors.addressLine?.message}
           {...register('addressLine')}
         />

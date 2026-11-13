@@ -129,6 +129,13 @@ export default function DispatchBoardPage() {
                 : 'no offer out — next round due'}
             {row.dispatch.askedCount > 0 ? ` · ${row.dispatch.askedCount} asked so far` : ''}
           </div>
+          {/* Why the engine stopped, in words. A bare "exhausted" told the desk
+              nothing it could act on. */}
+          {row.dispatch.blocking && (
+            <p className="max-w-xs whitespace-normal text-xs font-medium text-danger-700">
+              {row.dispatch.blocking}
+            </p>
+          )}
           <div className="text-xs text-ink-700">
             {row.dispatch.liveOffers.length === 0 ? (
               <span className="text-ink-400">nobody holds it yet</span>
@@ -210,7 +217,11 @@ export default function DispatchBoardPage() {
               <StatCard
                 label="Riders online"
                 value={String(data.summary.onlineRiders)}
-                hint={`${data.summary.batchSize} asked per round · ${data.summary.offerTimeoutSeconds}s each`}
+                hint={
+                  data.summary.onlineWithoutPing > 0
+                    ? `${data.summary.onlineWithoutPing} of them cannot be located — not offerable`
+                    : `${data.summary.batchSize} asked per round · ${data.summary.offerTimeoutSeconds}s each`
+                }
               />
               <StatCard
                 label="Exhausted today"

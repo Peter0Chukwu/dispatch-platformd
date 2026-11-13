@@ -10,6 +10,8 @@ import VerifyPage from "./pages/auth/VerifyPage";
 import ForgotPasswordPage from "./pages/auth/ForgotPasswordPage";
 import ResetPasswordPage from "./pages/auth/ResetPasswordPage";
 import TrackPage from "./pages/TrackPage";
+import AcceptInvitePage from "./pages/auth/AcceptInvitePage";
+import SettingsPage from "./pages/SettingsPage";
 import CustomerHome from "./pages/customer/CustomerHome";
 import BookDeliveryPage from "./pages/customer/BookDeliveryPage";
 import DeliveriesPage from "./pages/customer/DeliveriesPage";
@@ -77,6 +79,16 @@ export default function App() {
           }
         />
         <Route path="/verify" element={<VerifyPage />} />
+        {/* Staff invitations. Public, because the invitee has no account yet — the
+            token in the URL is the credential, and it works exactly once. */}
+        <Route
+          path="/admin-invite/:token"
+          element={
+            <RedirectIfAuthenticated>
+              <AcceptInvitePage />
+            </RedirectIfAuthenticated>
+          }
+        />
         {/* Public tracking: the share link is the credential, so no auth wrapper. */}
         <Route path="/track/:token" element={<TrackPage />} />
         <Route
@@ -103,6 +115,7 @@ export default function App() {
           <Route path="deliveries" element={<DeliveriesPage />} />
           <Route path="deliveries/:id" element={<DeliveryDetailPage />} />
           <Route path="wallet" element={<CustomerWalletPage />} />
+          <Route path="settings" element={<SettingsPage portal="Customer" />} />
         </Route>
 
         {/* Rider portal */}
@@ -112,11 +125,14 @@ export default function App() {
           <Route path="active" element={<RiderActiveJobPage />} />
           <Route path="earnings" element={<RiderEarningsPage />} />
           <Route path="documents" element={<RiderDocumentsPage />} />
+          <Route path="settings" element={<SettingsPage portal="Rider" />} />
         </Route>
 
         {/* Admin portal */}
         <Route path="/admin" element={<RequireAuth audience="ADMIN" />}>
           <Route index element={<AdminHome />} />
+          {/* Outside every permission gate: your own profile is yours. */}
+          <Route path="settings" element={<SettingsPage portal="Admin" />} />
           {/* Each screen sits behind the permission its API routes demand. */}
           <Route element={<RequirePermission permission="delivery:read" />}>
             <Route path="deliveries" element={<AdminDeliveriesPage />} />

@@ -1,203 +1,63 @@
-TRADERS WELFARE LOGISTICS — CONTACT, PARCEL PHOTO, AND THE BRANDING RESTORE
-===========================================================================
-35 files to overwrite  ·  1 patch for three pages  ·  2 env files by hand
+TWL DISPATCH — BENIN CITY
+=========================
 
+What this changes
+-----------------
+The platform no longer starts from Lagos. It starts from Benin City, Edo State.
 
-WHAT WENT WRONG, PLAINLY
-------------------------
-Your rebrand only ever existed in one working copy — yours. Nothing in version
-control said "Traders Welfare Logistics". So every package built from the repo
-carried the old name, and extracting one put "Dispatch" back on your machine.
+  Branch        BEN-01 · Benin City HQ · Ring Road (6.3329, 5.6222)
+  Zones         BEN-CENTRAL   Benin City Centre (Ring Road, New Benin, GRA)
+                BEN-UGBOWO    Ugbowo / UNIBEN / UBTH / Uselu
+                BEN-IKPOBA    Ikpoba Hill / Aduwawa
+                BEN-SAPELE    Sapele Road / Airport Road
+  Booking form  12 real Benin City streets instead of 12 Lagos ones
 
-That is fixed at the root: the name and the palette are now COMMITTED
-(commit a66c3c9). This package therefore carries the branding with it, and
-cannot revert it again.
+Prices did NOT change. Same base fee, same per-km, same everything. This only
+moves the map. You can still edit every figure on the admin Pricing screen.
 
-What is now in the repo:
-  APP_NAME                    Traders Welfare Logistics
-  TERMII_SENDER_ID / SMS      TWL
-  Login + landing lockup      Traders Welfare Logistics
-  Portal sidebar              Traders Welfare Logistics
-  Mobile header               TWL · <portal>
-  Public tracking masthead    TWL · live tracking
-  Browser tab title           Traders Welfare Logistics — Rider & Logistics Platform
-  PDF report header           Traders Welfare Logistics
-  PDF accent colour           #0C3627 (was navy #0B1F3A)
-  brand palette (tailwind)    green scale, 50 #EFF8F3 … 900 #0C3627 … 950 #072419
-  SMS verification text       "Your TWL verification code is …"
-  Rider payout narration      "TWL rider payout …"
-  Rider location warning      "We cannot see you, so you will not receive any offers."
+How to apply it (3 steps)
+-------------------------
+1. Extract this zip into your project folder. Say YES to replace.
+   One file is deliberately removed: frontend/src/lib/lagos-locations.ts
+   Delete it yourself if your unzip does not: it is replaced by
+   frontend/src/lib/benin-city-locations.ts
 
-IF YOUR PALETTE OR WORDING DIFFERS FROM MINE
---------------------------------------------
-Then delete these two files out of the extracted folder before you copy, and
-keep yours — nothing else in the package depends on them:
-    dispatch/platform/frontend/tailwind.config.ts
-    dispatch-platform/frontend/src/layouts/PortalShell.tsx
-(sidebar label only). Everything else is safe to take as-is.
+2. In the backend folder, run the seed once:
 
-Deliberately NOT renamed, because they are code or an operations concept rather
-than the brand: package names (@dispatch/*), route paths, component names such as
-DispatchBoardPage, and the "Dispatch board" feature label in the admin menu.
+       cd backend
+       npm run db:seed
 
+   You should see:
 
-WHAT ELSE THIS PACKAGE ADDS
----------------------------
-  · Parcel photo at booking, visible to the customer, the rider and staff.
-  · Dispatch radius 10 km -> 20 km -> 35 km -> no limit (was a flat 20 km).
-  · In-app chat between customer and rider; phone numbers refused in the text.
-  · Masked-calling endpoints behind the same Contact card, disabled with honest
-    copy until a voice provider is connected.
-  · One Contact card on the customer's delivery page and the rider's job page:
-    Message and Call side by side.
+       branch BEN-01 — Benin City HQ
+       zones  BEN-CENTRAL, BEN-UGBOWO, BEN-IKPOBA, BEN-SAPELE
 
+   Anything left over from Lagos is switched OFF automatically (the row is kept,
+   so old deliveries still make sense). You do not need to delete anything.
 
-HOW TO APPLY
-------------
-1. Extract into the folder that CONTAINS your clone (same as last time), so paths
-   land as dispatch-platform/...
-2. Then the three page edits and the two env files, below.
-3. Then:
+3. Restart your two dev windows (backend and frontend), then hard-refresh the
+   browser (Ctrl + Shift + R). Book a delivery: the saved locations are now
+   Ring Road, Ugbowo, Ikpoba Hill, Sapele Road and so on.
 
-     npm install
-     npm run build:shared
-     cd backend && ../node_modules/.bin/prisma migrate deploy && cd ..
-     npm test
+If you are starting from a brand new database
+----------------------------------------------
+Just run, in the backend folder:
 
-   Expected: 259 tests pass, including 5 new chat tests.
+    npx prisma migrate deploy
+    npm run db:seed
 
+What is in here
+---------------
+backend/     the branch + zone data, the seed upgrade logic, the Benin City
+             place table, and the small change that stops a retired branch
+             from receiving new accounts
+frontend/    the new saved-locations file and the copy that said Lagos
+docs/, documentation/   the pages that named Lagos zones
+scripts/     the demo and screenshot scripts, moved to Benin City coordinates
+             (dev-only; never run on a live server)
 
-PART 2 — THREE PAGES, HAND-EDIT (their content is yours, not mine)
-------------------------------------------------------------------
-FILE: frontend/src/pages/customer/BookDeliveryPage.tsx
-
-  2a. FIND:
-import { LocationPicker } from '../../components/LocationPicker';
-
-      REPLACE WITH:
-import { PackagePhotoInput } from '../../components/PackagePhotoInput';
-import { LocationPicker } from '../../components/LocationPicker';
-
-  2b. FIND:
-  const [packageWeightKg, setPackageWeightKg] = useState('');
-
-      REPLACE WITH:
-  const [packageWeightKg, setPackageWeightKg] = useState('');
-  const [packagePhotoKey, setPackagePhotoKey] = useState<string | undefined>(undefined);
-
-  2c. FIND:
-      packageWeightKg: packageWeightKg ? Number(packageWeightKg) : undefined,
-
-      REPLACE WITH:
-      packageWeightKg: packageWeightKg ? Number(packageWeightKg) : undefined,
-      ...(packagePhotoKey ? { packagePhotoKey } : {}),
-
-  2d. FIND:
-                  <Field
-                    label="What is inside?"
-
-      REPLACE WITH:
-                  <Field
-                    label="Photo of the parcel"
-                    hint="Optional, but it protects you: the rider knows exactly what they are collecting, and the photo settles any damage dispute."
-                  >
-                    <PackagePhotoInput value={packagePhotoKey} onChange={setPackagePhotoKey} />
-                  </Field>
-
-                  <Field
-                    label="What is inside?"
-
-FILE: frontend/src/pages/customer/DeliveryDetailPage.tsx
-
-  2e. FIND:
-import { DELIVERY_STATUS_LABELS, formatNaira, formatNgPhone } from '@dispatch/shared';
-
-      REPLACE WITH:
-import { CHAT_OPEN_STATUSES, DELIVERY_STATUS_LABELS, formatNaira, formatNgPhone } from '@dispatch/shared';
-
-  2f. FIND:
-import { DeliveryTrackingCard } from '../../components/DeliveryTrackingCard';
-
-      REPLACE WITH:
-import { DeliveryTrackingCard } from '../../components/DeliveryTrackingCard';
-import { ContactCard } from '../../components/ContactCard';
-
-  2g. FIND:
-            <DeliveryTrackingCard deliveryId={delivery.id} status={delivery.status} />
-
-      REPLACE WITH:
-            <DeliveryTrackingCard deliveryId={delivery.id} status={delivery.status} />
-
-            <ContactCard
-              deliveryId={delivery.id}
-              perspective="CUSTOMER"
-              counterpartName={delivery.riderFirstName ?? undefined}
-              enabled={(CHAT_OPEN_STATUSES as readonly string[]).includes(delivery.status)}
-            />
-
-FILE: frontend/src/pages/rider/ActiveJobPage.tsx
-
-  2h. FIND:
-import { useCallback, useMemo, useState } from 'react';
-
-      REPLACE WITH:
-import { useCallback, useMemo, useState } from 'react';
-import { CHAT_OPEN_STATUSES } from '@dispatch/shared';
-
-  2i. FIND:
-import { RIDER_NAV } from './nav';
-
-      REPLACE WITH:
-import { RIDER_NAV } from './nav';
-import { DeliveryPhoto } from '../../components/DeliveryPhoto';
-import { ContactCard } from '../../components/ContactCard';
-
-  2j. FIND:
-              {data.package.isFragile && <Badge tone="warning">fragile — handle with care</Badge>}
-            </div>
-          </CardBody>
-        </Card>
-
-      REPLACE WITH:
-              {data.package.isFragile && <Badge tone="warning">fragile — handle with care</Badge>}
-            </div>
-            <DeliveryPhoto deliveryId={data.id} className="h-44 w-full rounded-xl object-cover" />
-          </CardBody>
-        </Card>
-
-        <ContactCard
-          deliveryId={data.id}
-          perspective="RIDER"
-          enabled={(CHAT_OPEN_STATUSES as readonly string[]).includes(data.status)}
-        />
-
-If any FIND does not match exactly once, stop and tell me.
-
-Shortcut: 3-page-edits.patch is in this zip and applies cleanly to the pre-change
-tree — `git apply --check 3-page-edits.patch` then `git apply 3-page-edits.patch`.
-
-
-PART 3 — TWO ENV FILES, BY HAND
--------------------------------
-In .env.example, deploy/.env.example and your real backend/.env:
-
-  name      APP_NAME=Traders Welfare Logistics
-  sender    TERMII_SENDER_ID=TWL
-
-and, new for masked calling:
-
-  VOICE_MODE=CONSOLE            # CONSOLE | TERMII
-  TERMII_VOICE_NUMBER_POOL=
-
-
-PART 4 — NOT DONE, ON PURPOSE
------------------------------
-· The Call button does nothing until VOICE_MODE stops being CONSOLE. Termii (or
-  Africa's Talking) needs an account, KYC, an approved caller ID and a number
-  pool. I will not invent their API shape.
-· Verified live: the rider's job view carries NO phone number, and the customer
-  sees the rider's first name only — so nothing can leak outside the app. The one
-  number the customer sees is the recipient's, which they typed themselves.
-· The logo is still absent by your instruction; no placeholder was added.
-
-— Bean
+Tests
+-----
+273 of 273 pass. The integration tests were written against Lagos coordinates,
+so a TEST-ONLY fixture zone keeps them inside the service area. It is never
+loaded by the real seed.

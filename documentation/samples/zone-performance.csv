@@ -5,8 +5,8 @@
 # Report id: e350934d-da73-4994-95a0-f630785a3991
 #
 Zone,Bookings,Delivered,Cancelled,Revenue,Avg per delivery,Avg km
-LAG-ISLAND — Lagos Island,15,7,0,19449.00,2778.43,10.3
-LAG-MAINLAND — Lagos Mainland,3,2,1,6026.50,3013.25,13.6
+BEN-CENTRAL — Benin City Centre,15,7,0,19449.00,2778.43,10.3
+BEN-UGBOWO — Ugbowo / UNIBEN,3,2,1,6026.50,3013.25,13.6
 
 # Totals
 Delivered,9

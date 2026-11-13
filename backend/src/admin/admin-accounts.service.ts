@@ -290,7 +290,8 @@ export class AdminAccountsService {
     roleKeys: string[];
     branchId?: string;
     jobTitle?: string;
-    staffId: string;
+    /** The staff member doing the creating. Absent when an invitation is accepted. */
+    staffId?: string;
     actorUserId?: string | null;
   }) {
     const existing = await this.prisma.user.findFirst({
@@ -323,7 +324,10 @@ export class AdminAccountsService {
           where: { id: params.branchId },
           select: { id: true },
         })
-      : await this.prisma.branch.findFirst({ select: { id: true } });
+      : await this.prisma.branch.findFirst({
+          where: { isActive: true },
+          select: { id: true },
+        });
     if (!branch)
       throw AppError.validation([
         { field: "branchId", message: "No branch exists yet" },
@@ -374,7 +378,7 @@ export class AdminAccountsService {
       after: {
         email: user.email,
         roles: params.roleKeys,
-        createdBy: params.staffId,
+        createdBy: params.staffId ?? "INVITE",
       },
     });
 

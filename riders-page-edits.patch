@@ -1,0 +1,60 @@
+diff --git a/frontend/src/pages/admin/RidersPage.tsx b/frontend/src/pages/admin/RidersPage.tsx
+index d114191..492597a 100644
+--- a/frontend/src/pages/admin/RidersPage.tsx
++++ b/frontend/src/pages/admin/RidersPage.tsx
+@@ -339,8 +339,15 @@ function RiderReview({
+                     disabled={!rider.canApprove}
+                     isLoading={setApproval.isPending}
+                     onClick={() => void decideRider("APPROVE")}
++                    title={
++                      rider.canApprove
++                        ? "Approve this rider so they can receive jobs"
++                        : `${rider.missingDocuments.length} document(s) still need approval first`
++                    }
+                   >
+-                    Approve rider
++                    {rider.canApprove
++                      ? "Approve rider"
++                      : `Approve rider · ${rider.missingDocuments.length} document(s) left`}
+                   </Button>
+                 )}
+                 {rider.approvalStatus === "APPROVED" && (
+@@ -422,20 +429,30 @@ function RiderReview({
+           </div>
+ 
+           {!rider.canApprove && rider.missingDocuments.length > 0 && (
+-            <Alert tone="warning" title="Not ready to approve">
+-              These documents are still not approved:{" "}
+-              {rider.missingDocuments
+-                .join(", ")
+-                .replace(/_/g, " ")
+-                .toLowerCase()}
+-              . The API refuses approval until every one is in order.
++            <Alert tone="warning" title={`${rider.missingDocuments.length} of ${rider.requiredDocuments.length} documents still to review`}>
++              Approve each document below and this rider becomes approvable — the
++              account cannot be approved until every one is in order. Still open:{" "}
++              <strong>
++                {rider.missingDocuments
++                  .join(", ")
++                  .replace(/_/g, " ")
++                  .toLowerCase()}
++              </strong>
++              .
+             </Alert>
+           )}
+ 
+           <div>
+             <h3 className="text-sm font-semibold text-ink-900">Documents</h3>
+             <ul className="mt-2 space-y-2">
+-              {rider.documents.map((document) => (
++              {[...rider.documents]
++                .sort((a, b) => {
++                  // Anything not yet approved floats to the top: that is the work.
++                  const rank = (status: string) =>
++                    status === "PENDING" ? 0 : status === "REJECTED" ? 1 : 2;
++                  return rank(a.status) - rank(b.status);
++                })
++                .map((document) => (
+                 <li
+                   key={document.id}
+                   className="rounded-xl border border-ink-200 p-3"

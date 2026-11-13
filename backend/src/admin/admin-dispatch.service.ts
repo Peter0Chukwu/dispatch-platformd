@@ -3,7 +3,7 @@ import { formatNaira } from "@dispatch/shared";
 import { PrismaService } from "../infra/prisma/prisma.service";
 import { AppConfig } from "../config/app.config";
 import { AppError } from "../common/errors/app-error";
-import { DispatchService } from "../dispatch/dispatch.service";
+import { DispatchService, LOCATION_FRESHNESS_MINUTES } from "../dispatch/dispatch.service";
 
 /** Radius schedule as the desk should read it (last step is the whole branch). */
 const RADIUS_LABEL = (radiusKm: number) => (Number.isFinite(radiusKm) ? `${radiusKm} km` : "the whole branch");
@@ -30,12 +30,42 @@ export class AdminDispatchService {
     private readonly dispatch: DispatchService,
   ) {}
 
+  /**
+   * Turn the numbers into the sentence the desk actually needs.
+   *
+   * The engine stops for three different reasons and they used to look identical:
+   * nobody is employable, nobody is reachable, or everybody who was asked said no.
+   * Each one has a different fix, so each one gets its own sentence.
+   */
+  private blockingReason(input: {
+    exhausted: boolean;
+    onlineRiders: number;
+    onlineWithoutPing: number;
+    asked: number;
+    rejected: number;
+    liveOffers: number;
+  }): string | null {
+    if (input.liveOffers > 0) return null;
+    if (!input.exhausted) return null;
+
+    if (input.onlineRiders === 0) {
+      if (input.onlineWithoutPing > 0) {
+        return `${input.onlineWithoutPing} rider(s) are online but their phone has not reported a position in ${LOCATION_FRESHNESS_MINUTES} minutes. Ask them to reopen the rider app with location on.`;
+      }
+      return "No approved rider is online. Approve a rider, or ask one to go online.";
+    }
+    if (input.asked > 0 && input.rejected === input.asked) {
+      return `Every rider asked (${input.asked}) rejected this job. Assign one by hand, or ask the desk to re-run the round.`;
+    }
+    return `${input.onlineRiders} rider(s) online, but none were within reach or free. Assign by hand, or wait for a rider to finish their current job.`;
+  }
+
   /** Every delivery the engine is currently working, plus the floor's capacity. */
   async board() {
     const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const now = new Date();
 
-    const [waiting, onlineRiders, exhaustedToday, justAssigned, activeOffers] = await Promise.all([
+    const [waiting, onlineRiders, onlineWithoutPing, exhaustedToday, justAssigned, activeOffers] = await Promise.all([
       this.prisma.delivery.findMany({
         where: { status: "PENDING", riderId: null, createdAt: { gte: since } },
         orderBy: { createdAt: "asc" },
@@ -75,6 +105,24 @@ export class AdminDispatchService {
       this.prisma.rider.count({
         where: { approvalStatus: "APPROVED", availability: "ONLINE", user: { status: "ACTIVE" } },
       }),
+      // Approved and online, but their phone has gone quiet: dispatch cannot use them.
+      // Splitting this out is the difference between "nobody wanted it" and
+      // "nobody could be reached", which are completely different problems for the desk.
+      this.prisma.rider.count({
+        where: {
+          approvalStatus: "APPROVED",
+          availability: "ONLINE",
+          deletedAt: null,
+          user: { status: "ACTIVE" },
+          locations: {
+            none: {
+              recordedAt: {
+                gte: new Date(Date.now() - LOCATION_FRESHNESS_MINUTES * 60 * 1000),
+              },
+            },
+          },
+        },
+      }),
       this.prisma.adminAlert.count({
         where: { type: "DISPATCH_EXHAUSTED", createdAt: { gte: since } },
       }),
@@ -98,6 +146,8 @@ export class AdminDispatchService {
         waiting: waiting.length,
         offersOut: activeOffers,
         onlineRiders,
+        // of which this many cannot be used right now because their position is stale
+        onlineWithoutPing,
         exhaustedToday,
         batchSize: this.config.offerBatchSize,
         offerTimeoutSeconds: this.config.offerTimeoutSeconds,
@@ -134,6 +184,15 @@ export class AdminDispatchService {
             maxRounds: this.config.dispatchMaxRounds,
             lastRoundAt: delivery.lastRoundAt,
             exhausted: round > this.config.dispatchMaxRounds,
+            // Why the engine is standing still, in words the desk can act on.
+            blocking: this.blockingReason({
+              exhausted: round > this.config.dispatchMaxRounds,
+              onlineRiders,
+              onlineWithoutPing,
+              asked: delivery.assignments.length,
+              rejected: delivery.assignments.filter((row) => row.status === "REJECTED").length,
+              liveOffers: liveOffers.length,
+            }),
             offersOut: liveOffers.length,
             liveOffers: liveOffers.map((row) => ({
               assignmentId: row.id,

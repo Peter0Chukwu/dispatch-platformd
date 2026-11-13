@@ -685,7 +685,7 @@ function formatBucket(value: Date, unit: 'day' | 'month' | 'datetime'): string {
   if (Number.isNaN(date.getTime())) return String(value);
   if (unit === 'month') return date.toISOString().slice(0, 7);
   if (unit === 'datetime') {
-    // Lagos is UTC+1 year-round — no daylight saving to get wrong.
+    // West Africa Time is UTC+1 year-round — no daylight saving to get wrong.
     return new Date(date.getTime() + 60 * 60 * 1000).toISOString().slice(0, 16).replace('T', ' ');
   }
   return new Date(date.getTime() + 60 * 60 * 1000).toISOString().slice(0, 10);

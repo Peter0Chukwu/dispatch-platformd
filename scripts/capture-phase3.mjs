@@ -64,9 +64,9 @@ log('✓ 30-dashboard-empty.png (real zeros from /deliveries/summary)');
 // Booking wizard — step 1: pickup
 await page.getByRole('link', { name: 'Book a rider' }).first().click();
 await page.waitForURL('**/app/book');
-await page.getByLabel('Search saved locations').fill('Lekki');
+await page.getByLabel('Search saved locations').fill('Ikpoba');
 await page.waitForTimeout(300);
-await page.getByRole('button', { name: /Lekki — Phase 1/ }).click();
+await page.getByRole('button', { name: /Ikpoba Hill/ }).click();
 await page.getByLabel('Contact name').fill('Ada Okafor');
 await page.getByLabel('Contact phone').fill(CUSTOMER.phone);
 await page.screenshot({ path: `${OUT}/31-book-step1-pickup.png` });
@@ -74,9 +74,9 @@ log('✓ 31-book-step1-pickup.png');
 await page.getByRole('button', { name: 'Continue' }).click();
 
 // step 2: drop-off
-await page.getByLabel('Search saved locations').fill('Yaba');
+await page.getByLabel('Search saved locations').fill('Ugbowo');
 await page.waitForTimeout(300);
-await page.getByRole('button', { name: /Yaba — Commercial Avenue/ }).click();
+await page.getByRole('button', { name: /Ugbowo — Shopping Complex/ }).click();
 await page.getByLabel('Contact name').fill('Chinedu Eze');
 await page.getByLabel('Contact phone').fill('08069876543');
 await page.waitForTimeout(1200); // let the quote arrive

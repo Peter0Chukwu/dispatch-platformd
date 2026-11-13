@@ -470,6 +470,34 @@ model RolePermission {
   @@map("role_permissions")
 }
 
+/// A one-time invitation to join the staff.
+///
+/// The super admin mints it and sends the link by whatever channel they like;
+/// whoever opens it sets their own name, phone and password. Only the SHA-256 of
+/// the token is stored, so a database leak cannot be turned into a working link.
+/// One use, an expiry, and a revoke switch — an administrative link that never
+/// dies is a permanent back door.
+model StaffInvite {
+  id              String    @id @default(uuid()) @db.Uuid
+  tokenHash       String    @unique
+  email           String
+  firstName       String?
+  lastName        String?
+  roleKeys        String[]
+  jobTitle        String?
+  branchId        String?   @db.Uuid
+  invitedByUserId String?   @db.Uuid
+  expiresAt       DateTime
+  usedAt          DateTime?
+  revokedAt       DateTime?
+  acceptedUserId  String?   @db.Uuid
+  createdAt       DateTime  @default(now())
+
+  @@index([email])
+  @@index([expiresAt])
+  @@map("staff_invites")
+}
+
 model StaffRole {
   staffId String @db.Uuid
   roleId  String @db.Uuid

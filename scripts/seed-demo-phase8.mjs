@@ -9,7 +9,7 @@
  * reads them back through the tracking API.
  *
  * What it leaves behind:
- *   1. one delivery IN_TRANSIT from Victoria Island to Ikeja, paid
+ *   1. one delivery IN_TRANSIT from Ring Road to Ikpoba Hill, paid
  *   2. a position trail of ~12 pings along the route (rider heading to the drop-off)
  *   3. a share link the capture script can open without signing in
  *
@@ -24,15 +24,15 @@ const CUSTOMER = { email: 'demo.customer@dispatch.test', password: 'Customer@123
 const RIDER = { email: 'demo.rider@dispatch.test', password: 'Rider@12345' };
 
 const PICKUP = {
-  address: '12 Adeola Odeku Street, Victoria Island, Lagos',
-  landmark: 'Opposite Eko Hotel roundabout',
+  address: 'Ring Road, Oba Ovonramwen Square, Benin City',
+  landmark: 'By the Oba’s palace roundabout roundabout',
   lat: 6.4281,
   lng: 3.4219,
   contactName: 'Ada Okafor',
   contactPhone: '+2348039876543',
 };
 const DEST = {
-  address: '7 Allen Avenue, Ikeja, Lagos',
+  address: 'Benin-Auchi Road, Ikpoba Hill, Benin City',
   landmark: 'Beside the Zenith Bank branch',
   lat: 6.6018,
   lng: 3.3515,

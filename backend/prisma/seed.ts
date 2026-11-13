@@ -83,6 +83,17 @@ async function seedOrganisation() {
     }
     console.log(`   zones  ${SERVICE_ZONES.map((z) => z.code).join(', ')}`);
 
+    // Zones that used to exist and no longer appear in the config are switched off
+    // rather than deleted. Historical deliveries point at them, and a zone that
+    // vanishes takes its reporting with it.
+    const retiredZones = await prisma.serviceZone.updateMany({
+      where: { branchId: created.id, code: { notIn: SERVICE_ZONES.map((z) => z.code) } },
+      data: { isActive: false },
+    });
+    if (retiredZones.count > 0) {
+      console.log(`   zones  ${retiredZones.count} retired (no longer in config)`);
+    }
+
     // Exactly one active default pricing rule per branch.
     const existingRule = await prisma.pricingRule.findFirst({
       where: { branchId: created.id, serviceZoneId: null, isActive: true },
@@ -109,6 +120,16 @@ async function seedOrganisation() {
       });
       console.log(`   pricing rule "${DEFAULT_PRICING.name}" activated`);
     }
+  }
+
+  // Same rule for branches: anything the config no longer names is switched off.
+  // New accounts are only ever attached to an active branch.
+  const retiredBranches = await prisma.branch.updateMany({
+    where: { code: { notIn: BRANCHES.map((b) => b.code) } },
+    data: { isActive: false },
+  });
+  if (retiredBranches.count > 0) {
+    console.log(`   branches ${retiredBranches.count} retired (no longer in config)`);
   }
 }
 

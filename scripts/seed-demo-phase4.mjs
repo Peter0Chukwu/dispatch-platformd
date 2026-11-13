@@ -98,9 +98,9 @@ async function main() {
         email: RIDER_EMAIL,
         phone: RIDER_PHONE,
         password: RIDER_PASSWORD,
-        addressLine: '24 Ogba Road, Ikeja',
-        city: 'Lagos',
-        state: 'Lagos',
+        addressLine: '12 Adesuwa Road, GRA',
+        city: 'Benin City',
+        state: 'Edo',
         vehicleType: 'MOTORCYCLE',
         vehicleRegistrationNumber: 'LSD-482-QR',
         emergencyContactName: 'Tunde Adeyemi',
@@ -180,7 +180,7 @@ async function main() {
   // ── 5. go online, then place a booking so an offer is guaranteed ───────────
   await call('/rider/location', {
     token: riderToken,
-    body: { lat: 6.4301, lng: 3.4197, accuracyM: 12, speedKph: 0, batteryPct: 84 },
+    body: { lat: 6.3345, lng: 5.6240, accuracyM: 12, speedKph: 0, batteryPct: 84 },
   });
   await call('/rider/availability', { token: riderToken, body: { availability: 'ONLINE' } });
   console.log('· rider online');
@@ -195,18 +195,18 @@ async function main() {
     body: {
       deliveryType: 'STANDARD',
       pickup: {
-        address: '12 Adeola Odeku Street, Victoria Island, Lagos',
-        landmark: 'Opposite Eko Hotel roundabout',
+        address: 'Ring Road, Oba Ovonramwen Square, Benin City',
+        landmark: 'By the Oba’s palace roundabout roundabout',
         lat: 6.4281,
         lng: 3.4219,
         contactName: 'Ada Okafor',
         contactPhone: '+2348039876543',
       },
       destination: {
-        address: '5 Bode Thomas Street, Surulere, Lagos',
+        address: 'Ugbowo-Lagos Road, Benin City',
         landmark: 'Beside the First Bank branch',
-        lat: 6.4969,
-        lng: 3.3481,
+        lat: 6.3960,
+        lng: 5.6110,
         contactName: 'Chinedu Eze',
         contactPhone: '+2348069876543',
       },

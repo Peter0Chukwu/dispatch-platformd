@@ -1,6 +1,7 @@
 import { Body, Controller, Delete, Get, Ip, Patch, Post, Req, Res } from '@nestjs/common';
 import type { Response } from 'express';
 import {
+  avatarUploadSchema,
   changePasswordSchema,
   forgotPasswordSchema,
   loginSchema,
@@ -199,6 +200,24 @@ export class AuthController {
     @ZodBody(updateProfileSchema) body: z.infer<typeof updateProfileSchema>,
   ) {
     return this.auth.updateProfile(user, body);
+  }
+
+  /**
+   * Display picture. JSON + base64, like every other upload in this product: one
+   * size cap, one MIME allow-list, no multipart parser to keep in sync.
+   */
+  @Post('me/avatar')
+  @RateLimit({ points: 10, windowSeconds: 300, keyBy: 'ip' })
+  async uploadAvatar(
+    @CurrentUser() user: AuthPrincipal,
+    @ZodBody(avatarUploadSchema) body: z.infer<typeof avatarUploadSchema>,
+  ) {
+    return this.auth.setAvatar(user, body);
+  }
+
+  @Delete('me/avatar')
+  async deleteAvatar(@CurrentUser() user: AuthPrincipal) {
+    return this.auth.removeAvatar(user);
   }
 
   @Get('sessions')

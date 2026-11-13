@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom';
+import { BrandMark } from '../components/BrandMark';
 
 /** Split-screen shell for every authentication screen. */
 export function AuthLayout({
@@ -16,13 +17,7 @@ export function AuthLayout({
     <div className="min-h-screen bg-ink-50 lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(0,520px)]">
       <aside className="relative hidden overflow-hidden bg-brand-950 p-10 lg:flex lg:flex-col lg:justify-between">
         <Link to="/" className="flex items-center gap-3">
-          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-500 text-brand-950">
-            <svg width="22" height="22" viewBox="0 0 32 32" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M6 23h20M10 23v-9h8l5 5v4" />
-              <circle cx="12" cy="25" r="1.6" fill="currentColor" stroke="none" />
-              <circle cx="22" cy="25" r="1.6" fill="currentColor" stroke="none" />
-            </svg>
-          </span>
+          <BrandMark size="md" />
           <span className="text-lg font-bold text-white">Traders Welfare Logistics</span>
         </Link>
 
@@ -50,7 +45,7 @@ export function AuthLayout({
           </ul>
         </div>
 
-        <p className="text-xs text-brand-400">Lagos, Nigeria · Naira (₦) · Africa/Lagos</p>
+        <p className="text-xs text-brand-400">Benin City, Edo State · Naira (₦) · Africa/Lagos</p>
       </aside>
 
       <main className="flex min-h-screen flex-col justify-center px-5 py-10 sm:px-10">

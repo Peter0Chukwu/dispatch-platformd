@@ -66,7 +66,7 @@ windows side by side — this is the part a screenshot cannot show you.
 Then sign in as the **customer** in a third tab:
 
 10. **Book a delivery.** Pick an address, choose a package size, and look at the quote. The price is
-    computed server-side in integer kobo from a real Lagos route — the browser sends two coordinates and
+    computed server-side in integer kobo from a real Benin City route — the browser sends two coordinates and
     nothing else. Every line of the breakdown is shown so you can argue with it.
 11. Pay. In this development environment payment is **simulated on purpose**, through the same code path
     a real Paystack webhook uses. The banner says so rather than pretending a card was charged.

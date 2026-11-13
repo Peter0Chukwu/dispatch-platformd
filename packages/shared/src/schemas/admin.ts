@@ -109,3 +109,35 @@ export const updatePricingRuleSchema = z
     message: "Nothing to update",
   });
 export type UpdatePricingRuleInput = z.infer<typeof updatePricingRuleSchema>;
+
+/* ─────────────────────────── Staff invitations ────────────────────────────── */
+
+/**
+ * A super admin does not type a colleague's password. They mint a link and send
+ * it; the recipient chooses their own password on the way in.
+ *
+ * There is no password field here on purpose — a password chosen by somebody
+ * else, and told to you over WhatsApp, is not a credential, it is a formality.
+ */
+export const createStaffInviteSchema = z.object({
+  email: emailSchema,
+  firstName: z.string().trim().min(2).max(60).optional(),
+  lastName: z.string().trim().min(2).max(60).optional(),
+  roleKeys: z
+    .array(z.string().trim().min(2))
+    .min(1, "Give this person at least one role"),
+  jobTitle: z.string().trim().max(80).optional(),
+  branchId: z.string().uuid().optional(),
+  /** Hours the link stays alive. Short by default: it travels over chat apps. */
+  expiresInHours: z.coerce.number().int().min(1).max(24 * 14).default(72),
+});
+export type CreateStaffInviteInput = z.infer<typeof createStaffInviteSchema>;
+
+export const acceptStaffInviteSchema = z.object({
+  firstName: z.string().trim().min(2, "Enter your first name").max(60),
+  lastName: z.string().trim().min(2, "Enter your last name").max(60),
+  phone: ngPhone,
+  password: passwordSchema,
+  acceptTerms: z.literal(true),
+});
+export type AcceptStaffInviteInput = z.infer<typeof acceptStaffInviteSchema>;

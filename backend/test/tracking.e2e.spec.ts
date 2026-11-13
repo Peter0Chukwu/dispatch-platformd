@@ -111,13 +111,13 @@ describe('Phase 8 — maps, tracking and realtime', () => {
   /* ───────────────────────────── 1. addresses ───────────────────────────── */
 
   describe('address lookup', () => {
-    it('suggests real Lagos places and says which provider answered', async () => {
-      const res = await request(app.getHttpServer()).get('/api/v1/maps/places?q=lekki').expect(200);
+    it('suggests real Benin City places and says which provider answered', async () => {
+      const res = await request(app.getHttpServer()).get('/api/v1/maps/places?q=ikpoba').expect(200);
 
       expect(res.body.provider).toBe(maps.provider);
       expect(res.body.data.length).toBeGreaterThan(0);
       const lekki = res.body.data[0];
-      expect(lekki.address).toContain('Lekki');
+      expect(lekki.address).toContain('Ikpoba');
       // Every suggestion carries real coordinates — the booking form never invents a pin.
       expect(typeof lekki.lat).toBe('number');
       expect(typeof lekki.lng).toBe('number');
@@ -131,18 +131,18 @@ describe('Phase 8 — maps, tracking and realtime', () => {
 
     it('reverse geocodes a coordinate to a readable place', async () => {
       const res = await request(app.getHttpServer())
-        .get('/api/v1/maps/reverse?lat=6.4410&lng=3.4740')
+        .get('/api/v1/maps/reverse?lat=6.3960&lng=5.6110')
         .expect(200);
       expect(res.body.data.address).toBeTruthy();
-      expect(res.body.data.lat).toBeCloseTo(6.441, 3);
+      expect(res.body.data.lat).toBeCloseTo(6.396, 3);
       // Stub answers are marked approximate; the UI shows that to the user.
       if (res.body.data.source === 'STUB') expect(res.body.data.approximate).toBe(true);
     });
 
     it('geocodes a written address server-side', async () => {
-      const result = await maps.geocode('Yaba Commercial Avenue');
+      const result = await maps.geocode('Ugbowo Shopping Complex');
       expect(result).not.toBeNull();
-      expect(result!.lat).toBeCloseTo(6.5095, 3);
+      expect(result!.lat).toBeCloseTo(6.396, 3);
     });
   });
 

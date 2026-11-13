@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { DELIVERY_STATUS_LABELS, DELIVERY_STATUS_TONE, formatNaira } from '@dispatch/shared';
+import { BrandMark } from '../components/BrandMark';
 import {
   Alert,
   Avatar,
@@ -71,12 +72,56 @@ export default function StyleGuidePage() {
           </Link>
         </div>
 
+        {/* ── Logo ────────────────────────────────────────────────── */}
+        <Section title="Logo">
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div className="rounded-xl border border-ink-200 bg-white p-5">
+              <p className="mb-4 text-xs font-semibold uppercase tracking-wide text-ink-400">Mark, on light</p>
+              <div className="flex items-end gap-4">
+                <BrandMark size="lg" />
+                <BrandMark size="md" />
+                <BrandMark size="sm" />
+              </div>
+              <p className="mt-4 text-[11px] text-ink-500">
+                48 / 40 / 36 px tiles. The smallest the mark is used in the product.
+              </p>
+            </div>
+
+            <div className="rounded-xl border border-brand-800 bg-brand-950 p-5">
+              <p className="mb-4 text-xs font-semibold uppercase tracking-wide text-brand-400">Mark, on dark</p>
+              <div className="flex items-end gap-4">
+                <BrandMark size="lg" />
+                <BrandMark size="md" />
+              </div>
+              <p className="mt-4 text-[11px] text-brand-300">
+                The white tile is what carries it: the artwork has dark outlines and white highlights,
+                so a flat one-colour version would lose the truck.
+              </p>
+            </div>
+
+            <div className="rounded-xl border border-ink-200 bg-white p-5">
+              <p className="mb-4 text-xs font-semibold uppercase tracking-wide text-ink-400">Full lockup</p>
+              <img src="/brand/logo-lockup.png" alt="Traders Welfare Logistics" className="w-full" />
+              <p className="mt-4 text-[11px] text-ink-500">
+                Supplied artwork, background removed. Not used in the UI — the product name is always
+                set in type beside the mark.
+              </p>
+            </div>
+          </div>
+          <p className="mt-3 text-[11px] text-ink-500">
+            Files: <code className="rounded bg-ink-100 px-1">/brand/logo-mark.webp</code> (UI),
+            <code className="ml-1 rounded bg-ink-100 px-1">/brand/logo-mark@2x.webp</code>,
+            <code className="ml-1 rounded bg-ink-100 px-1">/brand/logo-lockup.png</code> (print, social),
+            and the favicon set at the site root.
+          </p>
+        </Section>
+
         {/* ── Colours ─────────────────────────────────────────────── */}
         <Section title="Colour palette">
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             {[
-              { name: 'brand (navy)', cls: 'bg-brand-900', note: 'headers, primary buttons' },
-              { name: 'accent (green)', cls: 'bg-accent-600', note: 'primary actions, success' },
+              { name: 'brand (deep green)', cls: 'bg-brand-900', note: 'headers, primary buttons' },
+              { name: 'accent (bright green)', cls: 'bg-accent-500', note: 'primary actions, success' },
               { name: 'danger', cls: 'bg-danger-600', note: 'destructive, failures' },
               { name: 'warning', cls: 'bg-warning-500', note: 'pending, attention' },
             ].map((swatch) => (

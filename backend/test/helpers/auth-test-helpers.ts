@@ -41,7 +41,7 @@ export async function resetUsers(prisma: PrismaService): Promise<void> {
     'deliveries',
     'addresses',
     'customers', 'riders',
-    'staff_roles', 'staff_branches', 'staff',
+    'staff_invites', 'staff_roles', 'staff_branches', 'staff',
     'users',
   ];
   for (const table of statements) {

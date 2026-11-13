@@ -14,7 +14,8 @@ import { haversineKm, roundTo, type Point } from './distance';
 /**
  * Anything beyond this from the nearest zone centre is outside the metro we
  * serve, and is rejected with a clear message instead of being quietly priced.
- * 60 km comfortably covers the Lagos mainland, island and Lekki corridor.
+ * 60 km comfortably covers Benin City and its outskirts — Ugbowo and Ikpoba Hill
+ * sit about 5 km from Ring Road, so the cap only rejects points from another city.
  */
 export const MAX_SERVICE_DISTANCE_KM = 60;
 

@@ -31,8 +31,8 @@ const TINY_PNG =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
 
 const PICKUP = {
-  address: '12 Adeola Odeku Street, Victoria Island, Lagos',
-  landmark: 'Opposite Eko Hotel roundabout',
+  address: 'Ring Road, Oba Ovonramwen Square, Benin City',
+  landmark: 'By the Oba’s palace roundabout roundabout',
   lat: 6.4281,
   lng: 3.4219,
   contactName: 'Ada Okafor',
@@ -40,10 +40,10 @@ const PICKUP = {
 };
 
 const DESTINATIONS = [
-  { address: '5 Bode Thomas Street, Surulere, Lagos', lat: 6.4969, lng: 3.3481 },
-  { address: '18 Admiralty Way, Lekki Phase 1, Lagos', lat: 6.4419, lng: 3.4723 },
-  { address: '7 Allen Avenue, Ikeja, Lagos', lat: 6.6018, lng: 3.3515 },
-  { address: '33 Awolowo Road, Ikoyi, Lagos', lat: 6.4501, lng: 3.4356 },
+  { address: 'Ugbowo-Lagos Road, Benin City', lat: 6.3960, lng: 5.6110 },
+  { address: 'Aduwawa, Benin-Auchi Road, Benin City', lat: 6.3629, lng: 5.6791 },
+  { address: 'Benin-Auchi Road, Ikpoba Hill, Benin City', lat: 6.3565, lng: 5.6691 },
+  { address: 'Adesuwa Road, GRA, Benin City', lat: 6.3312, lng: 5.6392 },
 ];
 
 async function call(path, { method = 'POST', token, body } = {}) {
@@ -113,7 +113,7 @@ async function main() {
   const goOnline = async () => {
     await call('/rider/location', {
       token: riderToken,
-      body: { lat: 6.4301, lng: 3.4197, accuracyM: 12, speedKph: 0, batteryPct: 84 },
+      body: { lat: 6.3345, lng: 5.6240, accuracyM: 12, speedKph: 0, batteryPct: 84 },
     });
     await call('/rider/availability', { token: riderToken, body: { availability: 'ONLINE' } });
   };

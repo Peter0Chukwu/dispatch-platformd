@@ -265,6 +265,7 @@ around), `@hookform/resolvers` 7.x, vitest 4.1.12, multer 2.5.0, React 19, NestJ
 | 4 | Low | `/simulate` payment endpoint exists for the development path | By design; refuses to run when `PAYMENTS_MODE=LIVE`, and the go-live checklist verifies it |
 | 5 | Low | Stub maps mean distances are modelled, not measured | By design and disclosed in the UI; set `MAPS_PROVIDER=GOOGLE` to switch |
 | 6 | Low | Staff roles page renders "super admin" twice | Cosmetic; permissions are correct. Recorded, not fixed (UI change not authorised) |
+| 7 | Low | A staff invitation link is a bearer credential: whoever opens it first becomes that admin | By design, and constrained: super-admin only, single use (conditional UPDATE), 72-hour default expiry, withdrawable, and the hash—not the link—is stored. A surprise acceptance is visible in the invitations list. See `documentation/STAFF-INVITATIONS.md` |
 
 **Nothing in this register is a P1.** Two items (1 and 2) are genuine and time-boxed; the rest
 are decisions with the reasoning attached.

@@ -52,3 +52,13 @@ export const resetPasswordSchema = z.object({
   token: z.string().min(20),
   password: passwordSchema,
 });
+
+/**
+ * A display picture is uploaded as base64 JSON, the same way parcel photos and
+ * rider documents already are: one upload path, one size cap, one MIME allow-list.
+ */
+export const avatarUploadSchema = z.object({
+  mimeType: z.enum(['image/jpeg', 'image/png', 'image/webp']),
+  base64: z.string().min(32, 'Choose an image'),
+});
+export type AvatarUploadInput = z.infer<typeof avatarUploadSchema>;

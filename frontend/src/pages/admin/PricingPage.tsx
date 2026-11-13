@@ -179,7 +179,7 @@ export default function PricingPage() {
               </CardBody>
             </Card>
 
-            <Alert tone="warning" title="These are seeded Lagos defaults">
+            <Alert tone="warning" title="These are the seeded Benin City defaults">
               Swap them for your real city tariffs whenever you are ready —
               either here, or by updating the seeded configuration. No code
               change is needed.

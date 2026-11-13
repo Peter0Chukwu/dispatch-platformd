@@ -90,6 +90,22 @@ export class StorageService {
     return readFile(this.absolutePath(key));
   }
 
+  /**
+   * Delete a stored file, ignoring "already gone".
+   *
+   * Replacing an avatar must not accumulate orphans: the old bytes are removed
+   * after the new key is written, and a missing file is not an error because the
+   * database row is the source of truth, not the disk.
+   */
+  async remove(key: string): Promise<void> {
+    try {
+      const { unlink } = await import('node:fs/promises');
+      await unlink(this.absolutePath(key));
+    } catch {
+      this.logger.warn(`Could not delete ${key} (already gone?)`);
+    }
+  }
+
   absolutePath(key: string): string {
     const root = resolve(this.config.storageLocalDir);
     const target = resolve(join(root, key));
