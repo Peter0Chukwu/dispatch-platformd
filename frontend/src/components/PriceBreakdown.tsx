@@ -51,7 +51,7 @@ export function PriceBreakdown({
           {meta.distanceKm !== undefined && `${meta.distanceKm} km`}
           {meta.durationMinutes !== undefined && ` · ~${meta.durationMinutes} min`}
           {meta.zoneName && ` · ${meta.zoneName}`}
-          {meta.routeSource === 'STUB' && ' · straight-line estimate'}
+          {meta.routeSource === 'STUB' && ' · estimated distance'}
         </p>
       )}
     </div>

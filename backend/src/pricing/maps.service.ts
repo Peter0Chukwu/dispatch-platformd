@@ -7,9 +7,22 @@ import type { GeocodeResult, PlaceResult } from './maps-types';
  * MapsService — the only place that knows how routes are measured.
  *
  * Today `MAPS_PROVIDER=stub` (haversine × road factor). When the Google Maps key
- * is configured, `MAPS_PROVIDER=google` switches this to the Directions API and
- * NOTHING ELSE in the codebase has to change: PricingService only ever calls
- * `estimateRoute()` and receives the same shape back.
+ * is configured, `MAPS_PROVIDER=google` switches this to Google's current
+ * services and NOTHING ELSE in the codebase has to change: PricingService only
+ * ever calls `estimateRoute()` and receives the same shape back.
+ *
+ * WHICH GOOGLE SERVICES, AND WHY THESE ONES
+ * Google retired the legacy Places, Directions and Distance Matrix endpoints on
+ * 5 October 2026: a Google Cloud project created after that date cannot enable
+ * them at all. Since every deployment of this platform starts as a new project,
+ * this file speaks only to what a new project can actually use —
+ *   · Places API (New)     places.googleapis.com  — address suggestions + details
+ *   · Routes API           routes.googleapis.com  — driving distance and duration
+ *   · Geocoding API        maps.googleapis.com    — written address ↔ coordinates
+ *                                           (Geocoding was not retired.)
+ * A key that only has the legacy APIs enabled will fail here, and the service
+ * falls back to the stub with a warning in the log rather than blocking a
+ * booking.
  */
 @Injectable()
 export class MapsService {
@@ -32,7 +45,7 @@ export class MapsService {
         return await this.googleRoute(from, to);
       } catch (error) {
         this.logger.warn(
-          `Google Directions failed, falling back to stub estimate: ${(error as Error).message}`,
+          `Routes API failed, falling back to the stub estimate: ${(error as Error).message}`,
         );
       }
     }
@@ -154,76 +167,128 @@ export class MapsService {
     };
   }
 
+  /**
+   * Address suggestions from Places API (New).
+   *
+   * Autocomplete answers with predictions but no coordinates, so the few the
+   * customer will actually see are expanded with a Place Details call. Both
+   * requests carry the field mask the new API requires; without a mask Google
+   * rejects the call outright.
+   */
   private async googleAutocomplete(query: string, key: string, limit: number): Promise<PlaceResult[]> {
-    const url =
-      'https://maps.googleapis.com/maps/api/place/autocomplete/json' +
-      `?input=${encodeURIComponent(query)}&components=country:NG&region=ng` +
-      `&key=${encodeURIComponent(key)}`;
-    const response = await fetch(url, { signal: AbortSignal.timeout(5000) });
+    const response = await fetch('https://places.googleapis.com/v1/places:autocomplete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': key },
+      body: JSON.stringify({
+        input: query,
+        // Benin City is in Nigeria; a suggestion from another country is noise.
+        includedRegionCodes: ['ng'],
+        languageCode: 'en',
+      }),
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) throw new Error(`Places autocomplete responded ${response.status}`);
+
     const body = (await response.json()) as {
-      status: string;
-      predictions?: Array<{
-        place_id: string;
-        description: string;
-        structured_formatting?: { main_text: string; secondary_text?: string };
+      suggestions?: Array<{
+        placePrediction?: {
+          placeId?: string;
+          text?: { text?: string };
+          structuredFormat?: { mainText?: { text?: string }; secondaryText?: { text?: string } };
+        };
       }>;
     };
-    if (body.status !== 'OK' || !body.predictions?.length) return [];
 
-    // Autocomplete returns predictions without coordinates; fetch details for the
-    // few the customer will actually see.
-    const detailed: Array<PlaceResult | null> = await Promise.all(
-      body.predictions.slice(0, limit).map(async (prediction) => {
-        const detailUrl =
-          'https://maps.googleapis.com/maps/api/place/details/json' +
-          `?place_id=${encodeURIComponent(prediction.place_id)}&fields=formatted_address,geometry,name` +
-          `&key=${encodeURIComponent(key)}`;
-        const detailResponse = await fetch(detailUrl, { signal: AbortSignal.timeout(5000) });
-        const detail = (await detailResponse.json()) as {
-          result?: { formatted_address: string; name: string; geometry: { location: { lat: number; lng: number } } };
-        };
-        if (!detail.result) return null;
-        const place: PlaceResult = {
-          id: prediction.place_id,
-          name: prediction.structured_formatting?.main_text ?? detail.result.name,
-          address: detail.result.formatted_address,
-          landmark: prediction.structured_formatting?.secondary_text ?? null,
-          lat: detail.result.geometry.location.lat,
-          lng: detail.result.geometry.location.lng,
-          source: 'GOOGLE',
-        };
-        return place;
-      }),
+    const predictions = (body.suggestions ?? [])
+      .map((suggestion) => suggestion.placePrediction)
+      .filter((prediction): prediction is NonNullable<typeof prediction> => Boolean(prediction?.placeId))
+      .slice(0, limit);
+    if (predictions.length === 0) return [];
+
+    const detailed = await Promise.all(
+      predictions.map((prediction) => this.googlePlaceDetails(prediction.placeId!, prediction, key)),
     );
-    return detailed.filter((row): row is PlaceResult => row !== null);
+    return detailed.filter((place): place is PlaceResult => place !== null);
   }
 
+  /** One place, by id, with the coordinates a booking needs. */
+  private async googlePlaceDetails(
+    placeId: string,
+    prediction: {
+      text?: { text?: string };
+      structuredFormat?: { mainText?: { text?: string }; secondaryText?: { text?: string } };
+    },
+    key: string,
+  ): Promise<PlaceResult | null> {
+    const response = await fetch(
+      `https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}`,
+      {
+        headers: {
+          'X-Goog-Api-Key': key,
+          // Ask for three fields, not the whole place: Google bills by field.
+          'X-Goog-FieldMask': 'id,displayName,formattedAddress,location',
+        },
+        signal: AbortSignal.timeout(5000),
+      },
+    );
+    if (!response.ok) return null;
+
+    const place = (await response.json()) as {
+      id?: string;
+      displayName?: { text?: string };
+      formattedAddress?: string;
+      location?: { latitude?: number; longitude?: number };
+    };
+    if (place.location?.latitude === undefined || place.location?.longitude === undefined) return null;
+
+    return {
+      id: place.id ?? placeId,
+      name: prediction.structuredFormat?.mainText?.text ?? place.displayName?.text ?? place.formattedAddress ?? '',
+      address: place.formattedAddress ?? prediction.text?.text ?? '',
+      landmark: prediction.structuredFormat?.secondaryText?.text ?? null,
+      lat: place.location.latitude,
+      lng: place.location.longitude,
+      source: 'GOOGLE',
+    };
+  }
+
+  /** Driving distance and duration from the Routes API. */
   private async googleRoute(from: Point, to: Point): Promise<RouteEstimate> {
     const key = this.config.googleMapsApiKey;
     if (!key) throw new Error('GOOGLE_MAPS_API_KEY is not configured');
 
-    const url =
-      'https://maps.googleapis.com/maps/api/directions/json' +
-      `?origin=${from.lat},${from.lng}&destination=${to.lat},${to.lng}` +
-      `&mode=driving&region=ng&key=${encodeURIComponent(key)}`;
-
-    const response = await fetch(url, { signal: AbortSignal.timeout(5000) });
-    if (!response.ok) throw new Error(`Directions responded ${response.status}`);
+    const response = await fetch('https://routes.googleapis.com/directions/v2:computeRoutes', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Goog-Api-Key': key,
+        'X-Goog-FieldMask': 'routes.distanceMeters,routes.duration',
+      },
+      body: JSON.stringify({
+        origin: { location: { latLng: { latitude: from.lat, longitude: from.lng } } },
+        destination: { location: { latLng: { latitude: to.lat, longitude: to.lng } } },
+        travelMode: 'DRIVE',
+        // Benin City traffic is real, but traffic-aware routing is billed higher
+        // and a fare quote does not need it. Duration is still authoritative.
+        routingPreference: 'TRAFFIC_UNAWARE',
+        regionCode: 'NG',
+        units: 'METRIC',
+      }),
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) throw new Error(`Routes responded ${response.status}`);
 
     const body = (await response.json()) as {
-      status: string;
-      routes?: { legs: { distance: { value: number }; duration: { value: number } }[] }[];
+      routes?: Array<{ distanceMeters?: number; duration?: string }>;
     };
-    if (body.status !== 'OK' || !body.routes?.length) {
-      throw new Error(`Directions status ${body.status}`);
-    }
+    const route = body.routes?.[0];
+    if (!route?.distanceMeters) throw new Error('Routes returned no route');
 
-    const legs = body.routes[0]!.legs;
-    const metres = legs.reduce((sum, leg) => sum + leg.distance.value, 0);
-    const seconds = legs.reduce((sum, leg) => sum + leg.duration.value, 0);
+    // `duration` arrives as a protobuf duration string, e.g. "842s".
+    const seconds = Number.parseInt(String(route.duration ?? '0s').replace('s', ''), 10) || 0;
 
     return {
-      distanceKm: Math.round((metres / 1000) * 100) / 100,
+      distanceKm: Math.round((route.distanceMeters / 1000) * 100) / 100,
       durationMinutes: Math.max(1, Math.round(seconds / 60)),
       source: 'GOOGLE',
     };

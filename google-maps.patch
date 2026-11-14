@@ -1,0 +1,633 @@
+From 8f2bb0f3a0d6f0a9e8304641bfc8ad31ce304db7 Mon Sep 17 00:00:00 2001
+From: Dispatch Platform <dev@dispatch.local>
+Date: Sat, 14 Nov 2026 15:47:51 +0000
+Subject: [PATCH] maps: talk to the Google services that still exist, and stop
+ narrating the internals
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Google stopped selling the legacy Places, Directions and Distance Matrix APIs on
+5 October 2026, so a Cloud project created today cannot enable them. Every
+deployment of this platform starts as a new project, which means the adapter in
+MapsService would simply have failed with LegacyApiNotActivatedMapError and
+quietly priced every delivery from the stub table.
+
+Address suggestions now come from Places API (New) — places:autocomplete for the
+predictions, then places/{id} with an X-Goog-FieldMask of
+id,displayName,formattedAddress,location for the coordinates, so Google bills
+three fields instead of the whole place. Distances come from the Routes API
+(directions/v2:computeRoutes) with a DRIVE, traffic-unaware, metric request, and
+the protobuf duration string ("842s") is parsed into minutes. Geocoding was not
+retired and is untouched. The stub fallback stays: a Google outage or a key
+missing an API logs a warning and prices the booking anyway.
+
+Covered by backend/test/maps.google.spec.ts, which asserts the URLs, the header
+auth, the field masks, the region restriction and the duration parsing, and that
+both paths degrade to the stub on an error response.
+
+Also: the last of the engineering notes are gone from the product. The banner now
+says "Test mode · no real money moves and no real messages are sent"; the
+tracking card says "Estimated route" instead of "maps key not configured"; the
+price breakdown says "estimated distance"; the picker says "Popular Benin City
+locations"; and the empty map says when the rider's position will appear.
+documentation/CREDENTIALS-SETUP.md now lists the four APIs a new project can
+actually enable.
+---
+ backend/src/pricing/maps.service.ts           | 177 ++++++++++++------
+ backend/test/maps.google.spec.ts              | 156 +++++++++++++++
+ docs/ARCHITECTURE.md                          |   2 +-
+ documentation/CREDENTIALS-SETUP.md            |  32 +++-
+ documentation/PHASE-LOG/PHASE-8.md            |  16 +-
+ .../src/components/DeliveryTrackingCard.tsx   |   2 +-
+ frontend/src/components/LiveMap.tsx           |   2 +-
+ frontend/src/components/LocationPicker.tsx    |   4 +-
+ frontend/src/components/PriceBreakdown.tsx    |   2 +-
+ .../src/components/layout/DevModeBanner.tsx   |  20 +-
+ 10 files changed, 327 insertions(+), 86 deletions(-)
+ create mode 100644 backend/test/maps.google.spec.ts
+
+diff --git a/backend/src/pricing/maps.service.ts b/backend/src/pricing/maps.service.ts
+index b139374..98d9705 100644
+--- a/backend/src/pricing/maps.service.ts
++++ b/backend/src/pricing/maps.service.ts
+@@ -7,9 +7,22 @@ import type { GeocodeResult, PlaceResult } from './maps-types';
+  * MapsService — the only place that knows how routes are measured.
+  *
+  * Today `MAPS_PROVIDER=stub` (haversine × road factor). When the Google Maps key
+- * is configured, `MAPS_PROVIDER=google` switches this to the Directions API and
+- * NOTHING ELSE in the codebase has to change: PricingService only ever calls
+- * `estimateRoute()` and receives the same shape back.
++ * is configured, `MAPS_PROVIDER=google` switches this to Google's current
++ * services and NOTHING ELSE in the codebase has to change: PricingService only
++ * ever calls `estimateRoute()` and receives the same shape back.
++ *
++ * WHICH GOOGLE SERVICES, AND WHY THESE ONES
++ * Google retired the legacy Places, Directions and Distance Matrix endpoints on
++ * 5 October 2026: a Google Cloud project created after that date cannot enable
++ * them at all. Since every deployment of this platform starts as a new project,
++ * this file speaks only to what a new project can actually use —
++ *   · Places API (New)     places.googleapis.com  — address suggestions + details
++ *   · Routes API           routes.googleapis.com  — driving distance and duration
++ *   · Geocoding API        maps.googleapis.com    — written address ↔ coordinates
++ *                                           (Geocoding was not retired.)
++ * A key that only has the legacy APIs enabled will fail here, and the service
++ * falls back to the stub with a warning in the log rather than blocking a
++ * booking.
+  */
+ @Injectable()
+ export class MapsService {
+@@ -32,7 +45,7 @@ export class MapsService {
+         return await this.googleRoute(from, to);
+       } catch (error) {
+         this.logger.warn(
+-          `Google Directions failed, falling back to stub estimate: ${(error as Error).message}`,
++          `Routes API failed, falling back to the stub estimate: ${(error as Error).message}`,
+         );
+       }
+     }
+@@ -154,76 +167,128 @@ export class MapsService {
+     };
+   }
+ 
++  /**
++   * Address suggestions from Places API (New).
++   *
++   * Autocomplete answers with predictions but no coordinates, so the few the
++   * customer will actually see are expanded with a Place Details call. Both
++   * requests carry the field mask the new API requires; without a mask Google
++   * rejects the call outright.
++   */
+   private async googleAutocomplete(query: string, key: string, limit: number): Promise<PlaceResult[]> {
+-    const url =
+-      'https://maps.googleapis.com/maps/api/place/autocomplete/json' +
+-      `?input=${encodeURIComponent(query)}&components=country:NG&region=ng` +
+-      `&key=${encodeURIComponent(key)}`;
+-    const response = await fetch(url, { signal: AbortSignal.timeout(5000) });
++    const response = await fetch('https://places.googleapis.com/v1/places:autocomplete', {
++      method: 'POST',
++      headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': key },
++      body: JSON.stringify({
++        input: query,
++        // Benin City is in Nigeria; a suggestion from another country is noise.
++        includedRegionCodes: ['ng'],
++        languageCode: 'en',
++      }),
++      signal: AbortSignal.timeout(5000),
++    });
++    if (!response.ok) throw new Error(`Places autocomplete responded ${response.status}`);
++
+     const body = (await response.json()) as {
+-      status: string;
+-      predictions?: Array<{
+-        place_id: string;
+-        description: string;
+-        structured_formatting?: { main_text: string; secondary_text?: string };
++      suggestions?: Array<{
++        placePrediction?: {
++          placeId?: string;
++          text?: { text?: string };
++          structuredFormat?: { mainText?: { text?: string }; secondaryText?: { text?: string } };
++        };
+       }>;
+     };
+-    if (body.status !== 'OK' || !body.predictions?.length) return [];
+ 
+-    // Autocomplete returns predictions without coordinates; fetch details for the
+-    // few the customer will actually see.
+-    const detailed: Array<PlaceResult | null> = await Promise.all(
+-      body.predictions.slice(0, limit).map(async (prediction) => {
+-        const detailUrl =
+-          'https://maps.googleapis.com/maps/api/place/details/json' +
+-          `?place_id=${encodeURIComponent(prediction.place_id)}&fields=formatted_address,geometry,name` +
+-          `&key=${encodeURIComponent(key)}`;
+-        const detailResponse = await fetch(detailUrl, { signal: AbortSignal.timeout(5000) });
+-        const detail = (await detailResponse.json()) as {
+-          result?: { formatted_address: string; name: string; geometry: { location: { lat: number; lng: number } } };
+-        };
+-        if (!detail.result) return null;
+-        const place: PlaceResult = {
+-          id: prediction.place_id,
+-          name: prediction.structured_formatting?.main_text ?? detail.result.name,
+-          address: detail.result.formatted_address,
+-          landmark: prediction.structured_formatting?.secondary_text ?? null,
+-          lat: detail.result.geometry.location.lat,
+-          lng: detail.result.geometry.location.lng,
+-          source: 'GOOGLE',
+-        };
+-        return place;
+-      }),
++    const predictions = (body.suggestions ?? [])
++      .map((suggestion) => suggestion.placePrediction)
++      .filter((prediction): prediction is NonNullable<typeof prediction> => Boolean(prediction?.placeId))
++      .slice(0, limit);
++    if (predictions.length === 0) return [];
++
++    const detailed = await Promise.all(
++      predictions.map((prediction) => this.googlePlaceDetails(prediction.placeId!, prediction, key)),
+     );
+-    return detailed.filter((row): row is PlaceResult => row !== null);
++    return detailed.filter((place): place is PlaceResult => place !== null);
+   }
+ 
++  /** One place, by id, with the coordinates a booking needs. */
++  private async googlePlaceDetails(
++    placeId: string,
++    prediction: {
++      text?: { text?: string };
++      structuredFormat?: { mainText?: { text?: string }; secondaryText?: { text?: string } };
++    },
++    key: string,
++  ): Promise<PlaceResult | null> {
++    const response = await fetch(
++      `https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}`,
++      {
++        headers: {
++          'X-Goog-Api-Key': key,
++          // Ask for three fields, not the whole place: Google bills by field.
++          'X-Goog-FieldMask': 'id,displayName,formattedAddress,location',
++        },
++        signal: AbortSignal.timeout(5000),
++      },
++    );
++    if (!response.ok) return null;
++
++    const place = (await response.json()) as {
++      id?: string;
++      displayName?: { text?: string };
++      formattedAddress?: string;
++      location?: { latitude?: number; longitude?: number };
++    };
++    if (place.location?.latitude === undefined || place.location?.longitude === undefined) return null;
++
++    return {
++      id: place.id ?? placeId,
++      name: prediction.structuredFormat?.mainText?.text ?? place.displayName?.text ?? place.formattedAddress ?? '',
++      address: place.formattedAddress ?? prediction.text?.text ?? '',
++      landmark: prediction.structuredFormat?.secondaryText?.text ?? null,
++      lat: place.location.latitude,
++      lng: place.location.longitude,
++      source: 'GOOGLE',
++    };
++  }
++
++  /** Driving distance and duration from the Routes API. */
+   private async googleRoute(from: Point, to: Point): Promise<RouteEstimate> {
+     const key = this.config.googleMapsApiKey;
+     if (!key) throw new Error('GOOGLE_MAPS_API_KEY is not configured');
+ 
+-    const url =
+-      'https://maps.googleapis.com/maps/api/directions/json' +
+-      `?origin=${from.lat},${from.lng}&destination=${to.lat},${to.lng}` +
+-      `&mode=driving&region=ng&key=${encodeURIComponent(key)}`;
+-
+-    const response = await fetch(url, { signal: AbortSignal.timeout(5000) });
+-    if (!response.ok) throw new Error(`Directions responded ${response.status}`);
++    const response = await fetch('https://routes.googleapis.com/directions/v2:computeRoutes', {
++      method: 'POST',
++      headers: {
++        'Content-Type': 'application/json',
++        'X-Goog-Api-Key': key,
++        'X-Goog-FieldMask': 'routes.distanceMeters,routes.duration',
++      },
++      body: JSON.stringify({
++        origin: { location: { latLng: { latitude: from.lat, longitude: from.lng } } },
++        destination: { location: { latLng: { latitude: to.lat, longitude: to.lng } } },
++        travelMode: 'DRIVE',
++        // Benin City traffic is real, but traffic-aware routing is billed higher
++        // and a fare quote does not need it. Duration is still authoritative.
++        routingPreference: 'TRAFFIC_UNAWARE',
++        regionCode: 'NG',
++        units: 'METRIC',
++      }),
++      signal: AbortSignal.timeout(5000),
++    });
++    if (!response.ok) throw new Error(`Routes responded ${response.status}`);
+ 
+     const body = (await response.json()) as {
+-      status: string;
+-      routes?: { legs: { distance: { value: number }; duration: { value: number } }[] }[];
++      routes?: Array<{ distanceMeters?: number; duration?: string }>;
+     };
+-    if (body.status !== 'OK' || !body.routes?.length) {
+-      throw new Error(`Directions status ${body.status}`);
+-    }
++    const route = body.routes?.[0];
++    if (!route?.distanceMeters) throw new Error('Routes returned no route');
+ 
+-    const legs = body.routes[0]!.legs;
+-    const metres = legs.reduce((sum, leg) => sum + leg.distance.value, 0);
+-    const seconds = legs.reduce((sum, leg) => sum + leg.duration.value, 0);
++    // `duration` arrives as a protobuf duration string, e.g. "842s".
++    const seconds = Number.parseInt(String(route.duration ?? '0s').replace('s', ''), 10) || 0;
+ 
+     return {
+-      distanceKm: Math.round((metres / 1000) * 100) / 100,
++      distanceKm: Math.round((route.distanceMeters / 1000) * 100) / 100,
+       durationMinutes: Math.max(1, Math.round(seconds / 60)),
+       source: 'GOOGLE',
+     };
+diff --git a/backend/test/maps.google.spec.ts b/backend/test/maps.google.spec.ts
+new file mode 100644
+index 0000000..6b2ae62
+--- /dev/null
++++ b/backend/test/maps.google.spec.ts
+@@ -0,0 +1,156 @@
++import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
++import { MapsService } from '../src/pricing/maps.service';
++import type { AppConfig } from '../src/config/app.config';
++
++/**
++ * The Google adapter, tested against the wire format — no network, no key.
++ *
++ * These assertions exist because the endpoints changed: Google retired the
++ * legacy Places and Directions APIs on 5 October 2026, so a project created
++ * today can only use Places API (New) and the Routes API. A call to the old
++ * URLs would not fail loudly — it would return a suggestion-less response and
++ * the app would quietly fall back to the stub table, which looks like "Google
++ * is not working" and is miserable to diagnose from a screenshot.
++ */
++
++const config = {
++  mapsProviderKey: 'google',
++  googleMapsApiKey: 'test-key',
++} as unknown as AppConfig;
++
++const autocompleteResponse = {
++  suggestions: [
++    {
++      placePrediction: {
++        placeId: 'place-ring-road',
++        text: { text: 'Ring Road, Benin City, Nigeria' },
++        structuredFormat: {
++          mainText: { text: 'Ring Road' },
++          secondaryText: { text: 'Benin City, Nigeria' },
++        },
++      },
++    },
++  ],
++};
++
++const detailsResponse = {
++  id: 'place-ring-road',
++  displayName: { text: 'Ring Road' },
++  formattedAddress: 'Ring Road, Oba Ovonramwen Square, Benin City 300102, Edo, Nigeria',
++  location: { latitude: 6.3329, longitude: 5.6222 },
++};
++
++const routesResponse = { routes: [{ distanceMeters: 7123, duration: '842s' }] };
++
++describe('phase 8 — the Google adapter speaks the current APIs', () => {
++  let fetchMock: ReturnType<typeof vi.fn>;
++
++  beforeEach(() => {
++    fetchMock = vi.fn();
++    vi.stubGlobal('fetch', fetchMock);
++  });
++
++  afterEach(() => {
++    vi.unstubAllGlobals();
++    vi.restoreAllMocks();
++  });
++
++  describe('address suggestions', () => {
++    it('posts to Places API (New) with the key in a header, not the query string', async () => {
++      fetchMock
++        .mockResolvedValueOnce({ ok: true, json: async () => autocompleteResponse })
++        .mockResolvedValueOnce({ ok: true, json: async () => detailsResponse });
++
++      const service = new MapsService(config);
++      const results = await service.autocomplete('ring road', 6);
++
++      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
++      expect(url).toBe('https://places.googleapis.com/v1/places:autocomplete');
++      expect(init.method).toBe('POST');
++      expect((init.headers as Record<string, string>)['X-Goog-Api-Key']).toBe('test-key');
++      expect(url).not.toContain('key=');
++
++      const sent = JSON.parse(init.body as string) as { input: string; includedRegionCodes: string[] };
++      expect(sent.input).toBe('ring road');
++      // Never offer a suggestion outside Nigeria.
++      expect(sent.includedRegionCodes).toEqual(['ng']);
++
++      expect(results).toHaveLength(1);
++      expect(results[0]).toMatchObject({
++        id: 'place-ring-road',
++        name: 'Ring Road',
++        address: 'Ring Road, Oba Ovonramwen Square, Benin City 300102, Edo, Nigeria',
++        landmark: 'Benin City, Nigeria',
++        lat: 6.3329,
++        lng: 5.6222,
++        source: 'GOOGLE',
++      });
++    });
++
++    it('asks for place details with a field mask, because the new API requires one', async () => {
++      fetchMock
++        .mockResolvedValueOnce({ ok: true, json: async () => autocompleteResponse })
++        .mockResolvedValueOnce({ ok: true, json: async () => detailsResponse });
++
++      await new MapsService(config).autocomplete('ring road');
++
++      const [url, init] = fetchMock.mock.calls[1] as [string, RequestInit];
++      expect(url).toBe('https://places.googleapis.com/v1/places/place-ring-road');
++      expect((init.headers as Record<string, string>)['X-Goog-FieldMask']).toBe(
++        'id,displayName,formattedAddress,location',
++      );
++    });
++
++    it('falls back to the platform table when Google answers with an error', async () => {
++      fetchMock.mockResolvedValue({ ok: false, status: 403, json: async () => ({}) });
++
++      // "ring" matches the seeded Ring Road entry, so the stub can answer.
++      const results = await new MapsService(config).autocomplete('ring road');
++      expect(results.length).toBeGreaterThan(0);
++      expect(results.every((place) => place.source === 'STUB')).toBe(true);
++    });
++  });
++
++  describe('route estimates', () => {
++    it('posts to the Routes API and reads the protobuf duration string', async () => {
++      fetchMock.mockResolvedValueOnce({ ok: true, json: async () => routesResponse });
++
++      const estimate = await new MapsService(config).estimateRoute(
++        { lat: 6.3329, lng: 5.6222 },
++        { lat: 6.396, lng: 5.611 },
++      );
++
++      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
++      expect(url).toBe('https://routes.googleapis.com/directions/v2:computeRoutes');
++      expect(init.method).toBe('POST');
++      expect((init.headers as Record<string, string>)['X-Goog-FieldMask']).toBe(
++        'routes.distanceMeters,routes.duration',
++      );
++
++      const sent = JSON.parse(init.body as string) as {
++        origin: { location: { latLng: { latitude: number; longitude: number } } };
++        travelMode: string;
++        regionCode: string;
++      };
++      expect(sent.origin.location.latLng).toEqual({ latitude: 6.3329, longitude: 5.6222 });
++      expect(sent.travelMode).toBe('DRIVE');
++      expect(sent.regionCode).toBe('NG');
++
++      expect(estimate.source).toBe('GOOGLE');
++      expect(estimate.distanceKm).toBeCloseTo(7.12, 2);
++      // 842 seconds is 14.03 minutes.
++      expect(estimate.durationMinutes).toBe(14);
++    });
++
++    it('falls back to the stub estimate rather than blocking a booking', async () => {
++      fetchMock.mockResolvedValue({ ok: false, status: 500, json: async () => ({}) });
++
++      const estimate = await new MapsService(config).estimateRoute(
++        { lat: 6.3329, lng: 5.6222 },
++        { lat: 6.396, lng: 5.611 },
++      );
++      expect(estimate.source).not.toBe('GOOGLE');
++      expect(estimate.distanceKm).toBeGreaterThan(0);
++    });
++  });
++});
+diff --git a/docs/ARCHITECTURE.md b/docs/ARCHITECTURE.md
+index 0650a2c..ee18616 100644
+--- a/docs/ARCHITECTURE.md
++++ b/docs/ARCHITECTURE.md
+@@ -638,7 +638,7 @@ Each phase ends with: code, migration, tests, a `documentation/PHASE-LOG/PHASE-N
+ |---|---|---|---|---|
+ | **Paystack** | Card/bank/USSD payments, transfers for rider payouts | Test keys work immediately; **no business docs needed for test mode** | Create account → Settings → API Keys → copy test public/secret; add webhook URL later | **1.5% + ₦100** (local cards, capped ₦2,000); transfers ₦10–₦50 |
+ | **Flutterwave** | Second payment rail | Sandbox keys instantly | Create account → API keys; set `secret hash` for webhooks | ~1.4% local |
+-| **Maps** | Autocomplete, geocoding, routing, ETA, map tiles | Google $200/mo free credit (card required) **or** Mapbox free tier | Choose provider (§11 decision) → create project → enable *Places, Geocoding, Directions* → restrict key by HTTP referrer | ₦0–15,000/mo at low volume |
++| **Maps** | Autocomplete, geocoding, routing, ETA, map tiles | Google $200/mo free credit (card required) **or** Mapbox free tier | Choose provider (§11 decision) → create project → enable *Maps JavaScript, Places API (New), Routes, Geocoding* → restrict key by HTTP referrer | ₦0–15,000/mo at low volume |
+ | **SMS (Termii)** — primary NG SMS | OTP, delivery alerts | Small trial credit | Register sender ID (`DispX`) — **sender-ID approval required for production** | ~₦3.5–₦5 / SMS |
+ | **Email (Resend)** | Verification, receipts, reports | 3,000/mo free | Verify sending domain (DNS records) | ₦0 initially |
+ | **Object storage** | ID docs, POD photos, avatars | Cloudinary free tier or Cloudflare R2 (10 GB free) | Create bucket + private ACL; keys to backend only | ₦0–3,000/mo |
+diff --git a/documentation/CREDENTIALS-SETUP.md b/documentation/CREDENTIALS-SETUP.md
+index 3339c63..78dd5ba 100644
+--- a/documentation/CREDENTIALS-SETUP.md
++++ b/documentation/CREDENTIALS-SETUP.md
+@@ -97,18 +97,34 @@ straight-line, ETA, and the customer/admin map.
+ **How to get the key**
+ 
+ 1. Sign in at <https://console.cloud.google.com> → create (or pick) a project.
+-2. **APIs & Services → Library** → enable:
+-   * **Maps JavaScript API** (the live map in the portals)
+-   * **Geocoding API** (address → coordinates)
+-   * **Places API** (autocomplete) — optional until you want live suggestions
+-   * **Routes API** (road distance + ETA; this replaced Distance Matrix)
++2. **APIs & Services → Library** → enable **exactly these four**, and nothing else:
++
++   | API | Used for | Called from |
++   | --- | --- | --- |
++   | **Maps JavaScript API** | the live map in the customer, rider and admin portals | browser |
++   | **Places API (New)** | address suggestions and place coordinates | server |
++   | **Routes API** | road distance and ETA | server |
++   | **Geocoding API** | written address ↔ coordinates | server |
++
++   > **Do not look for "Places API", "Directions API" or "Distance Matrix API".**
++   > Google ended their sale on **5 October 2026**: a newly created Cloud project cannot enable them.
++   > The current services above are their replacements — Places API (New) covers autocomplete and
++   > place details, and Routes API covers what Directions and Distance Matrix used to do. The code in
++   > `backend/src/pricing/maps.service.ts` already talks to the new ones.
++
+ 3. **Billing** → attach a billing account. Required even to use the free tier.
+ 4. **APIs & Services → Credentials → Create credentials → API key**. Create **two keys**:
+    * a **browser key** restricted by HTTP referrer (`https://your-domain.com/*`, `http://localhost:5173/*`)
+-     and limited to Maps JavaScript API + Places;
+-   * a **server key** restricted by IP, limited to Geocoding + Routes.
++     and limited to **Maps JavaScript API** only;
++   * a **server key** restricted by IP (your Northflank/VPS egress IP), limited to
++     **Places API (New)**, **Routes API** and **Geocoding API**.
+ 5. Paste the server key into `GOOGLE_MAPS_API_KEY`, and give the browser key to the frontend
+-   (`frontend/.env` → `VITE_GOOGLE_MAPS_API_KEY`) once Phase 8 wires the map component.
++   (`VITE_GOOGLE_MAPS_API_KEY`, a **build-time** variable — the web image must be rebuilt after you set it).
++
++**If you enable the wrong set**, nothing breaks loudly: the API logs
++`Routes API failed, falling back to the stub estimate: Routes responded 403` (or the same line for
++Places) and keeps pricing with the stub model. That warning in the logs is the signal that a key is
++missing, restricted too tightly, or pointed at an API that is not enabled.
+ 
+ ```dotenv
+ MAPS_PROVIDER=GOOGLE
+diff --git a/documentation/PHASE-LOG/PHASE-8.md b/documentation/PHASE-LOG/PHASE-8.md
+index 3f5b570..30099dc 100644
+--- a/documentation/PHASE-LOG/PHASE-8.md
++++ b/documentation/PHASE-LOG/PHASE-8.md
+@@ -33,19 +33,25 @@ which is the only file in the codebase that knows a maps provider exists.
+ 
+ | Capability | Google (when a key exists) | Stub (current default) |
+ |---|---|---|
+-| `autocomplete(query)` | Places Autocomplete + Place Details | 14 real Lagos locations, scored by term match |
++| `autocomplete(query)` | Places API (New) — autocomplete + place details | 12 real Benin City locations, scored by term match |
+ | `geocode(address)` | Geocoding API, `components=country:NG` | nearest saved place, marked `approximate: true` |
+ | `reverseGeocode(lat, lng)` | Geocoding API | `Near <place> (±n km)` — honest about imprecision |
+-| `estimateRoute(from, to)` | Directions API (road distance, real duration) | haversine × road factor 1.35 at 22 km/h |
++| `estimateRoute(from, to)` | Routes API (road distance, real duration) | haversine × road factor 1.35 at 22 km/h |
++
++> **Updated 5 October 2026:** Google stopped selling the legacy **Places**, **Directions** and
++> **Distance Matrix** APIs, so a Cloud project created today cannot enable them. The adapter now calls
++> `places.googleapis.com/v1` and `routes.googleapis.com/directions/v2:computeRoutes`; Geocoding was not
++> retired and is unchanged. Every request carries the `X-Goog-FieldMask` header the new APIs require.
++> See `documentation/CREDENTIALS-SETUP.md` §3 for the four APIs to enable.
+ 
+ Two properties matter more than the provider choice:
+ 
+ * **The result declares its own source.** `PlaceResult.source` is `'STUB' | 'GOOGLE' | 'MAPBOX'`, and the
+-  booking form prints it: *"Suggestions from the platform's saved Lagos locations — exact coordinates, no
++  booking form prints it: *"Suggestions from the platform's saved Benin City locations — exact coordinates, no
+   street-level geocoding until a maps key is configured."* A customer is never invited to believe the stub
+   is Google.
+ * **A provider outage cannot block a booking.** Every Google call is wrapped: on failure the service logs a
+-  warning and falls back to the stub, so a 500 from Mountain View does not stop a Lagos delivery from being
++  warning and falls back to the stub, so a 500 from Mountain View does not stop a Benin City delivery from being
+   priced. The `source` field then tells the truth about what was used.
+ 
+ Because the coordinates in the stub are the *same* ones pricing and dispatch use, distance, radius and ETA
+@@ -275,7 +281,7 @@ POST   /api/v1/rider/location                 RIDER, now writes through Tracking
+ 
+ | # | Test | What it pins down |
+ |---|---|---|
+-| 1 | suggests real Lagos places and names the provider | suggestions carry real lat/lng and a declared source |
++| 1 | suggests real Benin City places and names the provider | suggestions carry real lat/lng and a declared source |
+ | 2 | returns nothing for a one-letter query | no guessing from noise |
+ | 3 | reverse geocodes a coordinate | stub answers are marked approximate |
+ | 4 | geocodes a written address server-side | "Yaba Commercial Avenue" → 6.5095 |
+diff --git a/frontend/src/components/DeliveryTrackingCard.tsx b/frontend/src/components/DeliveryTrackingCard.tsx
+index bf5993f..f32ddb0 100644
+--- a/frontend/src/components/DeliveryTrackingCard.tsx
++++ b/frontend/src/components/DeliveryTrackingCard.tsx
+@@ -136,7 +136,7 @@ export function DeliveryTrackingCard({
+                   {data.rider ? ` · rider ${data.rider.riderCode}` : ""}
+                 </p>
+                 <p className="ml-auto text-[11px] text-brand-700">
+-                  {data.eta.source === "GOOGLE" ? "Road route" : "Road-factor estimate (maps key not configured)"}
++                  {data.eta.source === "GOOGLE" ? "Road route" : "Estimated route"}
+                 </p>
+               </div>
+             )}
+diff --git a/frontend/src/components/LiveMap.tsx b/frontend/src/components/LiveMap.tsx
+index 6316826..0eb8e51 100644
+--- a/frontend/src/components/LiveMap.tsx
++++ b/frontend/src/components/LiveMap.tsx
+@@ -127,7 +127,7 @@ export function LiveMap({
+       >
+         <p className="text-sm font-medium text-slate-600">{emptyHint}</p>
+         <p className="mt-1 max-w-sm px-6 text-xs text-slate-500">
+-          This map only ever shows a position a rider's phone has actually reported. It will not guess one.
++          The rider’s live position will appear here once the trip starts.
+         </p>
+       </div>
+     );
+diff --git a/frontend/src/components/LocationPicker.tsx b/frontend/src/components/LocationPicker.tsx
+index bd34b94..030bf5d 100644
+--- a/frontend/src/components/LocationPicker.tsx
++++ b/frontend/src/components/LocationPicker.tsx
+@@ -182,8 +182,8 @@ export function LocationPicker({
+         {suggestions.isFetching
+           ? 'Searching…'
+           : provider === 'google'
+-            ? 'Suggestions from Google Places.'
+-            : 'Suggestions from the platform’s saved Benin City locations — exact coordinates, no street-level geocoding until a maps key is configured.'}
++            ? 'Address suggestions by Google.'
++            : 'Popular Benin City locations.'}
+       </p>
+ 
+       <Field label="Street address" required error={errors.address} htmlFor={`${title}-address`}>
+diff --git a/frontend/src/components/PriceBreakdown.tsx b/frontend/src/components/PriceBreakdown.tsx
+index 9e90bb1..b11caf5 100644
+--- a/frontend/src/components/PriceBreakdown.tsx
++++ b/frontend/src/components/PriceBreakdown.tsx
+@@ -51,7 +51,7 @@ export function PriceBreakdown({
+           {meta.distanceKm !== undefined && `${meta.distanceKm} km`}
+           {meta.durationMinutes !== undefined && ` · ~${meta.durationMinutes} min`}
+           {meta.zoneName && ` · ${meta.zoneName}`}
+-          {meta.routeSource === 'STUB' && ' · straight-line estimate'}
++          {meta.routeSource === 'STUB' && ' · estimated distance'}
+         </p>
+       )}
+     </div>
+diff --git a/frontend/src/components/layout/DevModeBanner.tsx b/frontend/src/components/layout/DevModeBanner.tsx
+index df45330..8e70fc3 100644
+--- a/frontend/src/components/layout/DevModeBanner.tsx
++++ b/frontend/src/components/layout/DevModeBanner.tsx
+@@ -2,28 +2,26 @@ import { useHealth } from '../../hooks/useHealth';
+ 
+ /**
+  * Shown whenever the backend reports a non-live integration mode.
+- * The owner (and every tester) must never be unsure whether money is real.
++ * A customer must never be unsure whether their card is really being charged,
++ * so the banner stays — but it speaks to the customer, not to the developer.
+  */
+ export function DevModeBanner() {
+   const { data } = useHealth();
+   if (!data) return null;
+ 
+   const simulated = [
+-    data.integrations.payments !== 'LIVE' && `payments (${data.integrations.payments})`,
+-    data.integrations.sms !== 'TERMII' && `SMS (${data.integrations.sms})`,
+-    data.integrations.email !== 'RESEND' && `email (${data.integrations.email})`,
+-    data.integrations.maps === 'STUB' && 'maps (stub)',
+-  ].filter(Boolean) as string[];
++    data.integrations.payments !== 'LIVE',
++    data.integrations.sms !== 'TERMII',
++    data.integrations.email !== 'RESEND',
++  ].filter(Boolean).length;
+ 
+-  if (simulated.length === 0) return null;
++  if (simulated === 0) return null;
+ 
+   return (
+     <div className="bg-warning-500/95 px-4 py-1.5 text-center text-[13px] font-medium text-warning-950">
+-      <span className="font-bold uppercase tracking-wide">Development mode</span>
++      <span className="font-bold uppercase tracking-wide">Test mode</span>
+       <span className="mx-1.5 opacity-60">·</span>
+-      simulated: {simulated.join(', ')}
+-      <span className="mx-1.5 opacity-60">·</span>
+-      no real money or messages can move
++      no real money moves and no real messages are sent
+     </div>
+   );
+ }
+-- 
+2.47.3
+

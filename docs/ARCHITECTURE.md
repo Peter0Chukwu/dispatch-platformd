@@ -638,7 +638,7 @@ Each phase ends with: code, migration, tests, a `documentation/PHASE-LOG/PHASE-N
 |---|---|---|---|---|
 | **Paystack** | Card/bank/USSD payments, transfers for rider payouts | Test keys work immediately; **no business docs needed for test mode** | Create account → Settings → API Keys → copy test public/secret; add webhook URL later | **1.5% + ₦100** (local cards, capped ₦2,000); transfers ₦10–₦50 |
 | **Flutterwave** | Second payment rail | Sandbox keys instantly | Create account → API keys; set `secret hash` for webhooks | ~1.4% local |
-| **Maps** | Autocomplete, geocoding, routing, ETA, map tiles | Google $200/mo free credit (card required) **or** Mapbox free tier | Choose provider (§11 decision) → create project → enable *Places, Geocoding, Directions* → restrict key by HTTP referrer | ₦0–15,000/mo at low volume |
+| **Maps** | Autocomplete, geocoding, routing, ETA, map tiles | Google $200/mo free credit (card required) **or** Mapbox free tier | Choose provider (§11 decision) → create project → enable *Maps JavaScript, Places API (New), Routes, Geocoding* → restrict key by HTTP referrer | ₦0–15,000/mo at low volume |
 | **SMS (Termii)** — primary NG SMS | OTP, delivery alerts | Small trial credit | Register sender ID (`DispX`) — **sender-ID approval required for production** | ~₦3.5–₦5 / SMS |
 | **Email (Resend)** | Verification, receipts, reports | 3,000/mo free | Verify sending domain (DNS records) | ₦0 initially |
 | **Object storage** | ID docs, POD photos, avatars | Cloudinary free tier or Cloudflare R2 (10 GB free) | Create bucket + private ACL; keys to backend only | ₦0–3,000/mo |

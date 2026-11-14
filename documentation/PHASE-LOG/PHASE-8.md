@@ -33,19 +33,25 @@ which is the only file in the codebase that knows a maps provider exists.
 
 | Capability | Google (when a key exists) | Stub (current default) |
 |---|---|---|
-| `autocomplete(query)` | Places Autocomplete + Place Details | 14 real Lagos locations, scored by term match |
+| `autocomplete(query)` | Places API (New) — autocomplete + place details | 12 real Benin City locations, scored by term match |
 | `geocode(address)` | Geocoding API, `components=country:NG` | nearest saved place, marked `approximate: true` |
 | `reverseGeocode(lat, lng)` | Geocoding API | `Near <place> (±n km)` — honest about imprecision |
-| `estimateRoute(from, to)` | Directions API (road distance, real duration) | haversine × road factor 1.35 at 22 km/h |
+| `estimateRoute(from, to)` | Routes API (road distance, real duration) | haversine × road factor 1.35 at 22 km/h |
+
+> **Updated 5 October 2026:** Google stopped selling the legacy **Places**, **Directions** and
+> **Distance Matrix** APIs, so a Cloud project created today cannot enable them. The adapter now calls
+> `places.googleapis.com/v1` and `routes.googleapis.com/directions/v2:computeRoutes`; Geocoding was not
+> retired and is unchanged. Every request carries the `X-Goog-FieldMask` header the new APIs require.
+> See `documentation/CREDENTIALS-SETUP.md` §3 for the four APIs to enable.
 
 Two properties matter more than the provider choice:
 
 * **The result declares its own source.** `PlaceResult.source` is `'STUB' | 'GOOGLE' | 'MAPBOX'`, and the
-  booking form prints it: *"Suggestions from the platform's saved Lagos locations — exact coordinates, no
+  booking form prints it: *"Suggestions from the platform's saved Benin City locations — exact coordinates, no
   street-level geocoding until a maps key is configured."* A customer is never invited to believe the stub
   is Google.
 * **A provider outage cannot block a booking.** Every Google call is wrapped: on failure the service logs a
-  warning and falls back to the stub, so a 500 from Mountain View does not stop a Lagos delivery from being
+  warning and falls back to the stub, so a 500 from Mountain View does not stop a Benin City delivery from being
   priced. The `source` field then tells the truth about what was used.
 
 Because the coordinates in the stub are the *same* ones pricing and dispatch use, distance, radius and ETA
@@ -275,7 +281,7 @@ POST   /api/v1/rider/location                 RIDER, now writes through Tracking
 
 | # | Test | What it pins down |
 |---|---|---|
-| 1 | suggests real Lagos places and names the provider | suggestions carry real lat/lng and a declared source |
+| 1 | suggests real Benin City places and names the provider | suggestions carry real lat/lng and a declared source |
 | 2 | returns nothing for a one-letter query | no guessing from noise |
 | 3 | reverse geocodes a coordinate | stub answers are marked approximate |
 | 4 | geocodes a written address server-side | "Yaba Commercial Avenue" → 6.5095 |

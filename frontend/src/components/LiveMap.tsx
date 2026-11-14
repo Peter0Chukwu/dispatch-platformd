@@ -127,7 +127,7 @@ export function LiveMap({
       >
         <p className="text-sm font-medium text-slate-600">{emptyHint}</p>
         <p className="mt-1 max-w-sm px-6 text-xs text-slate-500">
-          This map only ever shows a position a rider's phone has actually reported. It will not guess one.
+          The rider’s live position will appear here once the trip starts.
         </p>
       </div>
     );

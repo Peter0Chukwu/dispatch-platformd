@@ -182,8 +182,8 @@ export function LocationPicker({
         {suggestions.isFetching
           ? 'Searching…'
           : provider === 'google'
-            ? 'Suggestions from Google Places.'
-            : 'Suggestions from the platform’s saved Benin City locations — exact coordinates, no street-level geocoding until a maps key is configured.'}
+            ? 'Address suggestions by Google.'
+            : 'Popular Benin City locations.'}
       </p>
 
       <Field label="Street address" required error={errors.address} htmlFor={`${title}-address`}>

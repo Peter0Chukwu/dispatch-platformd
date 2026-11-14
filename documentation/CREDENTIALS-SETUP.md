@@ -97,18 +97,34 @@ straight-line, ETA, and the customer/admin map.
 **How to get the key**
 
 1. Sign in at <https://console.cloud.google.com> → create (or pick) a project.
-2. **APIs & Services → Library** → enable:
-   * **Maps JavaScript API** (the live map in the portals)
-   * **Geocoding API** (address → coordinates)
-   * **Places API** (autocomplete) — optional until you want live suggestions
-   * **Routes API** (road distance + ETA; this replaced Distance Matrix)
+2. **APIs & Services → Library** → enable **exactly these four**, and nothing else:
+
+   | API | Used for | Called from |
+   | --- | --- | --- |
+   | **Maps JavaScript API** | the live map in the customer, rider and admin portals | browser |
+   | **Places API (New)** | address suggestions and place coordinates | server |
+   | **Routes API** | road distance and ETA | server |
+   | **Geocoding API** | written address ↔ coordinates | server |
+
+   > **Do not look for "Places API", "Directions API" or "Distance Matrix API".**
+   > Google ended their sale on **5 October 2026**: a newly created Cloud project cannot enable them.
+   > The current services above are their replacements — Places API (New) covers autocomplete and
+   > place details, and Routes API covers what Directions and Distance Matrix used to do. The code in
+   > `backend/src/pricing/maps.service.ts` already talks to the new ones.
+
 3. **Billing** → attach a billing account. Required even to use the free tier.
 4. **APIs & Services → Credentials → Create credentials → API key**. Create **two keys**:
    * a **browser key** restricted by HTTP referrer (`https://your-domain.com/*`, `http://localhost:5173/*`)
-     and limited to Maps JavaScript API + Places;
-   * a **server key** restricted by IP, limited to Geocoding + Routes.
+     and limited to **Maps JavaScript API** only;
+   * a **server key** restricted by IP (your Northflank/VPS egress IP), limited to
+     **Places API (New)**, **Routes API** and **Geocoding API**.
 5. Paste the server key into `GOOGLE_MAPS_API_KEY`, and give the browser key to the frontend
-   (`frontend/.env` → `VITE_GOOGLE_MAPS_API_KEY`) once Phase 8 wires the map component.
+   (`VITE_GOOGLE_MAPS_API_KEY`, a **build-time** variable — the web image must be rebuilt after you set it).
+
+**If you enable the wrong set**, nothing breaks loudly: the API logs
+`Routes API failed, falling back to the stub estimate: Routes responded 403` (or the same line for
+Places) and keeps pricing with the stub model. That warning in the logs is the signal that a key is
+missing, restricted too tightly, or pointed at an API that is not enabled.
 
 ```dotenv
 MAPS_PROVIDER=GOOGLE

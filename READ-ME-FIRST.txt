@@ -1,54 +1,38 @@
-TWL — SIGN-IN FIX + COPY CLEAN-UP
-=================================
+TRADERS WELFARE — GOOGLE MAPS CHANGE
+====================================
 
-1. The Admin tab is gone from the public sign-in page
-------------------------------------------------------
-/login now shows only Customer and Rider.
+WHAT THIS IS
+  The fix for the map and the distance estimates, plus the guide for setting
+  Google Maps up. Commit 8f2bb0f on top of 2b1fbcd.
 
-Staff sign in at a page that is not linked anywhere public:
+HOW TO APPLY (VS Code Source Control tab first)
+  1. Unzip this over your clone at C:\Users\USER\Documents\dispatch-platform,
+     replacing the files it asks about.
+  2. Open the Source Control tab. You should see 10 changed files plus one new
+     file (backend/test/maps.google.spec.ts).
+  3. Stage all, commit with the message in COMMIT-MESSAGE.txt (or anything you
+     like — the code is what matters).
+  4. Push.
 
-      https://your-site-url/staff
+IF YOU PREFER THE TERMINAL
+  git apply --stat google-maps.patch      # look first
+  git apply google-maps.patch
+  git add -A && git commit -m "maps: current Google APIs, and no more internal notes"
+  git push
 
-Bookmark it for yourself. Old links that say ?portal=admin now redirect there.
+THEN
+  npm install                             # only if it complains about a missing module
+  npm run build --workspace @dispatch/shared
+  cd backend && npx tsc --noEmit && npx vitest run test/maps.google.spec.ts
+  cd ../frontend && npx tsc --noEmit
 
-Nothing else changes: an admin account still opens the admin portal, and an
-invited staff member still sets their password from the invitation link.
+READ NEXT
+  GOOGLE-MAPS-SETUP.md — the four APIs to enable, the two keys to create, where
+  each key goes, and how to check it worked. Enable "Places API (New)", Routes
+  API, Geocoding API and Maps JavaScript API. NOT the old Places/Directions/
+  Distance Matrix — Google stopped selling those on 5 October 2026 and a new
+  project cannot turn them on.
 
-2. The notes are gone
----------------------
-The seeded admin email and password hint is deleted from the login page. So is
-"Protected by Argon2id". Other screens now say what they do for the person using
-them instead of explaining the API:
-  - customer home, booking, delivery progress
-  - rider home, offers
-  - verification and test-payment notices
-  - admin: staff, reports, deliveries, finance, pricing
-  - the 404 page is now a real page
-
-3. How to apply
----------------
-Extract into C:\Users\USER\Documents\dispatch-platform (say YES to replace), then:
-
-      git add -A
-      git commit -m "sign-in: staff door off the public page, notes replaced with real copy"
-      git push
-
-Northflank rebuilds automatically (3-4 minutes). Hard-refresh afterwards:
-Ctrl + Shift + R.
-
-Files changed
--------------
-  frontend/src/pages/auth/LoginPage.tsx        rewritten (public + staff variants)
-  frontend/src/App.tsx                         /staff route, real 404
-  frontend/src/pages/NotFoundPage.tsx          new
-  frontend/src/routes/guards.tsx               staff redirect
-  frontend/src/pages/auth/AcceptInvitePage.tsx invitation links
-  frontend/src/components/PaymentPanel.tsx     test-mode wording
-  frontend/src/components/LocationReporter.tsx location warnings
-  frontend/src/pages/auth/VerifyPage.tsx       "code", not "token"
-  frontend/src/pages/customer/*.tsx            3 screens
-  frontend/src/pages/rider/*.tsx               2 screens
-  frontend/src/pages/admin/*.tsx               5 screens
-  e2e/master-scenario.spec.ts                  follows the new /staff route
-
-No database change. No server setting change.
+NOTHING BREAKS IF YOU DO NOT
+  With no key the app prices from real Benin City coordinates and a straight-line
+  model, and the screens say "estimated distance" rather than pretending.
