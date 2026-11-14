@@ -93,12 +93,12 @@ export default function CustomerHome() {
           </Card>
 
           <Card>
-            <CardHeader title="What you can do" subtitle="Everything below is live, not a preview" />
+            <CardHeader title="What you can do" subtitle="The three things you will use most" />
             <CardBody className="space-y-3">
               {[
-                { title: 'Book a delivery', detail: 'Pickup and destination on a map, server-calculated price shown before you pay.' },
-                { title: 'Pay securely', detail: 'Paystack, Flutterwave or your wallet — verified server-side, never trusted from the browser.' },
-                { title: 'Track live', detail: 'See your rider on the map and share a secure tracking link with the recipient.' },
+                { title: 'Book a delivery', detail: 'Choose where the rider collects and where it is going — the fare is shown before you confirm.' },
+                { title: 'Pay securely', detail: 'Card, transfer or your wallet. The rider is only dispatched once the payment is confirmed.' },
+                { title: 'Track live', detail: 'Follow the rider on the map and send the recipient a link so they can follow it too.' },
               ].map((item) => (
                 <div key={item.title} className="flex gap-3">
                   <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-accent-500" />
@@ -112,10 +112,9 @@ export default function CustomerHome() {
           </Card>
         </div>
 
-        <Alert tone="info" title="Your session is real, and short-lived">
-          Access tokens expire after 15 minutes and are refreshed silently in the background. The refresh token is
-          stored in an <code>HttpOnly</code> cookie that JavaScript cannot read, so a script injected into this page
-          could not steal it.
+        <Alert tone="info" title="Staying signed in">
+          This device stays signed in until you sign out, so you are not asked for a code every time you open the app.
+          On a phone you share with someone else, sign out when you have finished.
         </Alert>
 
         <div className="flex flex-wrap items-center gap-2 text-xs text-ink-500">

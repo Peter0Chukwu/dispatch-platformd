@@ -1,30 +1,38 @@
-TWL — SMALL DEPLOY FIX (2 files)
-================================
+TWL — NEW LANDING PAGE
+======================
 
-Why you are extracting this
----------------------------
-The website container needs to know where the API container lives. Up to now that
-address was baked in as "api:4000", which only works when both run on the same
-Docker network. On the hosting platform each container gets its own internal
-address, so the address is now a setting instead.
+What changed
+------------
+The public page was full of my working notes: the tech stack, a "Design system"
+link, a live Postgres/Redis panel, and sentences explaining how the API works.
+That is gone. The page now reads like a company page for a Benin City courier:
 
-What to do
-----------
-1. Extract into your project folder (C:\Users\USER\Documents\dispatch-platform).
-   Say YES to replace.
+  - Headline and two sign-up buttons
+  - Three steps: book, rider accepts, follow it to the door
+  - Four reasons to trust it
+  - The areas covered, named as streets
+  - Five real questions answered
+  - Footer with the two sign-in links
 
-2. ONE FILE MUST BE DELETED — your unzip will not delete it for you:
+The login/sign-up pages and the customer home screen got the same treatment.
 
-       C:\Users\USER\Documents\dispatch-platform\deploy\nginx.conf
+How to apply (2 steps)
+----------------------
+1. Extract into C:\Users\USER\Documents\dispatch-platform (say YES to replace).
 
-   It has moved to: deploy\nginx-templates\default.conf.template
-   If the old file stays behind, the new one is ignored. Delete it.
-
-3. Commit and push:
+2. Commit and push:
 
        git add -A
-       git commit -m "deploy: configurable API address for the web image"
+       git commit -m "landing page: written for traders, not for developers"
        git push
 
-Nothing else changes. Your local Docker setup still works exactly as before,
-because the setting defaults to api:4000.
+Then Northflank rebuilds the website automatically (CI/CD is green), about 3-4
+minutes. Hard-refresh the site afterwards (Ctrl + Shift + R).
+
+Files changed
+-------------
+  frontend/src/pages/LandingPage.tsx          rewritten
+  frontend/src/layouts/AuthLayout.tsx         sidebar + footer copy
+  frontend/src/pages/customer/CustomerHome.tsx  three sentences
+
+Nothing on the server needs touching. No database change.
