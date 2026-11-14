@@ -1,11 +1,14 @@
 import 'reflect-metadata';
 import { Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import type { CorsOptions } from '@nestjs/common/interfaces/external/cors-options.interface';
 import type { NestExpressApplication } from '@nestjs/platform-express';
+import type { Request } from 'express';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
 import { AppConfig } from './config/app.config';
 import { registerIndexPage } from './common/api-index-page';
+import { decideCorsOrigin } from './common/cors';
 
 async function bootstrap(): Promise<void> {
   // `rawBody` is what makes payment webhook signature verification possible: the
@@ -26,19 +29,37 @@ async function bootstrap(): Promise<void> {
   //    configuration (TRUST_PROXY) because it depends on the deployment shape.
   app.set('trust proxy', config.trustProxy);
 
-  // ── CORS: explicit allowlist. A browser on any other origin cannot call us.
-  app.enableCors({
-    origin: (
-      origin: string | undefined,
-      callback: (error: Error | null, allow?: boolean) => void,
-    ) => {
-      if (!origin || config.corsOrigins.includes(origin)) return callback(null, true);
-      return callback(new Error(`Origin ${origin} is not allowed`), false);
-    },
-    credentials: true,
-    methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key', 'X-Request-Id'],
-    exposedHeaders: ['X-Request-Id'],
+  // ── CORS: explicit allowlist, plus the deployment's own origin.
+  //    A refused origin must never become a 500 — see common/cors.ts for why
+  //    that matters. The browser still blocks the call; the server just refuses
+  //    quietly, logs the origin once, and keeps working for everyone else.
+  const refusedOrigins = new Set<string>();
+  app.enableCors((request: Request, callback: (error: Error | null, options: CorsOptions) => void) => {
+    const decision = decideCorsOrigin(
+      request.headers.origin,
+      request.headers.host,
+      request.headers['x-forwarded-host'],
+      config.corsOrigins,
+    );
+
+    if (!decision.allowed) {
+      const origin = String(request.headers.origin);
+      if (!refusedOrigins.has(origin)) {
+        refusedOrigins.add(origin);
+        logger.warn(
+          `Blocked a browser request from ${origin}. If that is your own site, add it to CORS_ORIGINS.`,
+        );
+      }
+    }
+
+    callback(null, {
+      // `true` reflects the caller's origin, which is only reached once allowed.
+      origin: decision.allowed,
+      credentials: true,
+      methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
+      allowedHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key', 'X-Request-Id'],
+      exposedHeaders: ['X-Request-Id'],
+    });
   });
 
   // ── Body size. Riders upload proof-of-delivery photos as base64 inside JSON, so

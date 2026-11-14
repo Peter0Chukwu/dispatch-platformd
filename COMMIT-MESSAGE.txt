@@ -1,29 +1,31 @@
-maps: talk to the Google services that still exist, and stop narrating the internals
+cors: the app's own origin can always sign in, and a refusal is not a 500
 
-Google stopped selling the legacy Places, Directions and Distance Matrix APIs on
-5 October 2026, so a Cloud project created today cannot enable them. Every
-deployment of this platform starts as a new project, which means the adapter in
-MapsService would simply have failed with LegacyApiNotActivatedMapError and
-quietly priced every delivery from the stub table.
+Staff sign-in returned "Could not sign you in — Something went wrong on our side.
+Reference: unknown". The reference being `unknown` instead of a UUID was the clue:
+the failure happened before the request-id middleware, i.e. in the CORS layer.
 
-Address suggestions now come from Places API (New) — places:autocomplete for the
-predictions, then places/{id} with an X-Goog-FieldMask of
-id,displayName,formattedAddress,location for the coordinates, so Google bills
-three fields instead of the whole place. Distances come from the Routes API
-(directions/v2:computeRoutes) with a DRIVE, traffic-unaware, metric request, and
-the protobuf duration string ("842s") is parsed into minutes. Geocoding was not
-retired and is untouched. The stub fallback stays: a Google outage or a key
-missing an API logs a warning and prices the booking anyway.
+The origin callback threw when the caller's origin was not in CORS_ORIGINS, and
+`cors` hands that error to Express, which turns it into a 500. A browser sends
+`Origin` on every non-GET request INCLUDING same-origin ones, so any deployment
+whose own URL was missing from CORS_ORIGINS (a preview URL that changed when the
+service was recreated, for instance) had a login button that never worked — and
+said so in the most misleading way possible. Reproduced against the live API:
+same request + `Origin: <the same host>` → 500; without the header → 201.
 
-Covered by backend/test/maps.google.spec.ts, which asserts the URLs, the header
-auth, the field masks, the region restriction and the duration parsing, and that
-both paths degrade to the stub on an error response.
+Two changes in common/cors.ts:
 
-Also: the last of the engineering notes are gone from the product. The banner now
-says "Test mode · no real money moves and no real messages are sent"; the
-tracking card says "Estimated route" instead of "maps key not configured"; the
-price breakdown says "estimated distance"; the picker says "Popular Benin City
-locations"; and the empty map says when the rider's position will appear.
-documentation/CREDENTIALS-SETUP.md now lists the four APIs a new project can
-actually enable.
+  · The request's own origin is always allowed. If the Origin host matches Host
+    or X-Forwarded-Host, the call is same-origin by definition and no allowlist
+    can break it, so a fresh deployment works with no configuration at all.
+  · A refused origin is refused quietly: no CORS headers, the browser blocks it,
+    and the server logs one warning naming the origin. A configuration mistake
+    stays a warning in the log instead of becoming a 500 in a customer's face.
+
+CORS_ORIGINS keeps its job for the case it exists for — a web app and an API on
+different hosts. Covered by test/cors.spec.ts (7 cases, including a lookalike
+host and unparseable input), and verified in a real express server: with the
+stale localhost-only allowlist, a POST from the preview origin now returns 201
+with the right Access-Control-Allow-Origin, and a foreign origin gets no CORS
+header rather than a 500. RUNBOOK gains the fault and its diagnosis; both
+.env.example files explain the new behaviour.
 

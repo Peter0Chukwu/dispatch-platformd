@@ -156,7 +156,7 @@ docker compose up -d api        # recreates only what changed
 | `PAYMENTS_MODE=LIVE` | real money moves. Do not flip it before `GO-LIVE-CHECKLIST.md` is ticked. |
 | `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` | rotating signs **everyone** out. That is the correct response to a leak. |
 | `TRACKING_LINK_SECRET` | rotating invalidates every outstanding tracking and report-download link. |
-| `CORS_ORIGINS` | must be the exact public origin or the SPA's `fetch` calls fail in the browser only. |
+| `CORS_ORIGINS` | extra browser origins allowed to call the API. The deployment's **own** origin is always allowed (see §7 below), so this only matters when the web app and the API are on different hosts. |
 | `SMS_MODE=CONSOLE` / `EMAIL_MODE=CONSOLE` | messages are **logged, not sent**. Never leave this on for real riders. |
 | `MAPS_PROVIDER=STUB` | fares use the stub distance model; the UI says so. Set `GOOGLE` plus the web build arg for real maps. |
 
@@ -389,10 +389,35 @@ the UI, because a report is a pure read — nothing is lost by regenerating it.
 
 ### "The web app loads but every call 401s"
 
-Almost always `CORS_ORIGINS` not matching the exact origin the browser used (scheme, host and
-port all count), or the reverse proxy dropping the `Set-Cookie` on `/api/v1/auth`. Verify with
+The reverse proxy is dropping the `Set-Cookie` on `/api/v1/auth`. Verify with
 `curl -i -X POST https://<host>/api/v1/auth/login -H 'Content-Type: application/json' -d '{…}'`
 and look for `set-cookie: dispatch_refresh=…; Path=/api/v1/auth; HttpOnly`.
+
+### "Sign in says *Something went wrong on our side. Reference: unknown*"
+
+That combination — a 500 whose reference is `unknown` rather than a UUID — means the request
+failed **before** the request-id middleware ran, which in practice means the CORS layer. It was
+caused by an allowlist that did not mention the deployment's own URL: a browser sends `Origin` on
+every non-GET request, even a same-origin one, so the login POST was refused by our own server.
+
+Fixed in `backend/src/common/cors.ts`: the app's own origin is always allowed, and a refused
+origin now gets no CORS headers (the browser blocks it) while the server logs one warning instead
+of returning a 500. If you see the 500 today, the running build predates that fix. Check with:
+
+```bash
+# must NOT be 500. The Origin here is the same host you are calling.
+curl -s -o /dev/null -w '%{http_code}\n' -X POST https://<host>/api/v1/auth/login \
+  -H 'Content-Type: application/json' -H "Origin: https://<host>" \
+  -d '{"identifier":"x@y.z","password":"nottherightpassword","audience":"ADMIN"}'
+```
+
+`401` is the correct answer (wrong password). `500` means the old build. As an immediate
+workaround on a deployment you cannot rebuild, add the exact public origin to `CORS_ORIGINS` and
+restart the API:
+
+```dotenv
+CORS_ORIGINS=https://p01--twl-frontend--glzb7542cqkx.code.run
+```
 
 ---
 
@@ -439,7 +464,7 @@ with a name on it.
 | # | Limitation | Impact | Status |
 |---|---|---|---|
 | 1 | **Scheduled email is not built.** Emails send immediately when an event fires; there is no digest or "email me tomorrow" scheduling. | No scheduled marketing/digest mail. Transactional mail is unaffected. | deliberate scope decision, recorded in the Phase 9 log |
-| 2 | **Docker images are authored but unbuilt in the build environment.** `deploy/Dockerfile.*`, `docker-compose.yml` and `deploy/nginx.conf` have never been built here (no Docker in the sandbox). | First `docker compose up --build` must be treated as a real test, not a formality. | **UNTESTED — verify on the VPS before trusting** |
+| 2 | **Docker images are authored but unbuilt in the build environment.** `deploy/Dockerfile.*`, `docker-compose.yml` and `deploy/nginx-templates/default.conf.template` have never been built here (no Docker in the sandbox). | First `docker compose up --build` must be treated as a real test, not a formality. | **UNTESTED — verify on the VPS before trusting** |
 | 3 | **Staff roles list shows "super admin" twice.** A cosmetic duplicate in admin → Team → Roles. | Cosmetic only; permissions are correct. | known cosmetic bug, not yet fixed (not authorised to change UI) |
 | 4 | **`npm audit` reports 3 high findings** in `prisma`, `@prisma/config`, `deepmerge-ts`. | The CLI ships inside the image (it is a dependency of @prisma/client) but is never executed by the server; the advisory is in CLI-only config parsing, so it needs prior RCE to reach. | allowlisted with that reason in `scripts/audit-runtime.mjs`; re-check on every Prisma upgrade — `SECURITY-REVIEW.md` §7 |
 | 5 | **Sign-in is rate limited to 10 attempts / 5 min per account.** | Automated tests must log in once and reuse the token. | by design; the E2E suite works this way |

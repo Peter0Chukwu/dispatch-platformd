@@ -1,0 +1,296 @@
+diff --git a/.env.example b/.env.example
+index d823944..cd4f3cd 100644
+--- a/.env.example
++++ b/.env.example
+@@ -21,6 +21,9 @@ JWT_ACCESS_TTL=900
+ JWT_REFRESH_TTL=2592000
+ TRACKING_LINK_SECRET=replace-with-another-random-value
+ 
++# Browser origins allowed to call the API. The deployment's own origin is always
++# allowed, so this only matters when the web app and the API are on different
++# hosts. Comma-separated, exact scheme + host + port, no trailing slash.
+ CORS_ORIGINS="http://localhost:5173"
+ # The address the browser should be sent back to (tracking links, payment returns).
+ FRONTEND_URL=http://localhost:5173
+diff --git a/backend/src/common/cors.ts b/backend/src/common/cors.ts
+new file mode 100644
+index 0000000..8dade7b
+--- /dev/null
++++ b/backend/src/common/cors.ts
+@@ -0,0 +1,78 @@
++/**
++ * WHO MAY CALL THE API FROM A BROWSER
++ *
++ * The allowlist is `CORS_ORIGINS`, but an allowlist alone was a trap: the
++ * deployment URL of this platform is not permanent (Northflank issues a new one
++ * whenever a service is recreated, and a custom domain arrives later still). A
++ * browser sends `Origin` on *every* non-GET request, including same-origin ones,
++ * so a stale entry in that variable turned "sign in" into a 500 that read
++ * "Something went wrong on our side. Reference: unknown" — the most misleading
++ * possible message for a configuration problem.
++ *
++ * Two things fix that for good:
++ *
++ *   1. THE APP'S OWN ORIGIN IS ALWAYS ALLOWED. If the `Origin` host matches the
++ *      host the request arrived on, the request is same-origin by definition and
++ *      no allowlist should be able to break it. This is what makes a new
++ *      deployment work with no environment changes at all.
++ *   2. A REFUSED ORIGIN IS NOT AN ERROR. The request simply gets no CORS headers,
++ *      the browser blocks it, and the server logs one warning naming the origin.
++ *      A configuration mistake stays a warning in the log instead of becoming a
++ *      500 in a customer's face.
++ */
++
++export type CorsReason = 'no-origin' | 'same-origin' | 'allowlisted' | 'blocked';
++
++export interface CorsDecision {
++  allowed: boolean;
++  reason: CorsReason;
++}
++
++/** `https://a.b/c/` → `a.b`. Returns null for anything unparseable. */
++function hostOf(value: string | undefined | null): string | null {
++  if (!value) return null;
++  const candidate = value.trim();
++  if (!candidate) return null;
++  try {
++    // A bare host ("api.example.com:4000") is not a URL; give it a scheme so the
++    // parser accepts it, since `Host` headers arrive in exactly that shape.
++    const url = new URL(candidate.includes('://') ? candidate : `http://${candidate}`);
++    return url.host.toLowerCase();
++  } catch {
++    return null;
++  }
++}
++
++const normaliseOrigin = (value: string): string => value.trim().replace(/\/+$/, '').toLowerCase();
++
++/**
++ * Decide whether a request from `originHeader` may call this API, given the host
++ * the request arrived on and the configured allowlist.
++ */
++export function decideCorsOrigin(
++  originHeader: string | undefined | null,
++  hostHeader: string | undefined | null,
++  forwardedHostHeader: string | string[] | undefined | null,
++  allowlist: readonly string[],
++): CorsDecision {
++  // No Origin at all: curl, a native app, a server-to-server call, a webhook, or
++  // a same-origin GET. CORS does not apply, so there is nothing to refuse.
++  if (!originHeader) return { allowed: true, reason: 'no-origin' };
++
++  const origin = normaliseOrigin(originHeader);
++
++  if (allowlist.some((entry) => normaliseOrigin(entry) === origin)) {
++    return { allowed: true, reason: 'allowlisted' };
++  }
++
++  const originHost = hostOf(origin);
++  if (originHost) {
++    // `x-forwarded-host` is what the browser actually typed when a reverse proxy
++    // rewrites `Host` on the way in (our Docker deploy does exactly that).
++    const forwarded = Array.isArray(forwardedHostHeader) ? forwardedHostHeader[0] : forwardedHostHeader;
++    const candidates = [hostOf(hostHeader), hostOf(forwarded)].filter((host): host is string => !!host);
++    if (candidates.includes(originHost)) return { allowed: true, reason: 'same-origin' };
++  }
++
++  return { allowed: false, reason: 'blocked' };
++}
+diff --git a/backend/src/main.ts b/backend/src/main.ts
+index 7eda85f..fab053a 100644
+--- a/backend/src/main.ts
++++ b/backend/src/main.ts
+@@ -1,11 +1,14 @@
+ import 'reflect-metadata';
+ import { Logger } from '@nestjs/common';
+ import { NestFactory } from '@nestjs/core';
++import type { CorsOptions } from '@nestjs/common/interfaces/external/cors-options.interface';
+ import type { NestExpressApplication } from '@nestjs/platform-express';
++import type { Request } from 'express';
+ import helmet from 'helmet';
+ import { AppModule } from './app.module';
+ import { AppConfig } from './config/app.config';
+ import { registerIndexPage } from './common/api-index-page';
++import { decideCorsOrigin } from './common/cors';
+ 
+ async function bootstrap(): Promise<void> {
+   // `rawBody` is what makes payment webhook signature verification possible: the
+@@ -26,19 +29,37 @@ async function bootstrap(): Promise<void> {
+   //    configuration (TRUST_PROXY) because it depends on the deployment shape.
+   app.set('trust proxy', config.trustProxy);
+ 
+-  // ── CORS: explicit allowlist. A browser on any other origin cannot call us.
+-  app.enableCors({
+-    origin: (
+-      origin: string | undefined,
+-      callback: (error: Error | null, allow?: boolean) => void,
+-    ) => {
+-      if (!origin || config.corsOrigins.includes(origin)) return callback(null, true);
+-      return callback(new Error(`Origin ${origin} is not allowed`), false);
+-    },
+-    credentials: true,
+-    methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
+-    allowedHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key', 'X-Request-Id'],
+-    exposedHeaders: ['X-Request-Id'],
++  // ── CORS: explicit allowlist, plus the deployment's own origin.
++  //    A refused origin must never become a 500 — see common/cors.ts for why
++  //    that matters. The browser still blocks the call; the server just refuses
++  //    quietly, logs the origin once, and keeps working for everyone else.
++  const refusedOrigins = new Set<string>();
++  app.enableCors((request: Request, callback: (error: Error | null, options: CorsOptions) => void) => {
++    const decision = decideCorsOrigin(
++      request.headers.origin,
++      request.headers.host,
++      request.headers['x-forwarded-host'],
++      config.corsOrigins,
++    );
++
++    if (!decision.allowed) {
++      const origin = String(request.headers.origin);
++      if (!refusedOrigins.has(origin)) {
++        refusedOrigins.add(origin);
++        logger.warn(
++          `Blocked a browser request from ${origin}. If that is your own site, add it to CORS_ORIGINS.`,
++        );
++      }
++    }
++
++    callback(null, {
++      // `true` reflects the caller's origin, which is only reached once allowed.
++      origin: decision.allowed,
++      credentials: true,
++      methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
++      allowedHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key', 'X-Request-Id'],
++      exposedHeaders: ['X-Request-Id'],
++    });
+   });
+ 
+   // ── Body size. Riders upload proof-of-delivery photos as base64 inside JSON, so
+diff --git a/backend/test/cors.spec.ts b/backend/test/cors.spec.ts
+new file mode 100644
+index 0000000..acd533c
+--- /dev/null
++++ b/backend/test/cors.spec.ts
+@@ -0,0 +1,57 @@
++import { describe, expect, it } from 'vitest';
++import { decideCorsOrigin } from '../src/common/cors';
++
++/**
++ * A refused origin used to throw inside the CORS callback, which Express turned
++ * into a 500 before the request-id middleware had run — so a browser was told
++ * "Something went wrong on our side. Reference: unknown" when the real problem
++ * was an allowlist that did not mention the deployment's own URL. That cost a
++ * working admin sign-in. These tests pin the behaviour that replaced it.
++ */
++
++const PREVIEW = 'p01--twl-frontend--glzb7542cqkx.code.run';
++
++describe('who may call the API from a browser', () => {
++  it('allows requests with no Origin at all — curl, webhooks, native apps', () => {
++    expect(decideCorsOrigin(undefined, PREVIEW, undefined, [])).toEqual({ allowed: true, reason: 'no-origin' });
++    expect(decideCorsOrigin(null, PREVIEW, undefined, [])).toEqual({ allowed: true, reason: 'no-origin' });
++  });
++
++  it('allows the deployment’s own origin even when the allowlist is empty', () => {
++    // This is the case that broke sign-in: same-origin POSTs always carry Origin.
++    const decision = decideCorsOrigin(`https://${PREVIEW}`, PREVIEW, undefined, ['http://localhost:5173']);
++    expect(decision).toEqual({ allowed: true, reason: 'same-origin' });
++  });
++
++  it('allows the origin the proxy forwarded when Host was rewritten', () => {
++    const decision = decideCorsOrigin(
++      'https://dispatch.example.com',
++      'twl-frontend:4000',
++      'dispatch.example.com',
++      [],
++    );
++    expect(decision).toEqual({ allowed: true, reason: 'same-origin' });
++  });
++
++  it('allows anything in the allowlist, ignoring case and a trailing slash', () => {
++    expect(decideCorsOrigin('https://App.Example.com', PREVIEW, undefined, ['https://app.example.com/'])).toEqual({
++      allowed: true,
++      reason: 'allowlisted',
++    });
++  });
++
++  it('refuses a different site — quietly, without throwing', () => {
++    const decision = decideCorsOrigin('https://evil.example.com', PREVIEW, undefined, ['https://app.example.com']);
++    expect(decision).toEqual({ allowed: false, reason: 'blocked' });
++  });
++
++  it('refuses a lookalike host that merely contains the real one', () => {
++    const decision = decideCorsOrigin(`https://${PREVIEW}.evil.com`, PREVIEW, undefined, []);
++    expect(decision.allowed).toBe(false);
++  });
++
++  it('never throws, whatever it is handed', () => {
++    expect(() => decideCorsOrigin('not a url', 'also not a url', '', [''])).not.toThrow();
++    expect(() => decideCorsOrigin('', '', undefined, [])).not.toThrow();
++  });
++});
+diff --git a/deploy/.env.example b/deploy/.env.example
+index 280a598..c3a9c5f 100644
+--- a/deploy/.env.example
++++ b/deploy/.env.example
+@@ -29,6 +29,8 @@ APP_TIMEZONE=Africa/Lagos
+ # The public origin of this deployment (scheme + host, no trailing slash).
+ # This must match EXACTLY what the browser types, or sign-in fails in the browser
+ # while every curl test passes.
++# Extra browser origins allowed to call the API (the app's own origin is always
++# allowed). Only needed if the web app and API are on different hosts.
+ CORS_ORIGINS=https://dispatch.example.com
+ FRONTEND_URL=https://dispatch.example.com
+ 
+diff --git a/documentation/RUNBOOK.md b/documentation/RUNBOOK.md
+index 84045bc..158c06a 100644
+--- a/documentation/RUNBOOK.md
++++ b/documentation/RUNBOOK.md
+@@ -156,7 +156,7 @@ docker compose up -d api        # recreates only what changed
+ | `PAYMENTS_MODE=LIVE` | real money moves. Do not flip it before `GO-LIVE-CHECKLIST.md` is ticked. |
+ | `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` | rotating signs **everyone** out. That is the correct response to a leak. |
+ | `TRACKING_LINK_SECRET` | rotating invalidates every outstanding tracking and report-download link. |
+-| `CORS_ORIGINS` | must be the exact public origin or the SPA's `fetch` calls fail in the browser only. |
++| `CORS_ORIGINS` | extra browser origins allowed to call the API. The deployment's **own** origin is always allowed (see §7 below), so this only matters when the web app and the API are on different hosts. |
+ | `SMS_MODE=CONSOLE` / `EMAIL_MODE=CONSOLE` | messages are **logged, not sent**. Never leave this on for real riders. |
+ | `MAPS_PROVIDER=STUB` | fares use the stub distance model; the UI says so. Set `GOOGLE` plus the web build arg for real maps. |
+ 
+@@ -389,11 +389,36 @@ the UI, because a report is a pure read — nothing is lost by regenerating it.
+ 
+ ### "The web app loads but every call 401s"
+ 
+-Almost always `CORS_ORIGINS` not matching the exact origin the browser used (scheme, host and
+-port all count), or the reverse proxy dropping the `Set-Cookie` on `/api/v1/auth`. Verify with
++The reverse proxy is dropping the `Set-Cookie` on `/api/v1/auth`. Verify with
+ `curl -i -X POST https://<host>/api/v1/auth/login -H 'Content-Type: application/json' -d '{…}'`
+ and look for `set-cookie: dispatch_refresh=…; Path=/api/v1/auth; HttpOnly`.
+ 
++### "Sign in says *Something went wrong on our side. Reference: unknown*"
++
++That combination — a 500 whose reference is `unknown` rather than a UUID — means the request
++failed **before** the request-id middleware ran, which in practice means the CORS layer. It was
++caused by an allowlist that did not mention the deployment's own URL: a browser sends `Origin` on
++every non-GET request, even a same-origin one, so the login POST was refused by our own server.
++
++Fixed in `backend/src/common/cors.ts`: the app's own origin is always allowed, and a refused
++origin now gets no CORS headers (the browser blocks it) while the server logs one warning instead
++of returning a 500. If you see the 500 today, the running build predates that fix. Check with:
++
++```bash
++# must NOT be 500. The Origin here is the same host you are calling.
++curl -s -o /dev/null -w '%{http_code}\n' -X POST https://<host>/api/v1/auth/login \
++  -H 'Content-Type: application/json' -H "Origin: https://<host>" \
++  -d '{"identifier":"x@y.z","password":"nottherightpassword","audience":"ADMIN"}'
++```
++
++`401` is the correct answer (wrong password). `500` means the old build. As an immediate
++workaround on a deployment you cannot rebuild, add the exact public origin to `CORS_ORIGINS` and
++restart the API:
++
++```dotenv
++CORS_ORIGINS=https://p01--twl-frontend--glzb7542cqkx.code.run
++```
++
+ ---
+ 
+ ## 7. On-call

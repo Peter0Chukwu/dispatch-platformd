@@ -1,38 +1,57 @@
-TRADERS WELFARE — GOOGLE MAPS CHANGE
+TRADERS WELFARE — SIGN-IN FIX (CORS)
 ====================================
 
 WHAT THIS IS
-  The fix for the map and the distance estimates, plus the guide for setting
-  Google Maps up. Commit 8f2bb0f on top of 2b1fbcd.
+  The fix for "Could not sign you in / Something went wrong on our side.
+  Reference: unknown" on the staff page. Commit a3e2bfc, on top of 8f2bb0f.
 
-HOW TO APPLY (VS Code Source Control tab first)
-  1. Unzip this over your clone at C:\Users\USER\Documents\dispatch-platform,
-     replacing the files it asks about.
-  2. Open the Source Control tab. You should see 10 changed files plus one new
-     file (backend/test/maps.google.spec.ts).
-  3. Stage all, commit with the message in COMMIT-MESSAGE.txt (or anything you
-     like — the code is what matters).
-  4. Push.
+WHY IT WAS BROKEN (in one paragraph)
+  A browser sends an Origin header on every non-GET request, even when it is
+  calling its own server. Our CORS allowlist did not contain the deployment's
+  own URL (it still said localhost:5173), so the login POST was treated as a
+  foreign site. The code threw an error at that point — and an error thrown that
+  early comes out as a 500 with no request id, which is why the reference said
+  "unknown" instead of a proper code. Nothing was wrong with the account, the
+  password, the database or the API. I proved it against the live server: the
+  same request with no Origin header returned 201; with Origin it returned 500.
 
-IF YOU PREFER THE TERMINAL
-  git apply --stat google-maps.patch      # look first
-  git apply google-maps.patch
-  git add -A && git commit -m "maps: current Google APIs, and no more internal notes"
+APPLY IT (VS Code Source Control tab first)
+  1. Unzip over C:\Users\USER\Documents\dispatch-platform.
+  2. Source Control: 6 changed files (cors.ts and cors.spec.ts are new).
+  3. Commit with COMMIT-MESSAGE.txt, then Push.
+
+TERMINAL
+  git apply --stat sign-in-fix.patch
+  git apply sign-in-fix.patch
+  git add -A && git commit -m "cors: the app's own origin can always sign in"
   git push
 
-THEN
-  npm install                             # only if it complains about a missing module
-  npm run build --workspace @dispatch/shared
-  cd backend && npx tsc --noEmit && npx vitest run test/maps.google.spec.ts
-  cd ../frontend && npx tsc --noEmit
+MEANWHILE — UNBLOCK IT WITHOUT WAITING FOR A REDEPLOY
+  In Northflank, on the API service (twl-frontend), add to the environment:
 
-READ NEXT
-  GOOGLE-MAPS-SETUP.md — the four APIs to enable, the two keys to create, where
-  each key goes, and how to check it worked. Enable "Places API (New)", Routes
-  API, Geocoding API and Maps JavaScript API. NOT the old Places/Directions/
-  Distance Matrix — Google stopped selling those on 5 October 2026 and a new
-  project cannot turn them on.
+    CORS_ORIGINS=https://p01--twl-frontend--glzb7542cqkx.code.run
 
-NOTHING BREAKS IF YOU DO NOT
-  With no key the app prices from real Benin City coordinates and a straight-line
-  model, and the screens say "estimated distance" rather than pretending.
+  and also set, if it is not already right:
+
+    FRONTEND_URL=https://p01--twl-frontend--glzb7542cqkx.code.run
+
+  Save, let it restart, then sign in. Type the value bare — no quotes.
+  Once this patch is deployed, you will not need CORS_ORIGINS for your own
+  host any more, only if the web app and the API ever live on different hosts.
+
+CHECK IT
+  curl -s -o /dev/null -w '%{http_code}\n' -X POST \
+    https://p01--twl-frontend--glzb7542cqkx.code.run/api/v1/auth/login \
+    -H 'Content-Type: application/json' \
+    -H 'Origin: https://p01--twl-frontend--glzb7542cqkx.code.run' \
+    -d '{"identifier":"admin@dispatch.test","password":"wrong-password","audience":"ADMIN"}'
+
+  Expect 401 (that is "wrong password", which is correct and proves the request
+  got through). 500 means the old build or the old environment value is still
+  in place.
+
+AFTER THAT
+  GOOGLE-MAPS-SETUP.md (in the previous zip) answers the VITE_GOOGLE_MAPS_API_KEY
+  question. Short version: it is the BROWSER key from Google Cloud, it must be
+  added as a build-time variable on the WEB service and the web service rebuilt,
+  because Vite bakes it into the JavaScript.
