@@ -285,7 +285,7 @@ function EditRuleModal({
       open={Boolean(rule)}
       onClose={onClose}
       title={rule ? `Edit ${rule.name}` : "Edit pricing"}
-      description="Amounts are entered in naira (₦) and stored as whole kobo."
+      description="Every amount below is in naira (₦). Changes apply to new bookings only — a delivery already quoted keeps the fare it was given."
       size="lg"
       footer={
         <div className="flex justify-end gap-2">

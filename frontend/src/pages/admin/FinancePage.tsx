@@ -434,8 +434,8 @@ function PaymentsTab({ canRefund }: { canRefund: boolean }) {
             hint="Shown in the refund log and on the ledger entry"
           />
           <p className="rounded-xl bg-ink-100 px-3 py-2 text-xs text-ink-600">
-            A wallet payment is credited straight back to the wallet. A gateway payment is reversed at the provider; in
-            DEVELOPMENT mode that reversal is simulated and recorded as such.
+            A wallet payment goes straight back to the customer's wallet. A card payment is reversed with the provider,
+            and the reversal is recorded against that payment.
           </p>
         </div>
       </Modal>

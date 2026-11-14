@@ -164,8 +164,9 @@ test('the master scenario: a new customer books, a rider delivers, the numbers a
   };
 
   const signIn = async (page: Page, portal: 'Customer' | 'Rider' | 'Admin', who: { email: string; password: string }) => {
-    await page.goto(`${WEB}/login`, { waitUntil: 'networkidle' });
-    await page.getByRole('tab', { name: new RegExp(portal, 'i') }).click();
+    // Staff sign in at /staff; the public /login page only offers customer and rider.
+    await page.goto(`${WEB}${portal === 'Admin' ? '/staff' : '/login'}`, { waitUntil: 'networkidle' });
+    if (portal !== 'Admin') await page.getByRole('tab', { name: new RegExp(portal, 'i') }).click();
     // The staff portal asks for a work email; the customer and rider portals accept
     // either an email or a phone number.
     await page.getByLabel(/^work email$/i).or(page.getByLabel(/email or phone/i)).first().fill(who.email);
@@ -182,10 +183,10 @@ test('the master scenario: a new customer books, a rider delivers, the numbers a
    */
   const reopen = async (page: Page, portal: 'Customer' | 'Rider' | 'Admin', who: { email: string; password: string }, path: string) => {
     await page.goto(`${WEB}${path}`, { waitUntil: 'networkidle' });
-    if (!/\/login/.test(page.url())) return;
+    if (!/(\/login|\/staff)/.test(page.url())) return;
     await signIn(page, portal, who);
     await page.waitForLoadState('networkidle');
-    if (/\/login/.test(page.url())) {
+    if (/(\/login|\/staff)/.test(page.url())) {
       throw new Error(
         `Could not sign back in as ${who.email}. If this is a 429, the per-account sign-in limit is doing its job — wait five minutes and re-run.`,
       );

@@ -161,8 +161,8 @@ export default function RiderHome() {
 
         {rider.approvalStatus !== 'APPROVED' && (
           <Alert tone={rider.approvalStatus === 'PENDING' ? 'info' : 'danger'} title="Your application is being reviewed">
-            A Rider Manager reviews your identity and vehicle documents. You can upload or replace documents at any
-            time; the status here is read from the database.
+            A Rider Manager reviews your identity and vehicle documents before you can take jobs. You can upload or
+            replace them at any time.
           </Alert>
         )}
 

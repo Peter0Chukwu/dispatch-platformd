@@ -187,7 +187,7 @@ export default function DeliveryDetailPage() {
 
             {delivery.timeline && delivery.timeline.length > 0 && (
               <Card>
-                <CardHeader title="Progress" subtitle="Every step is recorded by the API, with who did it" />
+                <CardHeader title="Progress" subtitle="Who handled your parcel, and when" />
                 <CardBody>
                   <ol className="space-y-3">
                     {delivery.timeline.map((entry, index) => (

@@ -99,10 +99,10 @@ export default function VerifyPage() {
 
         <section className="card-surface p-4">
           <h2 className="text-sm font-semibold text-ink-900">1. Email address</h2>
-          <p className="mt-0.5 text-xs text-ink-500">Paste the verification token from the email link.</p>
+          <p className="mt-0.5 text-xs text-ink-500">Paste the code from the link we emailed you.</p>
           <div className="mt-3 space-y-3">
             <Input
-              label="Verification token"
+              label="Verification code"
               value={emailToken}
               onChange={(event) => setEmailToken(event.target.value)}
               placeholder="Paste the token from your email"
@@ -138,9 +138,9 @@ export default function VerifyPage() {
         </section>
 
         {state.verification?.devCode && (
-          <Alert tone="warning" title="Development mode">
-            No SMS was sent. The API returned the code directly because <code>SMS_MODE=CONSOLE</code>: it is in the
-            API console log and pre-filled above. With a live SMS provider this never reaches the browser.
+          <Alert tone="warning" title="Text messages are not switched on yet">
+            So you can still finish setting up, your code is shown above instead of being sent to your phone. Once our
+            SMS provider is live, it will arrive as a text and will not appear on screen.
           </Alert>
         )}
       </div>

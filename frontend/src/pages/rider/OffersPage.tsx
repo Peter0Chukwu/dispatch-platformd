@@ -232,8 +232,8 @@ export default function OffersPage() {
         </div>
 
         <Alert tone="info" title="Only one rider gets the job">
-          Every offer is locked on the server when it is accepted. If two riders tap at the same time, one gets the job
-          and the other sees “no longer available” — never a double assignment.
+          Only one rider can take a job. If someone accepts first, the offer closes for everyone else — so a parcel is
+          never promised twice.
           <span className="mt-2 block">
             <Link to="/rider/active" className="font-semibold underline">
               Open my active job

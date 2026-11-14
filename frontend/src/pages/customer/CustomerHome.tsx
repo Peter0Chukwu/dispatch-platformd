@@ -47,8 +47,7 @@ export default function CustomerHome() {
             Hello, {user?.firstName} 👋
           </h1>
           <p className="mt-1 text-sm text-ink-500">
-            You are signed in to the customer portal. Your account data below comes from{' '}
-            <code className="rounded bg-ink-100 px-1 py-0.5 text-xs">GET /api/v1/auth/me</code>.
+            Here is everything you have sent, what it cost, and where your money is.
           </p>
         </div>
 

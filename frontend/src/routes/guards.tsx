@@ -15,7 +15,9 @@ export function RequireAuth({ audience }: { audience: Audience }) {
 
   if (isBootstrapping) return <FullPageLoader label="Restoring your session…" />;
   if (!isAuthenticated) {
-    return <Navigate to={`/login?portal=${audience.toLowerCase()}`} replace state={{ from: location.pathname }} />;
+    // Staff sign in at their own unlisted page; customers and riders at /login.
+    const destination = audience === 'ADMIN' ? '/staff' : `/login?portal=${audience.toLowerCase()}`;
+    return <Navigate to={destination} replace state={{ from: location.pathname }} />;
   }
 
   const expectedType = audience === 'ADMIN' ? 'STAFF' : audience;

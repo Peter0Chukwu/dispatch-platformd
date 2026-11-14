@@ -167,8 +167,7 @@ export default function StaffPage() {
               Staff &amp; roles
             </h1>
             <p className="mt-1 text-sm text-ink-500">
-              Who works here, what they may do, and what each role grants.
-              Permissions are enforced by the API on every request.
+              Who works here, what each role may do, and who has been suspended.
             </p>
           </div>
           {hasPermission("staff:write") && (

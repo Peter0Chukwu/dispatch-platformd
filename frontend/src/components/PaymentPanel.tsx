@@ -176,9 +176,9 @@ export function PaymentPanel({
         )}
 
         {simulated && (
-          <Alert tone="warning" title="Payments are simulated here">
-            This environment runs `PAYMENTS_MODE=DEVELOPMENT`. No money moves at the gateway; confirming simply settles the
-            payment through the same code path a real webhook uses.
+          <Alert tone="warning" title="Test payments">
+            Payments are in test mode, so no real money leaves any account. Everything else — the receipt, the wallet
+            entry and the rider's earnings — behaves exactly as it will when live payments are switched on.
           </Alert>
         )}
       </CardBody>

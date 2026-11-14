@@ -1,38 +1,54 @@
-TWL — NEW LANDING PAGE
-======================
+TWL — SIGN-IN FIX + COPY CLEAN-UP
+=================================
 
-What changed
-------------
-The public page was full of my working notes: the tech stack, a "Design system"
-link, a live Postgres/Redis panel, and sentences explaining how the API works.
-That is gone. The page now reads like a company page for a Benin City courier:
+1. The Admin tab is gone from the public sign-in page
+------------------------------------------------------
+/login now shows only Customer and Rider.
 
-  - Headline and two sign-up buttons
-  - Three steps: book, rider accepts, follow it to the door
-  - Four reasons to trust it
-  - The areas covered, named as streets
-  - Five real questions answered
-  - Footer with the two sign-in links
+Staff sign in at a page that is not linked anywhere public:
 
-The login/sign-up pages and the customer home screen got the same treatment.
+      https://your-site-url/staff
 
-How to apply (2 steps)
-----------------------
-1. Extract into C:\Users\USER\Documents\dispatch-platform (say YES to replace).
+Bookmark it for yourself. Old links that say ?portal=admin now redirect there.
 
-2. Commit and push:
+Nothing else changes: an admin account still opens the admin portal, and an
+invited staff member still sets their password from the invitation link.
 
-       git add -A
-       git commit -m "landing page: written for traders, not for developers"
-       git push
+2. The notes are gone
+---------------------
+The seeded admin email and password hint is deleted from the login page. So is
+"Protected by Argon2id". Other screens now say what they do for the person using
+them instead of explaining the API:
+  - customer home, booking, delivery progress
+  - rider home, offers
+  - verification and test-payment notices
+  - admin: staff, reports, deliveries, finance, pricing
+  - the 404 page is now a real page
 
-Then Northflank rebuilds the website automatically (CI/CD is green), about 3-4
-minutes. Hard-refresh the site afterwards (Ctrl + Shift + R).
+3. How to apply
+---------------
+Extract into C:\Users\USER\Documents\dispatch-platform (say YES to replace), then:
+
+      git add -A
+      git commit -m "sign-in: staff door off the public page, notes replaced with real copy"
+      git push
+
+Northflank rebuilds automatically (3-4 minutes). Hard-refresh afterwards:
+Ctrl + Shift + R.
 
 Files changed
 -------------
-  frontend/src/pages/LandingPage.tsx          rewritten
-  frontend/src/layouts/AuthLayout.tsx         sidebar + footer copy
-  frontend/src/pages/customer/CustomerHome.tsx  three sentences
+  frontend/src/pages/auth/LoginPage.tsx        rewritten (public + staff variants)
+  frontend/src/App.tsx                         /staff route, real 404
+  frontend/src/pages/NotFoundPage.tsx          new
+  frontend/src/routes/guards.tsx               staff redirect
+  frontend/src/pages/auth/AcceptInvitePage.tsx invitation links
+  frontend/src/components/PaymentPanel.tsx     test-mode wording
+  frontend/src/components/LocationReporter.tsx location warnings
+  frontend/src/pages/auth/VerifyPage.tsx       "code", not "token"
+  frontend/src/pages/customer/*.tsx            3 screens
+  frontend/src/pages/rider/*.tsx               2 screens
+  frontend/src/pages/admin/*.tsx               5 screens
+  e2e/master-scenario.spec.ts                  follows the new /staff route
 
-Nothing on the server needs touching. No database change.
+No database change. No server setting change.

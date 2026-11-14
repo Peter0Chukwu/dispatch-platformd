@@ -3,7 +3,7 @@ import { Route, Routes } from "react-router-dom";
 import { FullPageLoader } from "./components/ui";
 import LandingPage from "./pages/LandingPage";
 import StyleGuidePage from "./pages/StyleGuidePage";
-import LoginPage from "./pages/auth/LoginPage";
+import LoginPage, { StaffSignInPage } from "./pages/auth/LoginPage";
 import RegisterCustomerPage from "./pages/auth/RegisterCustomerPage";
 import RegisterRiderPage from "./pages/auth/RegisterRiderPage";
 import VerifyPage from "./pages/auth/VerifyPage";
@@ -43,7 +43,7 @@ import {
   RequireAuth,
   RequirePermission,
 } from "./routes/guards";
-import PortalPlaceholder from "./pages/PortalPlaceholder";
+import NotFoundPage from "./pages/NotFoundPage";
 
 export default function App() {
   return (
@@ -59,6 +59,15 @@ export default function App() {
           element={
             <RedirectIfAuthenticated>
               <LoginPage />
+            </RedirectIfAuthenticated>
+          }
+        />
+        {/* Staff sign-in — unlinked from the public site. */}
+        <Route
+          path="/staff"
+          element={
+            <RedirectIfAuthenticated>
+              <StaffSignInPage />
             </RedirectIfAuthenticated>
           }
         />
@@ -169,11 +178,7 @@ export default function App() {
         <Route
           path="*"
           element={
-            <PortalPlaceholder
-              portal="Unknown"
-              phase="—"
-              scope={["The page you asked for does not exist."]}
-            />
+            <NotFoundPage />
           }
         />
       </Routes>

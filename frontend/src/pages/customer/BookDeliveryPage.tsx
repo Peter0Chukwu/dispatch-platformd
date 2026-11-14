@@ -181,7 +181,7 @@ export default function BookDeliveryPage() {
           <div>
             <h1 className="text-2xl font-bold tracking-tight text-ink-900">Book a delivery</h1>
             <p className="mt-1 text-sm text-ink-500">
-              The price is calculated on the server from live pricing rules — the browser never sends an amount.
+              Your fare is worked out from the distance between the two points and the area the pickup falls in.
             </p>
           </div>
           <Link to="/app/deliveries" className="text-sm font-medium text-brand-700 hover:underline">
@@ -467,7 +467,7 @@ export default function BookDeliveryPage() {
           {/* Live price panel */}
           <div className="space-y-3 lg:sticky lg:top-20 lg:self-start">
             <Card>
-              <CardHeader title="Your price" subtitle="Calculated by the server" />
+              <CardHeader title="Your price" subtitle="Before you confirm" />
               <CardBody>
                 {!bothLocated && <p className="text-sm text-ink-500">Choose a pickup and a drop-off to see the price.</p>}
                 {bothLocated && pricing && !quote && <p className="text-sm text-ink-500">Pricing…</p>}
@@ -492,7 +492,7 @@ export default function BookDeliveryPage() {
               </CardBody>
             </Card>
             <p className="px-1 text-xs leading-relaxed text-ink-400">
-              The amount is recomputed when you confirm, so what you are charged always matches the current pricing
+              Nothing is charged until you confirm, and the total is shown again on the delivery page
               rules. Payment — card, transfer or wallet — is taken on the delivery page, never before you confirm.
             </p>
           </div>

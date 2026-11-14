@@ -173,7 +173,7 @@ export default function ReportsPage() {
           <div>
             <h1 className="text-xl font-bold text-ink-900">Reports &amp; analytics</h1>
             <p className="text-sm text-ink-500">
-              Every figure is computed from the database when the file is generated — never copied from a dashboard.
+              Each figure is calculated at the moment you generate the file, so a report never disagrees with your records.
             </p>
           </div>
           <div className="flex flex-wrap items-end gap-2">

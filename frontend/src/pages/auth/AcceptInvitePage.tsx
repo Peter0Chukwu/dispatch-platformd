@@ -119,7 +119,7 @@ export default function AcceptInvitePage() {
         title="You are in"
         subtitle="Your administrator account is ready."
         footer={
-          <Link to="/login?portal=admin" className="font-semibold text-brand-700 hover:underline">
+          <Link to="/staff" className="font-semibold text-brand-700 hover:underline">
             Go to sign in
           </Link>
         }
@@ -129,7 +129,7 @@ export default function AcceptInvitePage() {
             Sign in as <strong>{created.email}</strong>
             {created.staffCode ? ` (staff ${created.staffCode})` : ''} using the password you just chose.
           </Alert>
-          <Button fullWidth size="lg" onClick={() => navigate('/login?portal=admin')}>
+          <Button fullWidth size="lg" onClick={() => navigate('/staff')}>
             Sign in to the admin portal
           </Button>
         </div>
@@ -155,7 +155,7 @@ export default function AcceptInvitePage() {
         title={copy.title}
         subtitle="This invitation cannot be used."
         footer={
-          <Link to="/login?portal=admin" className="font-semibold text-brand-700 hover:underline">
+          <Link to="/staff" className="font-semibold text-brand-700 hover:underline">
             Sign in instead
           </Link>
         }
@@ -175,7 +175,7 @@ export default function AcceptInvitePage() {
       footer={
         <>
           Already have an account?{' '}
-          <Link to="/login?portal=admin" className="font-semibold text-brand-700 hover:underline">
+          <Link to="/staff" className="font-semibold text-brand-700 hover:underline">
             Sign in
           </Link>
         </>

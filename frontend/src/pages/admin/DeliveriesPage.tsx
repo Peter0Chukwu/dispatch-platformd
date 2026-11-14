@@ -455,7 +455,7 @@ function DeliveryDrawer({
                         label: `${rider.riderCode} · ${rider.name} (${rider.availability.replace(/_/g, " ").toLowerCase()})`,
                       })),
                     ]}
-                    hint="Only approved riders are listed. A rider at their active-job limit will be refused by the API."
+                    hint="Only approved riders are shown. A rider who is already carrying their maximum number of jobs cannot be assigned another."
                   />
                   <Field label="Why (optional)" htmlFor="assign-reason">
                     <Input

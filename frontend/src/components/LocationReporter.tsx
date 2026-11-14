@@ -126,9 +126,10 @@ export function LocationReporter({ deliveryId }: { deliveryId?: string | null })
 
   if (failures > 0) {
     return (
-      <Alert tone="warning" title="Position not reaching the server">
-        {failures} ping{failures === 1 ? '' : 's'} failed. We keep trying every {Math.round(intervalMs / 1000)} s — the
-        last successful report was {lastSentAt ? lastSentAt.toLocaleTimeString('en-NG') : 'never'}.
+      <Alert tone="warning" title="Your location is not getting through">
+        We could not send your position {failures} time{failures === 1 ? '' : 's'}. We will keep trying every{' '}
+        {Math.round(intervalMs / 1000)} seconds. Last successful update:{' '}
+        {lastSentAt ? lastSentAt.toLocaleTimeString('en-NG') : 'none yet'}.
       </Alert>
     );
   }
