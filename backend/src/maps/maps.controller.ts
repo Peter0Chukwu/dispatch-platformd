@@ -2,6 +2,7 @@ import { Controller, Get, Query } from '@nestjs/common';
 import { RateLimit } from '../common/rate-limit/rate-limit.decorator';
 import { Public } from '../auth/decorators/public.decorator';
 import { MapsService } from '../pricing/maps.service';
+import { SavedLocationsService } from '../pricing/saved-locations.service';
 
 /**
  * Address lookup for the booking form.
@@ -13,7 +14,36 @@ import { MapsService } from '../pricing/maps.service';
  */
 @Controller('maps')
 export class MapsController {
-  constructor(private readonly maps: MapsService) {}
+  constructor(
+    private readonly maps: MapsService,
+    private readonly locations: SavedLocationsService,
+  ) {}
+
+  /**
+   * The saved places list, for the booking form.
+   *
+   * Public for the same reason the suggestions are: the form needs them before a
+   * customer has a token, and they contain nothing private. Operations maintain
+   * them at Admin → Saved places.
+   */
+  @Public()
+  @Get('locations')
+  @RateLimit({ points: 120, windowSeconds: 60, keyBy: 'ip+route' })
+  async savedLocations() {
+    const rows = await this.locations.list();
+    return {
+      data: rows
+        .filter((row) => row.isActive)
+        .map((row) => ({
+          id: row.id,
+          name: row.name,
+          address: row.address,
+          landmark: row.landmark ?? '',
+          lat: row.lat,
+          lng: row.lng,
+        })),
+    };
+  }
 
   @Public()
   @Get('places')

@@ -388,6 +388,22 @@ policy question (commission, hold period), answerable from `rider_earnings`.
 See §3.2. Restarting `api` is the fix 9 times out of 10; a lost job can be re-requested from
 the UI, because a report is a pure read — nothing is lost by regenerating it.
 
+### "A customer cannot find their street in the booking form"
+
+Add it: Admin → **Saved places** → *Add a place*. It is live on the next keystroke, no
+deploy. Do this rather than editing the code — the bundled list in
+`backend/src/pricing/maps.service.ts` is only a fallback for a deployment that has not run
+the `saved_locations` migration.
+
+If the screen itself fails to load, the migration has not run:
+
+```bash
+cd backend && npx prisma migrate deploy
+```
+
+Until it runs the API logs `Could not read saved locations, using the built-in list` and
+the booking form keeps working from the twelve seeded places.
+
 ### "The web app loads but every call 401s"
 
 The reverse proxy is dropping the `Set-Cookie` on `/api/v1/auth`. Verify with

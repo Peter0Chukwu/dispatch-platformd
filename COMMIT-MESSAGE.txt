@@ -1,28 +1,42 @@
-maps: our own Benin City locations outrank the geocoder's idea of relevance
+saved places: a new neighbourhood is a row now, not a deploy
 
-Tested the new key against real queries for Benin City. The roads are there, but a
-plain provider search answers the wrong question:
+The twelve Benin City pickup points lived in two source files that had to be kept
+in step by hand — one for the API, one for the browser. Every new neighbourhood
+meant editing both, rebuilding the web image, and redeploying. That is the wrong
+shape for a business whose coverage area grows.
 
-  "ring road"  → Ring Road, LAGOS 100242 (a different state, 300 km away)
-  "sapele"     → Sapele, Delta State before Benin-Sapele Road
-  "ikpoba hill"→ nothing
+They are a table now: saved_locations, seeded by the migration with exactly the
+twelve places the platform launched with (no booking changes underneath anyone),
+and maintained at Admin → Saved places.
 
-That is not a Geoapify fault; OpenStreetMap simply has more Ring Roads in Nigeria
-than ours, and the biggest one wins. A courier platform cannot ship a booking form
-that offers a street in Lagos to someone sending a parcel across Benin City.
+  · The screen lists every place, live or hidden, and adds/edits one in a form
+    that will look the coordinates up from the address using the same geocoder
+    the booking form uses, showing what it found before saving. Coordinates are
+    what fares and dispatch radii are measured from, so they are never guessed
+    silently.
+  · Hiding beats deleting: a place that has carried a thousand parcels is the
+    historical label for them. Hide takes it off the booking form; Restore puts
+    it back. Nothing in delivery history changes.
+  · Menu entry and route sit behind settings:read / settings:write — these are
+    settings, not money and not people, and every fare is recomputed server-side
+    from the coordinates.
+  · Every write is audited, so "why did the fare for Ikpoba Hill change?" has an
+    answer that is not a guess.
 
-So autocomplete() now merges: our twelve surveyed Benin City locations whose NAME
-matches what was typed come first, then the provider fills the rest, and a
-provider result within 200 m of one of ours is dropped as the same place said
-twice. The local match is strict on purpose — words must appear in the name, not
-the address, or "road" would drag in half the table and bury a precise hit.
+The API reads the table on the autocomplete hot path, so the active list is cached
+in memory (60 s) and dropped the instant an admin writes — a new place appears on
+the customer's next keystroke, which is what makes this worth doing at all.
 
-Every suggestion request also carries MAPS_SEARCH_BIAS (default 5.6222,6.3329 —
-Ring Road, Benin City, longitude first) so near results win ties. It is
-configuration: another city means changing one variable, not the code.
+Two safety nets, in order. If the table cannot be read — a deployment that has not
+run the migration — the API logs one warning and serves the built-in list, so the
+booking form keeps working. And the browser keeps a bundled copy for the same
+reason. Neither is the source of truth; both are floors.
 
-The Google adapter goes through the same merge, so both providers behave alike.
-Test fixtures moved to Sakponba Road — a real Benin City street the platform does
-NOT keep locally — so the provider-mapping tests exercise the adapter rather than
-the merge. 52 unit tests pass.
+7 new tests (cache reuse, invalidation on write, the missing-table fallback, a
+database place outranking a provider's answer, and the built-in fallback), 59
+unit tests green, tsc clean on both sides, vite build produces a bundle.
+The migration's CREATE TABLE was checked byte-for-byte against `prisma migrate
+diff`. The DB-backed e2e suite and the migration itself have not run here — there
+is no Postgres in this sandbox — so `npx prisma migrate deploy` on the deployment
+is the step to watch.
 

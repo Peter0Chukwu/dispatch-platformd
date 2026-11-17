@@ -636,6 +636,33 @@ model ServiceZone {
   @@map("service_zones")
 }
 
+/// A pickup or drop-off point the platform keeps on hand — the "saved places"
+/// list the booking form offers before anyone types an address.
+///
+/// These are not decoration: every row is a real coordinate that pricing and
+/// dispatch already measure from, and a geocoder is worse than useless in Benin
+/// City for the places people actually name ("Ikpoba Hill" is not in
+/// OpenStreetMap at all). Operations maintain this list as the city fills in.
+model SavedLocation {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String
+  address   String
+  landmark  String?
+  lat       Float
+  lng       Float
+  /// Hidden from the booking form without deleting the history that references it.
+  isActive  Boolean  @default(true)
+  /// Ordering hint: lower first. Equal values fall back to the name.
+  sortOrder Int      @default(100)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  createdById String? @db.Uuid
+  updatedById String? @db.Uuid
+
+  @@index([isActive, sortOrder])
+  @@map("saved_locations")
+}
+
 model Vehicle {
   id                 String      @id @default(uuid()) @db.Uuid
   riderId            String      @db.Uuid

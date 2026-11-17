@@ -32,6 +32,7 @@ const AdminDispatchBoardPage = lazy(() => import("./pages/admin/DispatchBoardPag
 const AdminRidersPage = lazy(() => import("./pages/admin/RidersPage"));
 const AdminCustomersPage = lazy(() => import("./pages/admin/CustomersPage"));
 const AdminPricingPage = lazy(() => import("./pages/admin/PricingPage"));
+const AdminLocationsPage = lazy(() => import("./pages/admin/LocationsPage"));
 const AdminStaffPage = lazy(() => import("./pages/admin/StaffPage"));
 const AdminAuditPage = lazy(() => import("./pages/admin/AuditPage"));
 const AdminFinancePage = lazy(() => import("./pages/admin/FinancePage"));
@@ -158,6 +159,11 @@ export default function App() {
           </Route>
           <Route element={<RequirePermission permission="pricing:read" />}>
             <Route path="pricing" element={<AdminPricingPage />} />
+          </Route>
+          {/* The saved places list the booking form offers. Same permission as the
+            other settings screens: nothing here can move money on its own. */}
+          <Route element={<RequirePermission permission="settings:read" />}>
+            <Route path="locations" element={<AdminLocationsPage />} />
           </Route>
           <Route element={<RequirePermission permission="staff:read" />}>
             <Route path="staff" element={<AdminStaffPage />} />

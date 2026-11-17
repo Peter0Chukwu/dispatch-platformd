@@ -1,0 +1,1375 @@
+diff --git a/backend/prisma/migrations/20261117153000_saved_locations/migration.sql b/backend/prisma/migrations/20261117153000_saved_locations/migration.sql
+new file mode 100644
+index 0000000..7e38300
+--- /dev/null
++++ b/backend/prisma/migrations/20261117153000_saved_locations/migration.sql
+@@ -0,0 +1,47 @@
++-- Saved locations: the pickup and drop-off points the booking form offers.
++--
++-- The twelve rows inserted below are the ones the platform shipped with in code
++-- (benin-city-locations.ts and the MapsService table). Moving them into the
++-- database is what lets operations add a new neighbourhood without a deploy, and
++-- the INSERT keeps them so no existing booking or habit changes underneath anyone.
++--
++-- Coordinates are street-level centres, not surveyed pins; they are good enough
++-- for a road distance and can be corrected from the admin screen at any time.
++
++-- CreateTable
++CREATE TABLE "saved_locations" (
++    "id" UUID NOT NULL,
++    "name" TEXT NOT NULL,
++    "address" TEXT NOT NULL,
++    "landmark" TEXT,
++    "lat" DOUBLE PRECISION NOT NULL,
++    "lng" DOUBLE PRECISION NOT NULL,
++    "isActive" BOOLEAN NOT NULL DEFAULT true,
++    "sortOrder" INTEGER NOT NULL DEFAULT 100,
++    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
++    "updatedAt" TIMESTAMP(3) NOT NULL,
++    "createdById" UUID,
++    "updatedById" UUID,
++
++    CONSTRAINT "saved_locations_pkey" PRIMARY KEY ("id")
++);
++
++-- CreateIndex
++CREATE INDEX "saved_locations_isActive_sortOrder_idx" ON "saved_locations"("isActive", "sortOrder");
++
++-- Seed the twelve Benin City locations the platform launched with.
++INSERT INTO "saved_locations" ("id", "name", "address", "landmark", "lat", "lng", "isActive", "sortOrder", "createdAt", "updatedAt")
++VALUES
++    ('a1000000-0000-4000-8000-000000000001', 'Ring Road — Oba Ovonramwen Square', 'Ring Road, Oba Ovonramwen Square, Benin City', 'By the palace roundabout', 6.333, 5.622, true, 10, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
++    ('a1000000-0000-4000-8000-000000000002', 'New Benin — Mission Road', 'Mission Road, New Benin Market, Benin City', 'Opposite the market gate', 6.3373, 5.6337, true, 20, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
++    ('a1000000-0000-4000-8000-000000000003', 'Akpakpava Road', 'Akpakpava Road, Benin City', 'Near the Central Mosque', 6.3395, 5.628, true, 30, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
++    ('a1000000-0000-4000-8000-000000000004', 'GRA — Adesuwa Road', 'Adesuwa Road, GRA, Benin City', 'By Adesuwa Primary School', 6.3312, 5.6392, true, 40, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
++    ('a1000000-0000-4000-8000-000000000005', 'Siluko Road', 'Siluko Road, Benin City', 'Off Sapele Road, by Siluko junction', 6.318, 5.629, true, 50, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
++    ('a1000000-0000-4000-8000-000000000006', 'Ugbowo — Shopping Complex', 'Ugbowo-Lagos Road, Ugbowo, Benin City', 'Ugbowo Shopping Complex', 6.396, 5.611, true, 60, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
++    ('a1000000-0000-4000-8000-000000000007', 'Ugbowo — UBTH', 'Ugbowo-Lagos Road, Benin City', 'University of Benin Teaching Hospital main gate', 6.3906, 5.6122, true, 70, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
++    ('a1000000-0000-4000-8000-000000000008', 'Uselu — Market Road', 'Uselu Market Road, Benin City', 'By Uselu market', 6.372, 5.621, true, 80, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
++    ('a1000000-0000-4000-8000-000000000009', 'Ikpoba Hill', 'Benin-Auchi Road, Ikpoba Hill, Benin City', 'By the Ikpoba River bridge', 6.3565, 5.6691, true, 90, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
++    ('a1000000-0000-4000-8000-00000000000a', 'Aduwawa', 'Aduwawa, Benin-Auchi Road, Benin City', 'Near Aduwawa market', 6.3629, 5.6791, true, 100, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
++    ('a1000000-0000-4000-8000-00000000000b', 'Airport Road — Benin Airport', 'Airport Road, Benin City', 'By the airport terminal', 6.3169, 5.5994, true, 110, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
++    ('a1000000-0000-4000-8000-00000000000c', 'Sapele Road — Oregbeni', 'Sapele Road, Benin City', 'By Oregbeni market', 6.2771, 5.6337, true, 120, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
++ON CONFLICT ("id") DO NOTHING;
+diff --git a/backend/prisma/schema.prisma b/backend/prisma/schema.prisma
+index cbf79e2..2243278 100644
+--- a/backend/prisma/schema.prisma
++++ b/backend/prisma/schema.prisma
+@@ -636,6 +636,33 @@ model ServiceZone {
+   @@map("service_zones")
+ }
+ 
++/// A pickup or drop-off point the platform keeps on hand — the "saved places"
++/// list the booking form offers before anyone types an address.
++///
++/// These are not decoration: every row is a real coordinate that pricing and
++/// dispatch already measure from, and a geocoder is worse than useless in Benin
++/// City for the places people actually name ("Ikpoba Hill" is not in
++/// OpenStreetMap at all). Operations maintain this list as the city fills in.
++model SavedLocation {
++  id        String   @id @default(uuid()) @db.Uuid
++  name      String
++  address   String
++  landmark  String?
++  lat       Float
++  lng       Float
++  /// Hidden from the booking form without deleting the history that references it.
++  isActive  Boolean  @default(true)
++  /// Ordering hint: lower first. Equal values fall back to the name.
++  sortOrder Int      @default(100)
++  createdAt DateTime @default(now())
++  updatedAt DateTime @updatedAt
++  createdById String? @db.Uuid
++  updatedById String? @db.Uuid
++
++  @@index([isActive, sortOrder])
++  @@map("saved_locations")
++}
++
+ model Vehicle {
+   id                 String      @id @default(uuid()) @db.Uuid
+   riderId            String      @db.Uuid
+diff --git a/backend/src/maps/admin-locations.controller.ts b/backend/src/maps/admin-locations.controller.ts
+new file mode 100644
+index 0000000..61e8ef1
+--- /dev/null
++++ b/backend/src/maps/admin-locations.controller.ts
+@@ -0,0 +1,97 @@
++import { Body, Controller, Delete, Get, HttpCode, Param, ParseUUIDPipe, Patch, Post } from '@nestjs/common';
++import { CurrentUser } from '../auth/decorators/current-user.decorator';
++import { RequirePermissions } from '../auth/decorators/require-permissions.decorator';
++import { RequireType } from '../auth/decorators/require-type.decorator';
++import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
++import { RateLimit } from '../common/rate-limit/rate-limit.decorator';
++import { AuditService } from '../audit/audit.service';
++import {
++  SavedLocationsService,
++  createSavedLocationSchema,
++  updateSavedLocationSchema,
++  type CreateSavedLocationInput,
++  type UpdateSavedLocationInput,
++} from '../pricing/saved-locations.service';
++import type { AuthPrincipal } from '../auth/auth.types';
++
++/**
++ * ADMIN — the saved places list.
++ *
++ * `settings:read` and `settings:write`: these are settings, not money and not
++ * people, and every number that comes out of them (a fare, a dispatch radius) is
++ * recomputed server-side from the coordinates. Getting them wrong changes a
++ * suggestion, never a balance.
++ *
++ * Every change is audited, because "why did the fare for Ikpoba Hill change?"
++ * needs an answer that is not a guess.
++ */
++@Controller('admin/locations')
++@RequireType('STAFF')
++export class AdminLocationsController {
++  constructor(
++    private readonly locations: SavedLocationsService,
++    private readonly audit: AuditService,
++  ) {}
++
++  @Get()
++  @RequirePermissions('settings:read')
++  list() {
++    return this.locations.list();
++  }
++
++  @Post()
++  @RequirePermissions('settings:write')
++  @RateLimit({ points: 60, windowSeconds: 3600, keyBy: 'ip+route' })
++  async create(
++    @CurrentUser() user: AuthPrincipal,
++    @Body(new ZodValidationPipe(createSavedLocationSchema)) body: CreateSavedLocationInput,
++  ) {
++    const row = await this.locations.create(body, user.userId);
++    await this.audit.record({
++      actorUserId: user.userId,
++      action: 'SAVED_LOCATION_CREATED',
++      entityType: 'SavedLocation',
++      entityId: row.id,
++      after: row,
++    });
++    return row;
++  }
++
++  @Patch(':id')
++  @RequirePermissions('settings:write')
++  @RateLimit({ points: 120, windowSeconds: 3600, keyBy: 'ip+route' })
++  async update(
++    @CurrentUser() user: AuthPrincipal,
++    @Param('id', ParseUUIDPipe) id: string,
++    @Body(new ZodValidationPipe(updateSavedLocationSchema)) body: UpdateSavedLocationInput,
++  ) {
++    const row = await this.locations.update(id, body, user.userId);
++    await this.audit.record({
++      actorUserId: user.userId,
++      action: 'SAVED_LOCATION_UPDATED',
++      entityType: 'SavedLocation',
++      entityId: id,
++      after: { changes: body, row },
++    });
++    return row;
++  }
++
++  /**
++   * Hides a place rather than deleting the record — see SavedLocationsService.
++   * The response says which happened so the screen can word it honestly.
++   */
++  @Delete(':id')
++  @HttpCode(200)
++  @RequirePermissions('settings:write')
++  async hide(@CurrentUser() user: AuthPrincipal, @Param('id', ParseUUIDPipe) id: string) {
++    const row = await this.locations.deactivate(id, user.userId);
++    await this.audit.record({
++      actorUserId: user.userId,
++      action: 'SAVED_LOCATION_HIDDEN',
++      entityType: 'SavedLocation',
++      entityId: id,
++      after: row,
++    });
++    return { message: `${row.name} is hidden from the booking form.`, data: row };
++  }
++}
+diff --git a/backend/src/maps/maps.controller.ts b/backend/src/maps/maps.controller.ts
+index 6bb8f4c..88eda0e 100644
+--- a/backend/src/maps/maps.controller.ts
++++ b/backend/src/maps/maps.controller.ts
+@@ -2,6 +2,7 @@ import { Controller, Get, Query } from '@nestjs/common';
+ import { RateLimit } from '../common/rate-limit/rate-limit.decorator';
+ import { Public } from '../auth/decorators/public.decorator';
+ import { MapsService } from '../pricing/maps.service';
++import { SavedLocationsService } from '../pricing/saved-locations.service';
+ 
+ /**
+  * Address lookup for the booking form.
+@@ -13,7 +14,36 @@ import { MapsService } from '../pricing/maps.service';
+  */
+ @Controller('maps')
+ export class MapsController {
+-  constructor(private readonly maps: MapsService) {}
++  constructor(
++    private readonly maps: MapsService,
++    private readonly locations: SavedLocationsService,
++  ) {}
++
++  /**
++   * The saved places list, for the booking form.
++   *
++   * Public for the same reason the suggestions are: the form needs them before a
++   * customer has a token, and they contain nothing private. Operations maintain
++   * them at Admin → Saved places.
++   */
++  @Public()
++  @Get('locations')
++  @RateLimit({ points: 120, windowSeconds: 60, keyBy: 'ip+route' })
++  async savedLocations() {
++    const rows = await this.locations.list();
++    return {
++      data: rows
++        .filter((row) => row.isActive)
++        .map((row) => ({
++          id: row.id,
++          name: row.name,
++          address: row.address,
++          landmark: row.landmark ?? '',
++          lat: row.lat,
++          lng: row.lng,
++        })),
++    };
++  }
+ 
+   @Public()
+   @Get('places')
+diff --git a/backend/src/maps/maps.module.ts b/backend/src/maps/maps.module.ts
+index b65a764..9854d81 100644
+--- a/backend/src/maps/maps.module.ts
++++ b/backend/src/maps/maps.module.ts
+@@ -1,10 +1,14 @@
+ import { Module } from '@nestjs/common';
+ import { PricingModule } from '../pricing/pricing.module';
+ import { MapsController } from './maps.controller';
++import { AdminLocationsController } from './admin-locations.controller';
+ 
+-/** Public address lookup. The provider logic itself stays in PricingModule. */
++/**
++ * Address lookup (public) and the saved places list (public to read, staff to
++ * maintain). The provider logic itself stays in PricingModule.
++ */
+ @Module({
+   imports: [PricingModule],
+-  controllers: [MapsController],
++  controllers: [MapsController, AdminLocationsController],
+ })
+ export class MapsModule {}
+diff --git a/backend/src/pricing/maps.service.ts b/backend/src/pricing/maps.service.ts
+index ecc89b1..00e1cdc 100644
+--- a/backend/src/pricing/maps.service.ts
++++ b/backend/src/pricing/maps.service.ts
+@@ -1,5 +1,6 @@
+-import { Injectable, Logger } from '@nestjs/common';
++import { Injectable, Logger, Optional } from '@nestjs/common';
+ import { AppConfig, type MapsProviderKey } from '../config/app.config';
++import { SavedLocationsService, type SavedLocationRecord } from './saved-locations.service';
+ import { estimateRoute, haversineKm, type Point, type RouteEstimate } from './distance';
+ import type { GeocodeResult, PlaceResult } from './maps-types';
+ 
+@@ -45,7 +46,28 @@ import type { GeocodeResult, PlaceResult } from './maps-types';
+ export class MapsService {
+   private readonly logger = new Logger(MapsService.name);
+ 
+-  constructor(private readonly config: AppConfig) {}
++  constructor(
++    private readonly config: AppConfig,
++    /**
++     * Optional so the adapter can still be constructed on its own in a unit test,
++     * and so a database that has not been migrated yet degrades to the built-in
++     * table instead of taking the booking form down with it.
++     */
++    @Optional() private readonly savedLocations?: SavedLocationsService,
++  ) {}
++
++  /**
++   * The places the platform knows, wherever they live.
++   *
++   * The database is the source of truth once the migration has run; the built-in
++   * table is the floor. Both answer with the same shape, so nothing downstream
++   * can tell which one replied.
++   */
++  private async places(): Promise<SavedLocationRecord[]> {
++    const fromDb = (await this.savedLocations?.active()) ?? null;
++    if (fromDb && fromDb.length > 0) return fromDb;
++    return STUB_PLACES.map((place) => ({ ...place, isActive: true, sortOrder: 100 }));
++  }
+ 
+   get provider(): MapsProviderKey {
+     return this.config.mapsProviderKey;
+@@ -93,12 +115,15 @@ export class MapsService {
+     const trimmed = query.trim();
+     if (trimmed.length < 2) return [];
+ 
++    // Read once per request: the same rows feed both the merge and the fallback.
++    const places = await this.places();
++
+     if (this.provider === 'geoapify') {
+       const key = this.config.geoapifyApiKey;
+       if (key) {
+         try {
+           const remote = await this.geoapifyPlaces('autocomplete', trimmed, key, limit);
+-          if (remote.length > 0) return this.mergeLocalFirst(trimmed, remote, limit);
++          if (remote.length > 0) return this.mergeLocalFirst(trimmed, remote, limit, places);
+         } catch (error) {
+           this.logger.warn(`Geoapify suggestions failed, falling back to local places: ${(error as Error).message}`);
+         }
+@@ -109,13 +134,13 @@ export class MapsService {
+       if (key) {
+         try {
+           const remote = await this.googleAutocomplete(trimmed, key, limit);
+-          if (remote.length > 0) return this.mergeLocalFirst(trimmed, remote, limit);
++          if (remote.length > 0) return this.mergeLocalFirst(trimmed, remote, limit, places);
+         } catch (error) {
+           this.logger.warn(`Google autocomplete failed, falling back to local places: ${(error as Error).message}`);
+         }
+       }
+     }
+-    return stubSearch(trimmed, limit);
++    return stubSearch(trimmed, limit, places);
+   }
+ 
+   /**
+@@ -136,8 +161,13 @@ export class MapsService {
+    * appear in the location's NAME. Matching against the address too would make
+    * "road" pull in half the table and bury a precise provider hit.
+    */
+-  private mergeLocalFirst(query: string, remote: PlaceResult[], limit: number): PlaceResult[] {
+-    const local = matchLocalByName(query);
++  private mergeLocalFirst(
++    query: string,
++    remote: PlaceResult[],
++    limit: number,
++    places: SavedLocationRecord[],
++  ): PlaceResult[] {
++    const local = matchLocalByName(query, 3, places);
+     if (local.length === 0) return remote.slice(0, limit);
+ 
+     const seen = new Set(local.map((place) => `${place.name.toLowerCase()}|${place.lat.toFixed(2)}|${place.lng.toFixed(2)}`));
+@@ -207,7 +237,7 @@ export class MapsService {
+     }
+ 
+     // Stub: the closest matching saved location, clearly marked as approximate.
+-    const [match] = stubSearch(trimmed, 1);
++    const [match] = stubSearch(trimmed, 1, await this.places());
+     if (!match) return null;
+     return { address: match.address, lat: match.lat, lng: match.lng, source: 'STUB', approximate: true };
+   }
+@@ -253,7 +283,7 @@ export class MapsService {
+     }
+ 
+     // Stub: name the nearest known Benin City location, and say how far away it is.
+-    const nearest = nearestStubLocation(point);
++    const nearest = nearestStubLocation(point, await this.places());
+     if (!nearest) return null;
+     const km = haversineKm(point, { lat: nearest.lat, lng: nearest.lng });
+     return {
+@@ -548,29 +578,29 @@ function toPlaceResult(feature: NonNullable<GeoapifyFeatureCollection['features'
+  * Kept server-side so the API can answer without a maps key, and so a booking made
+  * with `MAPS_PROVIDER=STUB` still records a true position rather than a fake one.
+  */
+-const STUB_PLACES: Array<{ id: string; name: string; address: string; landmark: string; lat: number; lng: number }> = [
+-  { id: 'ring-road', name: 'Ring Road — Oba Ovonramwen Square', address: 'Ring Road, Oba Ovonramwen Square, Benin City', landmark: 'By the palace roundabout', lat: 6.333, lng: 5.622 },
+-  { id: 'new-benin', name: 'New Benin — Mission Road', address: 'Mission Road, New Benin Market, Benin City', landmark: 'Opposite the market gate', lat: 6.3373, lng: 5.6337 },
+-  { id: 'akpakpava', name: 'Akpakpava Road', address: 'Akpakpava Road, Benin City', landmark: 'Near the Central Mosque', lat: 6.3395, lng: 5.628 },
+-  { id: 'gra-adesuwa', name: 'GRA — Adesuwa Road', address: 'Adesuwa Road, GRA, Benin City', landmark: 'By Adesuwa Primary School', lat: 6.3312, lng: 5.6392 },
+-  { id: 'siluko', name: 'Siluko Road', address: 'Siluko Road, Benin City', landmark: 'Off Sapele Road, by Siluko junction', lat: 6.318, lng: 5.629 },
+-  { id: 'ugbowo-complex', name: 'Ugbowo — Shopping Complex', address: 'Ugbowo-Lagos Road, Ugbowo, Benin City', landmark: 'Ugbowo Shopping Complex', lat: 6.396, lng: 5.611 },
+-  { id: 'ubth', name: 'Ugbowo — UBTH', address: 'Ugbowo-Lagos Road, Benin City', landmark: 'University of Benin Teaching Hospital main gate', lat: 6.3906, lng: 5.6122 },
+-  { id: 'uselu', name: 'Uselu — Market Road', address: 'Uselu Market Road, Benin City', landmark: 'By Uselu market', lat: 6.372, lng: 5.621 },
+-  { id: 'ikpoba-hill', name: 'Ikpoba Hill', address: 'Benin-Auchi Road, Ikpoba Hill, Benin City', landmark: 'By the Ikpoba River bridge', lat: 6.3565, lng: 5.6691 },
+-  { id: 'aduwawa', name: 'Aduwawa', address: 'Aduwawa, Benin-Auchi Road, Benin City', landmark: 'Near Aduwawa market', lat: 6.3629, lng: 5.6791 },
+-  { id: 'airport-road', name: 'Airport Road — Benin Airport', address: 'Airport Road, Benin City', landmark: 'By the airport terminal', lat: 6.3169, lng: 5.5994 },
+-  { id: 'sapele-road', name: 'Sapele Road — Oregbeni', address: 'Sapele Road, Benin City', landmark: 'By Oregbeni market', lat: 6.2771, lng: 5.6337 },
++const STUB_PLACES: SavedLocationRecord[] = [
++  { id: 'ring-road', name: 'Ring Road — Oba Ovonramwen Square', address: 'Ring Road, Oba Ovonramwen Square, Benin City', landmark: 'By the palace roundabout', lat: 6.333, lng: 5.622, isActive: true, sortOrder: 100 },
++  { id: 'new-benin', name: 'New Benin — Mission Road', address: 'Mission Road, New Benin Market, Benin City', landmark: 'Opposite the market gate', lat: 6.3373, lng: 5.6337, isActive: true, sortOrder: 100 },
++  { id: 'akpakpava', name: 'Akpakpava Road', address: 'Akpakpava Road, Benin City', landmark: 'Near the Central Mosque', lat: 6.3395, lng: 5.628, isActive: true, sortOrder: 100 },
++  { id: 'gra-adesuwa', name: 'GRA — Adesuwa Road', address: 'Adesuwa Road, GRA, Benin City', landmark: 'By Adesuwa Primary School', lat: 6.3312, lng: 5.6392, isActive: true, sortOrder: 100 },
++  { id: 'siluko', name: 'Siluko Road', address: 'Siluko Road, Benin City', landmark: 'Off Sapele Road, by Siluko junction', lat: 6.318, lng: 5.629, isActive: true, sortOrder: 100 },
++  { id: 'ugbowo-complex', name: 'Ugbowo — Shopping Complex', address: 'Ugbowo-Lagos Road, Ugbowo, Benin City', landmark: 'Ugbowo Shopping Complex', lat: 6.396, lng: 5.611, isActive: true, sortOrder: 100 },
++  { id: 'ubth', name: 'Ugbowo — UBTH', address: 'Ugbowo-Lagos Road, Benin City', landmark: 'University of Benin Teaching Hospital main gate', lat: 6.3906, lng: 5.6122, isActive: true, sortOrder: 100 },
++  { id: 'uselu', name: 'Uselu — Market Road', address: 'Uselu Market Road, Benin City', landmark: 'By Uselu market', lat: 6.372, lng: 5.621, isActive: true, sortOrder: 100 },
++  { id: 'ikpoba-hill', name: 'Ikpoba Hill', address: 'Benin-Auchi Road, Ikpoba Hill, Benin City', landmark: 'By the Ikpoba River bridge', lat: 6.3565, lng: 5.6691, isActive: true, sortOrder: 100 },
++  { id: 'aduwawa', name: 'Aduwawa', address: 'Aduwawa, Benin-Auchi Road, Benin City', landmark: 'Near Aduwawa market', lat: 6.3629, lng: 5.6791, isActive: true, sortOrder: 100 },
++  { id: 'airport-road', name: 'Airport Road — Benin Airport', address: 'Airport Road, Benin City', landmark: 'By the airport terminal', lat: 6.3169, lng: 5.5994, isActive: true, sortOrder: 100 },
++  { id: 'sapele-road', name: 'Sapele Road — Oregbeni', address: 'Sapele Road, Benin City', landmark: 'By Oregbeni market', lat: 6.2771, lng: 5.6337, isActive: true, sortOrder: 100 },
+ ];
+ 
+ const normalise = (value: string) => value.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+ 
+-function stubSearch(query: string, limit: number): PlaceResult[] {
++function stubSearch(query: string, limit: number, places: SavedLocationRecord[] = STUB_PLACES): PlaceResult[] {
+   const needle = normalise(query);
+   const terms = needle.split(' ').filter(Boolean);
+   if (terms.length === 0) return [];
+ 
+-  return STUB_PLACES.map((place) => {
++  return places.map((place) => {
+     const haystack = normalise(`${place.name} ${place.address} ${place.landmark}`);
+     const score = terms.reduce((total, term) => total + (haystack.includes(term) ? 1 : 0), 0);
+     return { place, score };
+@@ -590,13 +620,17 @@ function stubSearch(query: string, limit: number): PlaceResult[] {
+ }
+ 
+ /** Local places whose NAME contains every word of the query (3+ letters). */
+-function matchLocalByName(query: string, limit = 3): PlaceResult[] {
++function matchLocalByName(
++  query: string,
++  limit = 3,
++  places: SavedLocationRecord[] = STUB_PLACES,
++): PlaceResult[] {
+   const terms = normalise(query)
+     .split(' ')
+     .filter((term) => term.length >= 3);
+   if (terms.length === 0) return [];
+ 
+-  return STUB_PLACES.filter((place) => {
++  return places.filter((place) => {
+     const name = normalise(place.name);
+     return terms.every((term) => name.includes(term));
+   })
+@@ -612,10 +646,10 @@ function matchLocalByName(query: string, limit = 3): PlaceResult[] {
+     }));
+ }
+ 
+-function nearestStubLocation(point: Point) {
+-  let best: (typeof STUB_PLACES)[number] | null = null;
++function nearestStubLocation(point: Point, places: SavedLocationRecord[] = STUB_PLACES) {
++  let best: SavedLocationRecord | null = null;
+   let bestKm = Number.POSITIVE_INFINITY;
+-  for (const place of STUB_PLACES) {
++  for (const place of places) {
+     const km = haversineKm(point, { lat: place.lat, lng: place.lng });
+     if (km < bestKm) {
+       bestKm = km;
+diff --git a/backend/src/pricing/pricing.module.ts b/backend/src/pricing/pricing.module.ts
+index 627005a..36f68d9 100644
+--- a/backend/src/pricing/pricing.module.ts
++++ b/backend/src/pricing/pricing.module.ts
+@@ -2,9 +2,10 @@ import { Module } from '@nestjs/common';
+ import { MapsService } from './maps.service';
+ import { PricingService } from './pricing.service';
+ import { PromotionsService } from './promotions.service';
++import { SavedLocationsService } from './saved-locations.service';
+ 
+ @Module({
+-  providers: [MapsService, PromotionsService, PricingService],
+-  exports: [MapsService, PromotionsService, PricingService],
++  providers: [MapsService, PromotionsService, PricingService, SavedLocationsService],
++  exports: [MapsService, PromotionsService, PricingService, SavedLocationsService],
+ })
+ export class PricingModule {}
+diff --git a/backend/src/pricing/saved-locations.service.ts b/backend/src/pricing/saved-locations.service.ts
+new file mode 100644
+index 0000000..ddaca6f
+--- /dev/null
++++ b/backend/src/pricing/saved-locations.service.ts
+@@ -0,0 +1,148 @@
++import { Injectable, Logger } from '@nestjs/common';
++import { z } from 'zod';
++import { PrismaService } from '../infra/prisma/prisma.service';
++
++/**
++ * SAVED LOCATIONS — the pickup and drop-off points the platform keeps on hand.
++ *
++ * The booking form offers these before anyone types an address, because in Benin
++ * City the places people name are often not in any map database ("Ikpoba Hill"
++ * simply is not in OpenStreetMap), and because a customer naming a landmark is
++ * more accurate than a geocoder guessing at a street.
++ *
++ * They live in the database so operations can add a new neighbourhood without a
++ * deploy. They are read on the autocomplete hot path — every keystroke — so the
++ * whole active list is cached in memory and dropped the moment an admin changes
++ * anything.
++ */
++
++export interface SavedLocationRecord {
++  id: string;
++  name: string;
++  address: string;
++  landmark: string | null;
++  lat: number;
++  lng: number;
++  isActive: boolean;
++  sortOrder: number;
++}
++
++/** How long a cached list is trusted if nothing invalidates it. */
++const CACHE_TTL_MS = 60_000;
++const MAX_RESULTS = 500;
++
++export const createSavedLocationSchema = z.object({
++  name: z.string().trim().min(2, 'Give the place a name people will recognise').max(120),
++  address: z.string().trim().min(3, 'An address is required').max(240),
++  landmark: z.string().trim().max(160).optional().nullable(),
++  lat: z.coerce.number().min(-90).max(90),
++  lng: z.coerce.number().min(-180).max(180),
++  sortOrder: z.coerce.number().int().min(0).max(10_000).optional(),
++  isActive: z.coerce.boolean().optional(),
++});
++export type CreateSavedLocationInput = z.infer<typeof createSavedLocationSchema>;
++
++export const updateSavedLocationSchema = createSavedLocationSchema.partial();
++export type UpdateSavedLocationInput = z.infer<typeof updateSavedLocationSchema>;
++
++@Injectable()
++export class SavedLocationsService {
++  private readonly logger = new Logger(SavedLocationsService.name);
++  private cache: { rows: SavedLocationRecord[]; expiresAt: number } | null = null;
++
++  constructor(private readonly prisma: PrismaService) {}
++
++  /**
++   * The active list, cached.
++   *
++   * If the table cannot be read — a deploy that has not run the migration yet,
++   * say — this returns null and the caller falls back to the built-in table. A
++   * missing table must never be the reason a customer cannot send a parcel.
++   */
++  async active(): Promise<SavedLocationRecord[] | null> {
++    if (this.cache && this.cache.expiresAt > Date.now()) return this.cache.rows;
++    try {
++      const rows = await this.prisma.savedLocation.findMany({
++        where: { isActive: true },
++        orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
++        take: MAX_RESULTS,
++        select: { id: true, name: true, address: true, landmark: true, lat: true, lng: true, isActive: true, sortOrder: true },
++      });
++      this.cache = { rows, expiresAt: Date.now() + CACHE_TTL_MS };
++      return rows;
++    } catch (error) {
++      this.logger.warn(`Could not read saved locations, using the built-in list: ${(error as Error).message}`);
++      return null;
++    }
++  }
++
++  /** Everything, active or not — the admin screen needs to see what it hid. */
++  async list(): Promise<SavedLocationRecord[]> {
++    return this.prisma.savedLocation.findMany({
++      orderBy: [{ isActive: 'desc' }, { sortOrder: 'asc' }, { name: 'asc' }],
++      take: MAX_RESULTS,
++      select: { id: true, name: true, address: true, landmark: true, lat: true, lng: true, isActive: true, sortOrder: true },
++    });
++  }
++
++  async create(input: CreateSavedLocationInput, actorUserId: string): Promise<SavedLocationRecord> {
++    const row = await this.prisma.savedLocation.create({
++      data: {
++        name: input.name,
++        address: input.address,
++        landmark: input.landmark ?? null,
++        lat: input.lat,
++        lng: input.lng,
++        sortOrder: input.sortOrder ?? 100,
++        isActive: input.isActive ?? true,
++        createdById: actorUserId,
++        updatedById: actorUserId,
++      },
++      select: { id: true, name: true, address: true, landmark: true, lat: true, lng: true, isActive: true, sortOrder: true },
++    });
++    this.invalidate();
++    return row;
++  }
++
++  async update(id: string, input: UpdateSavedLocationInput, actorUserId: string): Promise<SavedLocationRecord> {
++    const row = await this.prisma.savedLocation.update({
++      where: { id },
++      data: {
++        ...(input.name !== undefined ? { name: input.name } : {}),
++        ...(input.address !== undefined ? { address: input.address } : {}),
++        ...(input.landmark !== undefined ? { landmark: input.landmark } : {}),
++        ...(input.lat !== undefined ? { lat: input.lat } : {}),
++        ...(input.lng !== undefined ? { lng: input.lng } : {}),
++        ...(input.sortOrder !== undefined ? { sortOrder: input.sortOrder } : {}),
++        ...(input.isActive !== undefined ? { isActive: input.isActive } : {}),
++        updatedById: actorUserId,
++      },
++      select: { id: true, name: true, address: true, landmark: true, lat: true, lng: true, isActive: true, sortOrder: true },
++    });
++    this.invalidate();
++    return row;
++  }
++
++  /**
++   * Hiding, not deleting.
++   *
++   * A saved location is the historical label for thousands of parcels that were
++   * carried to that spot. Removing the row would not un-carry them, and it would
++   * lose the only record of why that coordinate mattered. So the admin screen
++   * hides a place; nothing in the delivery history changes.
++   */
++  async deactivate(id: string, actorUserId: string): Promise<SavedLocationRecord> {
++    const row = await this.prisma.savedLocation.update({
++      where: { id },
++      data: { isActive: false, updatedById: actorUserId },
++      select: { id: true, name: true, address: true, landmark: true, lat: true, lng: true, isActive: true, sortOrder: true },
++    });
++    this.invalidate();
++    return row;
++  }
++
++  /** Called after every write, so an admin's change is visible on the next keystroke. */
++  invalidate(): void {
++    this.cache = null;
++  }
++}
+diff --git a/backend/test/saved-locations.spec.ts b/backend/test/saved-locations.spec.ts
+new file mode 100644
+index 0000000..2f1c5d7
+--- /dev/null
++++ b/backend/test/saved-locations.spec.ts
+@@ -0,0 +1,144 @@
++import { beforeEach, describe, expect, it, vi } from 'vitest';
++import { MapsService } from '../src/pricing/maps.service';
++import { SavedLocationsService, type SavedLocationRecord } from '../src/pricing/saved-locations.service';
++import type { AppConfig } from '../src/config/app.config';
++
++/**
++ * Saved places — the list operations maintain at Admin → Saved places.
++ *
++ * The point of moving these out of the source code is that a new neighbourhood
++ * becomes a row, not a deploy. These tests hold that promise: a place added to the
++ * database has to appear in the booking form on the very next keystroke, and one
++ * that is hidden has to stop appearing — without a restart.
++ */
++
++const row = (over: Partial<SavedLocationRecord> = {}): SavedLocationRecord => ({
++  id: 'db-ekhwan',
++  name: 'Ekhwan Road',
++  address: 'Ekhwan Road, Benin City',
++  landmark: 'By the filling station',
++  lat: 6.3455,
++  lng: 5.6301,
++  isActive: true,
++  sortOrder: 100,
++  ...over,
++});
++
++/** The smallest Prisma surface SavedLocationsService actually uses. */
++function fakePrisma(rows: SavedLocationRecord[]) {
++  return {
++    savedLocation: {
++      findMany: vi.fn(async () => rows),
++      findUnique: vi.fn(async ({ where }: { where: { id: string } }) => rows.find((r) => r.id === where.id) ?? null),
++      create: vi.fn(async ({ data }: { data: Partial<SavedLocationRecord> }) => row({ id: 'created', ...data })),
++      update: vi.fn(async ({ where, data }: { where: { id: string }; data: Partial<SavedLocationRecord> }) =>
++        row({ id: where.id, ...data }),
++      ),
++    },
++  };
++}
++
++describe('phase 8 — saved places, maintained without a deploy', () => {
++  beforeEach(() => {
++    vi.restoreAllMocks();
++  });
++
++  describe('the cache', () => {
++    it('reads the table once for repeated suggestions', async () => {
++      const prisma = fakePrisma([row()]);
++      const service = new SavedLocationsService(prisma as never);
++
++      await service.active();
++      await service.active();
++      await service.active();
++
++      expect(prisma.savedLocation.findMany).toHaveBeenCalledTimes(1);
++    });
++
++    it('forgets the cached list the moment an admin writes', async () => {
++      const prisma = fakePrisma([row()]);
++      const service = new SavedLocationsService(prisma as never);
++
++      await service.active();
++      await service.create({ name: 'Ekhwan Road', address: 'Ekhwan Road, Benin City', lat: 6.3455, lng: 5.6301 }, 'staff-1');
++      await service.active();
++
++      expect(prisma.savedLocation.findMany).toHaveBeenCalledTimes(2);
++    });
++
++    it('returns null — not an exception — when the table is missing', async () => {
++      const prisma = {
++        savedLocation: {
++          findMany: vi.fn(async () => {
++            throw new Error('relation "saved_locations" does not exist');
++          }),
++        },
++      };
++      const service = new SavedLocationsService(prisma as never);
++
++      await expect(service.active()).resolves.toBeNull();
++    });
++  });
++
++  describe('the booking form sees what operations entered', () => {
++    const config = { mapsProviderKey: 'stub', geoapifyApiKey: undefined } as unknown as AppConfig;
++
++    it('offers a place that only exists in the database', async () => {
++      const service = new SavedLocationsService(fakePrisma([row()]) as never);
++      const maps = new MapsService(config, service);
++
++      const results = await maps.autocomplete('ekhwan');
++
++      expect(results[0]).toMatchObject({ id: 'db-ekhwan', name: 'Ekhwan Road', source: 'STUB' });
++    });
++
++    it('stops offering a place that was hidden', async () => {
++      // `active()` filters on isActive in SQL; the fake returns whatever the query
++      // would, so an empty result stands in for "this row is now hidden".
++      const service = new SavedLocationsService(fakePrisma([]) as never);
++      const maps = new MapsService(config, service);
++
++      const results = await maps.autocomplete('ekhwan');
++
++      expect(results).toHaveLength(0);
++    });
++
++    it('falls back to the built-in table when the database says nothing', async () => {
++      // No SavedLocationsService at all is what a unit test — or a deployment that
++      // has not run the migration — looks like.
++      const maps = new MapsService(config);
++
++      const results = await maps.autocomplete('ring road');
++
++      expect(results.length).toBeGreaterThan(0);
++      expect(results[0]!.id).toBe('ring-road');
++    });
++
++    it('lets a database place win over a provider answer for the same words', async () => {
++      const service = new SavedLocationsService(
++        fakePrisma([row({ id: 'db-sapele', name: 'Sapele Road — New Layout', lat: 6.3, lng: 5.62 })]) as never,
++      );
++      const maps = new MapsService({ ...config, mapsProviderKey: 'geoapify', geoapifyApiKey: 'k' } as unknown as AppConfig, service);
++
++      const fetchMock = vi.fn().mockResolvedValue({
++        ok: true,
++        json: async () => ({
++          features: [
++            {
++              // The town of Sapele, 300 km away, which is what the provider prefers.
++              properties: { place_id: 'town', name: 'Sapele', formatted: 'Sapele, DE, Nigeria', lat: 5.89, lon: 5.68 },
++            },
++          ],
++        }),
++      });
++      vi.stubGlobal('fetch', fetchMock);
++
++      const results = await maps.autocomplete('sapele');
++
++      expect(results[0]!.id).toBe('db-sapele');
++      expect(results[0]!.source).toBe('STUB');
++
++      vi.unstubAllGlobals();
++    });
++  });
++});
+diff --git a/documentation/MAPS-GEOAPIFY-SETUP.md b/documentation/MAPS-GEOAPIFY-SETUP.md
+index e23fa2a..8669787 100644
+--- a/documentation/MAPS-GEOAPIFY-SETUP.md
++++ b/documentation/MAPS-GEOAPIFY-SETUP.md
+@@ -81,6 +81,20 @@ list does not cover.
+ Benin City — longitude first) is sent with every request so nearby results win ties. Change
+ it if you ever operate from another city.
+ 
++## 3¾. Adding a pickup point (no deploy)
++
++Admin → **Saved places** (`/admin/locations`). Add a name, an address, the sentence a
++rider needs, and coordinates — the form will look the coordinates up from the address if
++you press **Find coordinates**.
++
++It appears on the booking form on the next keystroke. **Hide** takes it off the list
++without deleting the record; **Restore** puts it back.
++
++The list is a database table (`saved_locations`), seeded with the twelve Benin City places
++the platform launched with. The copy in `backend/src/pricing/maps.service.ts` is only a
++fallback for a deployment whose migration has not run yet — once the table exists, what the
++office types is what customers see.
++
+ ## 4. What a booking costs you
+ 
+ The free plan gives **3,000 credits a day**, and:
+diff --git a/documentation/RUNBOOK.md b/documentation/RUNBOOK.md
+index c020536..19959d8 100644
+--- a/documentation/RUNBOOK.md
++++ b/documentation/RUNBOOK.md
+@@ -388,6 +388,22 @@ policy question (commission, hold period), answerable from `rider_earnings`.
+ See §3.2. Restarting `api` is the fix 9 times out of 10; a lost job can be re-requested from
+ the UI, because a report is a pure read — nothing is lost by regenerating it.
+ 
++### "A customer cannot find their street in the booking form"
++
++Add it: Admin → **Saved places** → *Add a place*. It is live on the next keystroke, no
++deploy. Do this rather than editing the code — the bundled list in
++`backend/src/pricing/maps.service.ts` is only a fallback for a deployment that has not run
++the `saved_locations` migration.
++
++If the screen itself fails to load, the migration has not run:
++
++```bash
++cd backend && npx prisma migrate deploy
++```
++
++Until it runs the API logs `Could not read saved locations, using the built-in list` and
++the booking form keeps working from the twelve seeded places.
++
+ ### "The web app loads but every call 401s"
+ 
+ The reverse proxy is dropping the `Set-Cookie` on `/api/v1/auth`. Verify with
+diff --git a/frontend/src/App.tsx b/frontend/src/App.tsx
+index c584541..2887b86 100644
+--- a/frontend/src/App.tsx
++++ b/frontend/src/App.tsx
+@@ -32,6 +32,7 @@ const AdminDispatchBoardPage = lazy(() => import("./pages/admin/DispatchBoardPag
+ const AdminRidersPage = lazy(() => import("./pages/admin/RidersPage"));
+ const AdminCustomersPage = lazy(() => import("./pages/admin/CustomersPage"));
+ const AdminPricingPage = lazy(() => import("./pages/admin/PricingPage"));
++const AdminLocationsPage = lazy(() => import("./pages/admin/LocationsPage"));
+ const AdminStaffPage = lazy(() => import("./pages/admin/StaffPage"));
+ const AdminAuditPage = lazy(() => import("./pages/admin/AuditPage"));
+ const AdminFinancePage = lazy(() => import("./pages/admin/FinancePage"));
+@@ -159,6 +160,11 @@ export default function App() {
+           <Route element={<RequirePermission permission="pricing:read" />}>
+             <Route path="pricing" element={<AdminPricingPage />} />
+           </Route>
++          {/* The saved places list the booking form offers. Same permission as the
++            other settings screens: nothing here can move money on its own. */}
++          <Route element={<RequirePermission permission="settings:read" />}>
++            <Route path="locations" element={<AdminLocationsPage />} />
++          </Route>
+           <Route element={<RequirePermission permission="staff:read" />}>
+             <Route path="staff" element={<AdminStaffPage />} />
+           </Route>
+diff --git a/frontend/src/components/LocationPicker.tsx b/frontend/src/components/LocationPicker.tsx
+index 8d85fb0..aa32d55 100644
+--- a/frontend/src/components/LocationPicker.tsx
++++ b/frontend/src/components/LocationPicker.tsx
+@@ -89,22 +89,45 @@ export function LocationPicker({
+     retry: false,
+   });
+ 
++  /**
++   * The places operations maintain at Admin → Saved places.
++   *
++   * The bundled list is the fallback, not the source of truth: it is what a fresh
++   * install or a failed request falls back to, so the form is never empty. Once the
++   * request lands, what the office typed in is what the customer sees.
++   */
++  const savedPlaces = useQuery({
++    queryKey: ['maps', 'saved-locations'],
++    queryFn: () =>
++      api.get<{ data: Array<{ id: string; name: string; address: string; landmark: string; lat: number; lng: number }> }>(
++        '/maps/locations',
++      ),
++    staleTime: 5 * 60_000,
++    retry: false,
++  });
++
++  const places: SavedLocation[] = useMemo(() => {
++    const remote = savedPlaces.data?.data ?? [];
++    if (remote.length === 0) return BENIN_CITY_LOCATIONS;
++    return remote.map((place) => ({ ...place, landmark: place.landmark ?? '', zone: 'BEN' }));
++  }, [savedPlaces.data]);
++
+   const matches: SavedLocation[] = useMemo(() => {
+     const needle = search.trim().toLowerCase();
+-    if (!needle) return BENIN_CITY_LOCATIONS;
++    if (!needle) return places;
+     const remote = suggestions.data?.data ?? [];
+     if (remote.length > 0) {
+       // Only what actually matched: padding the list with unrelated saved places
+       // would make a search for "ugbowo" appear to offer Ring Road.
+       return remote.map(toSavedLocation).slice(0, 8);
+     }
+-    return BENIN_CITY_LOCATIONS.filter(
++    return places.filter(
+       (location) =>
+         location.name.toLowerCase().includes(needle) ||
+         location.address.toLowerCase().includes(needle) ||
+         location.landmark.toLowerCase().includes(needle),
+     );
+-  }, [search, suggestions.data]);
++  }, [search, suggestions.data, places]);
+ 
+   const provider = suggestions.data?.provider ?? 'stub';
+ 
+diff --git a/frontend/src/pages/admin/LocationsPage.tsx b/frontend/src/pages/admin/LocationsPage.tsx
+new file mode 100644
+index 0000000..7cdd993
+--- /dev/null
++++ b/frontend/src/pages/admin/LocationsPage.tsx
+@@ -0,0 +1,454 @@
++import { useMemo, useState } from "react";
++import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
++import { PortalShell } from "../../layouts/PortalShell";
++import {
++  Alert,
++  Badge,
++  Button,
++  Card,
++  CardBody,
++  CardHeader,
++  ErrorState,
++  Field,
++  Input,
++  LoadingBlock,
++  Modal,
++  useToast,
++} from "../../components/ui";
++import { useAuth } from "../../contexts/AuthContext";
++import { api } from "../../lib/api";
++import { adminNav } from "./nav";
++
++/**
++ * SAVED PLACES
++ *
++ * The pickup and drop-off points the booking form offers before anyone types an
++ * address. This screen is the whole reason the list lives in a database: a new
++ * neighbourhood becomes a row here, not a deploy.
++ *
++ * Coordinates are the one thing that must be right — every fare and every dispatch
++ * radius is measured from them — so the form will fill them in from an address via
++ * the same geocoder the booking form uses, and shows what it found before saving.
++ */
++
++interface SavedLocation {
++  id: string;
++  name: string;
++  address: string;
++  landmark: string | null;
++  lat: number;
++  lng: number;
++  isActive: boolean;
++  sortOrder: number;
++}
++
++interface Draft {
++  id: string | null;
++  name: string;
++  address: string;
++  landmark: string;
++  lat: string;
++  lng: string;
++  sortOrder: string;
++}
++
++const emptyDraft = (): Draft => ({
++  id: null,
++  name: "",
++  address: "",
++  landmark: "",
++  lat: "",
++  lng: "",
++  sortOrder: "100",
++});
++
++const draftFrom = (row: SavedLocation): Draft => ({
++  id: row.id,
++  name: row.name,
++  address: row.address,
++  landmark: row.landmark ?? "",
++  lat: String(row.lat),
++  lng: String(row.lng),
++  sortOrder: String(row.sortOrder),
++});
++
++export default function LocationsPage() {
++  const { hasPermission } = useAuth();
++  const { notify } = useToast();
++  const queryClient = useQueryClient();
++  const canWrite = hasPermission("settings:write");
++
++  const [draft, setDraft] = useState<Draft | null>(null);
++  const [search, setSearch] = useState("");
++  const [confirmHide, setConfirmHide] = useState<SavedLocation | null>(null);
++
++  const locations = useQuery({
++    queryKey: ["admin", "saved-locations"],
++    queryFn: () => api.get<SavedLocation[]>("/admin/locations"),
++    staleTime: 15_000,
++  });
++
++  const save = useMutation({
++    mutationFn: (values: Draft) => {
++      const body = {
++        name: values.name.trim(),
++        address: values.address.trim(),
++        landmark: values.landmark.trim() || null,
++        lat: Number(values.lat),
++        lng: Number(values.lng),
++        sortOrder: Number(values.sortOrder) || 100,
++      };
++      return values.id
++        ? api.patch<SavedLocation>(`/admin/locations/${values.id}`, body)
++        : api.post<SavedLocation>("/admin/locations", body);
++    },
++    onSuccess: (row) => {
++      notify({
++        tone: "success",
++        title: draft?.id ? `${row.name} updated` : `${row.name} added`,
++        description: draft?.id
++          ? "The booking form picks this up straight away."
++          : "It is in the booking form now — no deploy needed.",
++      });
++      setDraft(null);
++      void queryClient.invalidateQueries({ queryKey: ["admin", "saved-locations"] });
++      void queryClient.invalidateQueries({ queryKey: ["maps", "saved-locations"] });
++    },
++  });
++
++  const restore = useMutation({
++    mutationFn: (row: SavedLocation) =>
++      api.patch<SavedLocation>(`/admin/locations/${row.id}`, { isActive: true }),
++    onSuccess: (row) => {
++      notify({ tone: "success", title: `${row.name} is back on the booking form` });
++      void queryClient.invalidateQueries({ queryKey: ["admin", "saved-locations"] });
++      void queryClient.invalidateQueries({ queryKey: ["maps", "saved-locations"] });
++    },
++  });
++
++  const hide = useMutation({
++    mutationFn: (row: SavedLocation) => api.delete<{ message: string }>(`/admin/locations/${row.id}`),
++    onSuccess: (result) => {
++      notify({ tone: "success", title: result.message });
++      setConfirmHide(null);
++      void queryClient.invalidateQueries({ queryKey: ["admin", "saved-locations"] });
++      void queryClient.invalidateQueries({ queryKey: ["maps", "saved-locations"] });
++    },
++  });
++
++  const rows = useMemo(() => {
++    const all = locations.data ?? [];
++    const needle = search.trim().toLowerCase();
++    if (!needle) return all;
++    return all.filter((row) =>
++      `${row.name} ${row.address} ${row.landmark ?? ""}`.toLowerCase().includes(needle),
++    );
++  }, [locations.data, search]);
++
++  const activeCount = (locations.data ?? []).filter((row) => row.isActive).length;
++
++  return (
++    <PortalShell portal="Admin" nav={adminNav(hasPermission)}>
++      <div className="mx-auto max-w-5xl space-y-5">
++        <div className="flex flex-wrap items-start justify-between gap-3">
++          <div>
++            <h1 className="text-2xl font-bold tracking-tight text-ink-900">Saved places</h1>
++            <p className="mt-1 max-w-2xl text-sm text-ink-500">
++              The pickup and drop-off points the booking form offers before a customer types
++              anything. Fares and dispatch distances are measured from these coordinates, so a
++              place added here is usable immediately — no deploy, no code change.
++            </p>
++          </div>
++          {canWrite && (
++            <Button onClick={() => setDraft(emptyDraft())}>Add a place</Button>
++          )}
++        </div>
++
++        <Alert tone="info" title={`${activeCount} places on the booking form`}>
++          Customers can still type any address — this list is the shortcut, and it is what covers
++          places a map database does not know about (most of Benin City&apos;s informal landmarks).
++        </Alert>
++
++        <Card>
++          <CardHeader
++            title="All places"
++            subtitle="Hidden places stay in the record; they simply stop appearing to customers."
++            action={
++              <Input
++                aria-label="Search places"
++                placeholder="Search name, address or landmark"
++                value={search}
++                onChange={(event) => setSearch(event.target.value)}
++                className="w-full sm:w-64"
++              />
++            }
++          />
++          <CardBody>
++            {locations.isError ? (
++              <ErrorState
++                title="Could not load the list"
++                message={(locations.error as Error)?.message}
++                onRetry={() => void locations.refetch()}
++              />
++            ) : locations.isPending ? (
++              <LoadingBlock rows={5} />
++            ) : rows.length === 0 ? (
++              <p className="py-8 text-center text-sm text-ink-500">
++                Nothing matches “{search}”. {canWrite ? "Add it with the button above." : ""}
++              </p>
++            ) : (
++              <div className="-mx-4 overflow-x-auto px-4">
++                <table className="w-full min-w-[36rem] text-sm">
++                  <thead>
++                    <tr className="text-left text-xs uppercase tracking-wide text-ink-500">
++                      <th className="pb-2">Place</th>
++                      <th className="pb-2">Order</th>
++                      <th className="pb-2">Coordinates</th>
++                      <th className="pb-2 text-right">Shown</th>
++                      <th className="pb-2 text-right">{canWrite ? "Manage" : ""}</th>
++                    </tr>
++                  </thead>
++                  <tbody>
++                    {rows.map((row) => (
++                      <tr key={row.id} className="border-t border-ink-100 align-top">
++                        <td className="py-3">
++                          <p className="font-medium text-ink-900">{row.name}</p>
++                          <p className="text-xs text-ink-500">{row.address}</p>
++                          {row.landmark && (
++                            <p className="text-xs text-ink-400">{row.landmark}</p>
++                          )}
++                        </td>
++                        <td className="py-3 tabular-nums text-ink-600">{row.sortOrder}</td>
++                        <td className="py-3 font-mono text-xs text-ink-600">
++                          {row.lat.toFixed(4)}, {row.lng.toFixed(4)}
++                        </td>
++                        <td className="py-3 text-right">
++                          <Badge tone={row.isActive ? "success" : "neutral"}>
++                            {row.isActive ? "live" : "hidden"}
++                          </Badge>
++                        </td>
++                        <td className="py-3 text-right">
++                          {canWrite && (
++                            <div className="flex justify-end gap-2">
++                              <Button size="sm" variant="secondary" onClick={() => setDraft(draftFrom(row))}>
++                                Edit
++                              </Button>
++                              {row.isActive ? (
++                                <Button size="sm" variant="ghost" onClick={() => setConfirmHide(row)}>
++                                  Hide
++                                </Button>
++                              ) : (
++                                <Button
++                                  size="sm"
++                                  variant="ghost"
++                                  onClick={() => restore.mutate(row)}
++                                  disabled={restore.isPending}
++                                >
++                                  Restore
++                                </Button>
++                              )}
++                            </div>
++                          )}
++                        </td>
++                      </tr>
++                    ))}
++                  </tbody>
++                </table>
++              </div>
++            )}
++          </CardBody>
++        </Card>
++      </div>
++
++      <PlaceForm
++        draft={draft}
++        saving={save.isPending}
++        error={save.isError ? ((save.error as Error)?.message ?? "Could not save") : null}
++        onChange={setDraft}
++        onCancel={() => setDraft(null)}
++        onSave={() => draft && save.mutate(draft)}
++      />
++
++      <Modal
++        open={!!confirmHide}
++        onClose={() => setConfirmHide(null)}
++        title="Hide this place?"
++        description={confirmHide ? `${confirmHide.name} will stop appearing on the booking form.` : undefined}
++        footer={
++          <div className="flex justify-end gap-2">
++            <Button variant="secondary" onClick={() => setConfirmHide(null)}>
++              Cancel
++            </Button>
++            <Button
++              variant="danger"
++              disabled={hide.isPending}
++              onClick={() => confirmHide && hide.mutate(confirmHide)}
++            >
++              {hide.isPending ? "Hiding…" : "Hide it"}
++            </Button>
++          </div>
++        }
++      >
++        <p className="text-sm text-ink-600">
++          Nothing is deleted. Deliveries already carried to this spot keep their record, and you can
++          put the place back at any time with <strong>Restore</strong>.
++        </p>
++      </Modal>
++    </PortalShell>
++  );
++}
++
++/* ───────────────────────────── the form ───────────────────────────── */
++
++function PlaceForm({
++  draft,
++  saving,
++  error,
++  onChange,
++  onCancel,
++  onSave,
++}: {
++  draft: Draft | null;
++  saving: boolean;
++  error: string | null;
++  onChange: (draft: Draft) => void;
++  onCancel: () => void;
++  onSave: () => void;
++}) {
++  const [lookup, setLookup] = useState<"idle" | "searching" | "missing">("idle");
++  const [found, setFound] = useState<string | null>(null);
++
++  const set = (patch: Partial<Draft>) => draft && onChange({ ...draft, ...patch });
++
++  /**
++   * The coordinates matter more than the address, so this asks the geocoder rather
++   * than trusting a typed number. What it found is shown before it is applied —
++   * silently snapping to the wrong place is how a fare goes wrong.
++   */
++  const findCoordinates = async () => {
++    if (!draft || draft.address.trim().length < 3) return;
++    setLookup("searching");
++    setFound(null);
++    try {
++      const result = await api.get<{
++        data: { address: string; lat: number; lng: number; approximate: boolean } | null;
++      }>(`/maps/geocode?address=${encodeURIComponent(draft.address.trim())}`);
++      if (!result.data) {
++        setLookup("missing");
++        return;
++      }
++      setLookup("idle");
++      set({ lat: result.data.lat.toFixed(6), lng: result.data.lng.toFixed(6) });
++      setFound(
++        result.data.approximate
++          ? `Closest match: ${result.data.address} — check the pin before saving.`
++          : `Found: ${result.data.address}`,
++      );
++    } catch {
++      setLookup("missing");
++    }
++  };
++
++  const valid =
++    !!draft &&
++    draft.name.trim().length >= 2 &&
++    draft.address.trim().length >= 3 &&
++    Number.isFinite(Number(draft.lat)) &&
++    Number.isFinite(Number(draft.lng)) &&
++    draft.lat !== "" &&
++    draft.lng !== "";
++
++  return (
++    <Modal
++      open={!!draft}
++      onClose={onCancel}
++      title={draft?.id ? "Edit place" : "Add a place"}
++      description="A landmark customers will recognise, the address behind it, and the exact coordinates fares are measured from."
++      footer={
++        <div className="flex justify-end gap-2">
++          <Button variant="secondary" onClick={onCancel}>
++            Cancel
++          </Button>
++          <Button onClick={onSave} disabled={!valid || saving}>
++            {saving ? "Saving…" : draft?.id ? "Save changes" : "Add place"}
++          </Button>
++        </div>
++      }
++    >
++      {draft && (
++        <div className="space-y-3">
++          {error && <Alert tone="danger" title="Not saved">{error}</Alert>}
++
++          <Field label="Name" required hint="What a customer would type or say">
++            <Input
++              value={draft.name}
++              onChange={(event) => set({ name: event.target.value })}
++              placeholder="Ikpoba Hill"
++              autoFocus
++            />
++          </Field>
++
++          <Field label="Address" required hint="Street and area, as it should read on a receipt">
++            <Input
++              value={draft.address}
++              onChange={(event) => set({ address: event.target.value })}
++              placeholder="Benin-Auchi Road, Ikpoba Hill, Benin City"
++            />
++          </Field>
++
++          <Field label="Landmark" hint="The sentence that actually gets a rider there">
++            <Input
++              value={draft.landmark}
++              onChange={(event) => set({ landmark: event.target.value })}
++              placeholder="By the Ikpoba River bridge"
++            />
++          </Field>
++
++          <div className="grid gap-3 sm:grid-cols-2">
++            <Field label="Latitude" required>
++              <Input
++                value={draft.lat}
++                onChange={(event) => set({ lat: event.target.value })}
++                placeholder="6.3565"
++                inputMode="decimal"
++              />
++            </Field>
++            <Field label="Longitude" required>
++              <Input
++                value={draft.lng}
++                onChange={(event) => set({ lng: event.target.value })}
++                placeholder="5.6691"
++                inputMode="decimal"
++              />
++            </Field>
++          </div>
++
++          <div className="flex flex-wrap items-center gap-3">
++            <Button
++              type="button"
++              size="sm"
++              variant="secondary"
++              onClick={() => void findCoordinates()}
++              disabled={lookup === "searching" || draft.address.trim().length < 3}
++            >
++              {lookup === "searching" ? "Looking…" : "Find coordinates from the address"}
++            </Button>
++            <p className="text-xs text-ink-500">
++              {lookup === "missing"
++                ? "No coordinates found for that address — type them in, or refine the address."
++                : (found ?? "Or paste the coordinates if you have them.")}
++            </p>
++          </div>
++
++          <Field label="Order" hint="Lower numbers appear first in the list">
++            <Input
++              value={draft.sortOrder}
++              onChange={(event) => set({ sortOrder: event.target.value })}
++              inputMode="numeric"
++            />
++          </Field>
++        </div>
++      )}
++    </Modal>
++  );
++}
+diff --git a/frontend/src/pages/admin/nav.ts b/frontend/src/pages/admin/nav.ts
+index f48b877..53f9b00 100644
+--- a/frontend/src/pages/admin/nav.ts
++++ b/frontend/src/pages/admin/nav.ts
+@@ -17,6 +17,7 @@ const ALL: Array<NavItem & { permission?: string }> = [
+   { to: "/admin/finance", label: "Finance", permission: "finance:read" },
+   { to: "/admin/reports", label: "Reports", permission: "report:generate" },
+   { to: "/admin/pricing", label: "Pricing", permission: "pricing:read" },
++  { to: "/admin/locations", label: "Saved places", permission: "settings:read" },
+   { to: "/admin/staff", label: "Staff & roles", permission: "staff:read" },
+   { to: "/admin/audit", label: "Audit trail", permission: "audit:read" },
+   // No permission: everybody can change their own picture, name and password.

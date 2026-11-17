@@ -1,39 +1,48 @@
-TRADERS WELFARE — SUGGESTIONS FIXED FOR BENIN CITY
-==================================================
+TRADERS WELFARE — SAVED PLACES (ADMIN SCREEN)
+=============================================
 
-YOUR KEY IS GOOD. This patch is about what the key ANSWERS.
+WHAT THIS IS
+  Admin → Saved places. The pickup/drop-off list the booking form offers is now
+  a database table you maintain yourself. A new neighbourhood is a row, not a
+  deploy and not a code edit. Commit f116cc5.
 
-WHAT THE TEST SHOWED
-  "ring road"    → Ring Road, LAGOS 100242  (wrong state, 300 km away)
-  "sapele"       → Sapele, Delta State      (not Benin-Sapele Road)
-  "ikpoba hill"  → nothing
+HOW YOU RUN IT — THREE STEPS, ONCE
+  1. Update the code (below).
+  2. Run the migration, because it creates the table:
+         cd backend && npx prisma migrate deploy
+     On Northflank, this is the same step you ran when the staff invites shipped.
+  3. Rebuild + redeploy the web service (there is a new admin page), and restart
+     the API.
 
-  OpenStreetMap has more than one Ring Road in Nigeria and the biggest wins a
-  plain search. That would have put a Lagos street on a Benin City booking form.
+WHAT YOU DO AFTERWARDS, FOREVER
+  Admin → Saved places → "Add a place"
+    Name        Ikpoba Hill
+    Address     Benin-Auchi Road, Ikpoba Hill, Benin City
+    Landmark    By the Ikpoba River bridge
+    Latitude    [press "Find coordinates from the address", or type 6.3565]
+    Longitude   [5.6691]
+    Order       lower numbers appear first
 
-WHAT CHANGED (commit fe6f3e7)
-  1. The platform's own twelve Benin City locations now always rank FIRST when
-     the typed words appear in their name. The provider fills in the rest.
-  2. A provider result within 200 m of one of ours is dropped — same place,
-     said twice.
-  3. Every suggestion request carries MAPS_SEARCH_BIAS, default Ring Road, Benin
-     City (5.6222,6.3329). Another city = change that one variable.
+  Save. It is on the booking form on the next keystroke. No deploy, no restart.
+  "Hide" takes a place off the form and keeps the record; "Restore" brings it back.
 
-APPLY (VS Code Source Control tab first)
-  Unzip over C:\Users\USER\Documents\dispatch-platform, stage the 9 changed
-  files, commit with COMMIT-MESSAGE.txt, push, then REDEPLOY THE API SERVICE.
-  Terminal:
-      git apply --stat suggestions-fix.patch
-      git apply suggestions-fix.patch
+WHAT IF THE MIGRATION HAS NOT RUN YET
+  Nothing breaks. The API logs one warning and the booking form falls back to the
+  twelve Benin City places it shipped with. The admin screen shows the database
+  error until the migration runs.
+
+APPLY THE CODE (VS Code Source Control tab first)
+  Unzip over C:\Users\USER\Documents\dispatch-platform. Stage the 10 changed
+  files and the 5 new ones, commit with COMMIT-MESSAGE.txt, push. Terminal:
+      git apply --stat saved-places.patch
+      git apply saved-places.patch
+      cd backend && npx prisma migrate deploy && cd ..
       git add -A && git commit -F COMMIT-MESSAGE.txt && git push
 
-  No new dependency, no migration, no frontend rebuild — backend only.
+  No new dependency. One new table. One new admin page.
 
-TRY AFTER THE REDEPLOY
-  Booking form, type "ring"    → Ring Road — Oba Ovonramwen Square comes first.
-  Type "sapele"                → Sapele Road — Oregbeni first.
-  Type "sakponba"              → provider suggestions, as before.
-
-  The twelve saved locations are in backend/src/pricing/maps.service.ts
-  (STUB_PLACES) and frontend/src/lib/benin-city-locations.ts. Both lists should
-  match; if you add a pickup point to one, add it to the other.
+WHAT I COULD NOT TEST HERE
+  There is no Postgres in my sandbox, so the migration and the DB-backed tests
+  have not been executed — only the pure unit tests (59 green) and a typecheck.
+  The migration's CREATE TABLE was verified byte-for-byte against Prisma's own
+  generated SQL. If `migrate deploy` complains, send me the error text.

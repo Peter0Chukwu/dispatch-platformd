@@ -89,22 +89,45 @@ export function LocationPicker({
     retry: false,
   });
 
+  /**
+   * The places operations maintain at Admin → Saved places.
+   *
+   * The bundled list is the fallback, not the source of truth: it is what a fresh
+   * install or a failed request falls back to, so the form is never empty. Once the
+   * request lands, what the office typed in is what the customer sees.
+   */
+  const savedPlaces = useQuery({
+    queryKey: ['maps', 'saved-locations'],
+    queryFn: () =>
+      api.get<{ data: Array<{ id: string; name: string; address: string; landmark: string; lat: number; lng: number }> }>(
+        '/maps/locations',
+      ),
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+
+  const places: SavedLocation[] = useMemo(() => {
+    const remote = savedPlaces.data?.data ?? [];
+    if (remote.length === 0) return BENIN_CITY_LOCATIONS;
+    return remote.map((place) => ({ ...place, landmark: place.landmark ?? '', zone: 'BEN' }));
+  }, [savedPlaces.data]);
+
   const matches: SavedLocation[] = useMemo(() => {
     const needle = search.trim().toLowerCase();
-    if (!needle) return BENIN_CITY_LOCATIONS;
+    if (!needle) return places;
     const remote = suggestions.data?.data ?? [];
     if (remote.length > 0) {
       // Only what actually matched: padding the list with unrelated saved places
       // would make a search for "ugbowo" appear to offer Ring Road.
       return remote.map(toSavedLocation).slice(0, 8);
     }
-    return BENIN_CITY_LOCATIONS.filter(
+    return places.filter(
       (location) =>
         location.name.toLowerCase().includes(needle) ||
         location.address.toLowerCase().includes(needle) ||
         location.landmark.toLowerCase().includes(needle),
     );
-  }, [search, suggestions.data]);
+  }, [search, suggestions.data, places]);
 
   const provider = suggestions.data?.provider ?? 'stub';
 

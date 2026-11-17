@@ -1,5 +1,6 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { AppConfig, type MapsProviderKey } from '../config/app.config';
+import { SavedLocationsService, type SavedLocationRecord } from './saved-locations.service';
 import { estimateRoute, haversineKm, type Point, type RouteEstimate } from './distance';
 import type { GeocodeResult, PlaceResult } from './maps-types';
 
@@ -45,7 +46,28 @@ import type { GeocodeResult, PlaceResult } from './maps-types';
 export class MapsService {
   private readonly logger = new Logger(MapsService.name);
 
-  constructor(private readonly config: AppConfig) {}
+  constructor(
+    private readonly config: AppConfig,
+    /**
+     * Optional so the adapter can still be constructed on its own in a unit test,
+     * and so a database that has not been migrated yet degrades to the built-in
+     * table instead of taking the booking form down with it.
+     */
+    @Optional() private readonly savedLocations?: SavedLocationsService,
+  ) {}
+
+  /**
+   * The places the platform knows, wherever they live.
+   *
+   * The database is the source of truth once the migration has run; the built-in
+   * table is the floor. Both answer with the same shape, so nothing downstream
+   * can tell which one replied.
+   */
+  private async places(): Promise<SavedLocationRecord[]> {
+    const fromDb = (await this.savedLocations?.active()) ?? null;
+    if (fromDb && fromDb.length > 0) return fromDb;
+    return STUB_PLACES.map((place) => ({ ...place, isActive: true, sortOrder: 100 }));
+  }
 
   get provider(): MapsProviderKey {
     return this.config.mapsProviderKey;
@@ -93,12 +115,15 @@ export class MapsService {
     const trimmed = query.trim();
     if (trimmed.length < 2) return [];
 
+    // Read once per request: the same rows feed both the merge and the fallback.
+    const places = await this.places();
+
     if (this.provider === 'geoapify') {
       const key = this.config.geoapifyApiKey;
       if (key) {
         try {
           const remote = await this.geoapifyPlaces('autocomplete', trimmed, key, limit);
-          if (remote.length > 0) return this.mergeLocalFirst(trimmed, remote, limit);
+          if (remote.length > 0) return this.mergeLocalFirst(trimmed, remote, limit, places);
         } catch (error) {
           this.logger.warn(`Geoapify suggestions failed, falling back to local places: ${(error as Error).message}`);
         }
@@ -109,13 +134,13 @@ export class MapsService {
       if (key) {
         try {
           const remote = await this.googleAutocomplete(trimmed, key, limit);
-          if (remote.length > 0) return this.mergeLocalFirst(trimmed, remote, limit);
+          if (remote.length > 0) return this.mergeLocalFirst(trimmed, remote, limit, places);
         } catch (error) {
           this.logger.warn(`Google autocomplete failed, falling back to local places: ${(error as Error).message}`);
         }
       }
     }
-    return stubSearch(trimmed, limit);
+    return stubSearch(trimmed, limit, places);
   }
 
   /**
@@ -136,8 +161,13 @@ export class MapsService {
    * appear in the location's NAME. Matching against the address too would make
    * "road" pull in half the table and bury a precise provider hit.
    */
-  private mergeLocalFirst(query: string, remote: PlaceResult[], limit: number): PlaceResult[] {
-    const local = matchLocalByName(query);
+  private mergeLocalFirst(
+    query: string,
+    remote: PlaceResult[],
+    limit: number,
+    places: SavedLocationRecord[],
+  ): PlaceResult[] {
+    const local = matchLocalByName(query, 3, places);
     if (local.length === 0) return remote.slice(0, limit);
 
     const seen = new Set(local.map((place) => `${place.name.toLowerCase()}|${place.lat.toFixed(2)}|${place.lng.toFixed(2)}`));
@@ -207,7 +237,7 @@ export class MapsService {
     }
 
     // Stub: the closest matching saved location, clearly marked as approximate.
-    const [match] = stubSearch(trimmed, 1);
+    const [match] = stubSearch(trimmed, 1, await this.places());
     if (!match) return null;
     return { address: match.address, lat: match.lat, lng: match.lng, source: 'STUB', approximate: true };
   }
@@ -253,7 +283,7 @@ export class MapsService {
     }
 
     // Stub: name the nearest known Benin City location, and say how far away it is.
-    const nearest = nearestStubLocation(point);
+    const nearest = nearestStubLocation(point, await this.places());
     if (!nearest) return null;
     const km = haversineKm(point, { lat: nearest.lat, lng: nearest.lng });
     return {
@@ -548,29 +578,29 @@ function toPlaceResult(feature: NonNullable<GeoapifyFeatureCollection['features'
  * Kept server-side so the API can answer without a maps key, and so a booking made
  * with `MAPS_PROVIDER=STUB` still records a true position rather than a fake one.
  */
-const STUB_PLACES: Array<{ id: string; name: string; address: string; landmark: string; lat: number; lng: number }> = [
-  { id: 'ring-road', name: 'Ring Road — Oba Ovonramwen Square', address: 'Ring Road, Oba Ovonramwen Square, Benin City', landmark: 'By the palace roundabout', lat: 6.333, lng: 5.622 },
-  { id: 'new-benin', name: 'New Benin — Mission Road', address: 'Mission Road, New Benin Market, Benin City', landmark: 'Opposite the market gate', lat: 6.3373, lng: 5.6337 },
-  { id: 'akpakpava', name: 'Akpakpava Road', address: 'Akpakpava Road, Benin City', landmark: 'Near the Central Mosque', lat: 6.3395, lng: 5.628 },
-  { id: 'gra-adesuwa', name: 'GRA — Adesuwa Road', address: 'Adesuwa Road, GRA, Benin City', landmark: 'By Adesuwa Primary School', lat: 6.3312, lng: 5.6392 },
-  { id: 'siluko', name: 'Siluko Road', address: 'Siluko Road, Benin City', landmark: 'Off Sapele Road, by Siluko junction', lat: 6.318, lng: 5.629 },
-  { id: 'ugbowo-complex', name: 'Ugbowo — Shopping Complex', address: 'Ugbowo-Lagos Road, Ugbowo, Benin City', landmark: 'Ugbowo Shopping Complex', lat: 6.396, lng: 5.611 },
-  { id: 'ubth', name: 'Ugbowo — UBTH', address: 'Ugbowo-Lagos Road, Benin City', landmark: 'University of Benin Teaching Hospital main gate', lat: 6.3906, lng: 5.6122 },
-  { id: 'uselu', name: 'Uselu — Market Road', address: 'Uselu Market Road, Benin City', landmark: 'By Uselu market', lat: 6.372, lng: 5.621 },
-  { id: 'ikpoba-hill', name: 'Ikpoba Hill', address: 'Benin-Auchi Road, Ikpoba Hill, Benin City', landmark: 'By the Ikpoba River bridge', lat: 6.3565, lng: 5.6691 },
-  { id: 'aduwawa', name: 'Aduwawa', address: 'Aduwawa, Benin-Auchi Road, Benin City', landmark: 'Near Aduwawa market', lat: 6.3629, lng: 5.6791 },
-  { id: 'airport-road', name: 'Airport Road — Benin Airport', address: 'Airport Road, Benin City', landmark: 'By the airport terminal', lat: 6.3169, lng: 5.5994 },
-  { id: 'sapele-road', name: 'Sapele Road — Oregbeni', address: 'Sapele Road, Benin City', landmark: 'By Oregbeni market', lat: 6.2771, lng: 5.6337 },
+const STUB_PLACES: SavedLocationRecord[] = [
+  { id: 'ring-road', name: 'Ring Road — Oba Ovonramwen Square', address: 'Ring Road, Oba Ovonramwen Square, Benin City', landmark: 'By the palace roundabout', lat: 6.333, lng: 5.622, isActive: true, sortOrder: 100 },
+  { id: 'new-benin', name: 'New Benin — Mission Road', address: 'Mission Road, New Benin Market, Benin City', landmark: 'Opposite the market gate', lat: 6.3373, lng: 5.6337, isActive: true, sortOrder: 100 },
+  { id: 'akpakpava', name: 'Akpakpava Road', address: 'Akpakpava Road, Benin City', landmark: 'Near the Central Mosque', lat: 6.3395, lng: 5.628, isActive: true, sortOrder: 100 },
+  { id: 'gra-adesuwa', name: 'GRA — Adesuwa Road', address: 'Adesuwa Road, GRA, Benin City', landmark: 'By Adesuwa Primary School', lat: 6.3312, lng: 5.6392, isActive: true, sortOrder: 100 },
+  { id: 'siluko', name: 'Siluko Road', address: 'Siluko Road, Benin City', landmark: 'Off Sapele Road, by Siluko junction', lat: 6.318, lng: 5.629, isActive: true, sortOrder: 100 },
+  { id: 'ugbowo-complex', name: 'Ugbowo — Shopping Complex', address: 'Ugbowo-Lagos Road, Ugbowo, Benin City', landmark: 'Ugbowo Shopping Complex', lat: 6.396, lng: 5.611, isActive: true, sortOrder: 100 },
+  { id: 'ubth', name: 'Ugbowo — UBTH', address: 'Ugbowo-Lagos Road, Benin City', landmark: 'University of Benin Teaching Hospital main gate', lat: 6.3906, lng: 5.6122, isActive: true, sortOrder: 100 },
+  { id: 'uselu', name: 'Uselu — Market Road', address: 'Uselu Market Road, Benin City', landmark: 'By Uselu market', lat: 6.372, lng: 5.621, isActive: true, sortOrder: 100 },
+  { id: 'ikpoba-hill', name: 'Ikpoba Hill', address: 'Benin-Auchi Road, Ikpoba Hill, Benin City', landmark: 'By the Ikpoba River bridge', lat: 6.3565, lng: 5.6691, isActive: true, sortOrder: 100 },
+  { id: 'aduwawa', name: 'Aduwawa', address: 'Aduwawa, Benin-Auchi Road, Benin City', landmark: 'Near Aduwawa market', lat: 6.3629, lng: 5.6791, isActive: true, sortOrder: 100 },
+  { id: 'airport-road', name: 'Airport Road — Benin Airport', address: 'Airport Road, Benin City', landmark: 'By the airport terminal', lat: 6.3169, lng: 5.5994, isActive: true, sortOrder: 100 },
+  { id: 'sapele-road', name: 'Sapele Road — Oregbeni', address: 'Sapele Road, Benin City', landmark: 'By Oregbeni market', lat: 6.2771, lng: 5.6337, isActive: true, sortOrder: 100 },
 ];
 
 const normalise = (value: string) => value.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
 
-function stubSearch(query: string, limit: number): PlaceResult[] {
+function stubSearch(query: string, limit: number, places: SavedLocationRecord[] = STUB_PLACES): PlaceResult[] {
   const needle = normalise(query);
   const terms = needle.split(' ').filter(Boolean);
   if (terms.length === 0) return [];
 
-  return STUB_PLACES.map((place) => {
+  return places.map((place) => {
     const haystack = normalise(`${place.name} ${place.address} ${place.landmark}`);
     const score = terms.reduce((total, term) => total + (haystack.includes(term) ? 1 : 0), 0);
     return { place, score };
@@ -590,13 +620,17 @@ function stubSearch(query: string, limit: number): PlaceResult[] {
 }
 
 /** Local places whose NAME contains every word of the query (3+ letters). */
-function matchLocalByName(query: string, limit = 3): PlaceResult[] {
+function matchLocalByName(
+  query: string,
+  limit = 3,
+  places: SavedLocationRecord[] = STUB_PLACES,
+): PlaceResult[] {
   const terms = normalise(query)
     .split(' ')
     .filter((term) => term.length >= 3);
   if (terms.length === 0) return [];
 
-  return STUB_PLACES.filter((place) => {
+  return places.filter((place) => {
     const name = normalise(place.name);
     return terms.every((term) => name.includes(term));
   })
@@ -612,10 +646,10 @@ function matchLocalByName(query: string, limit = 3): PlaceResult[] {
     }));
 }
 
-function nearestStubLocation(point: Point) {
-  let best: (typeof STUB_PLACES)[number] | null = null;
+function nearestStubLocation(point: Point, places: SavedLocationRecord[] = STUB_PLACES) {
+  let best: SavedLocationRecord | null = null;
   let bestKm = Number.POSITIVE_INFINITY;
-  for (const place of STUB_PLACES) {
+  for (const place of places) {
     const km = haversineKm(point, { lat: place.lat, lng: place.lng });
     if (km < bestKm) {
       bestKm = km;

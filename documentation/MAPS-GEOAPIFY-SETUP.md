@@ -81,6 +81,20 @@ list does not cover.
 Benin City — longitude first) is sent with every request so nearby results win ties. Change
 it if you ever operate from another city.
 
+## 3¾. Adding a pickup point (no deploy)
+
+Admin → **Saved places** (`/admin/locations`). Add a name, an address, the sentence a
+rider needs, and coordinates — the form will look the coordinates up from the address if
+you press **Find coordinates**.
+
+It appears on the booking form on the next keystroke. **Hide** takes it off the list
+without deleting the record; **Restore** puts it back.
+
+The list is a database table (`saved_locations`), seeded with the twelve Benin City places
+the platform launched with. The copy in `backend/src/pricing/maps.service.ts` is only a
+fallback for a deployment whose migration has not run yet — once the table exists, what the
+office types is what customers see.
+
 ## 4. What a booking costs you
 
 The free plan gives **3,000 credits a day**, and:
