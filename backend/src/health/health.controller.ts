@@ -42,8 +42,9 @@ export class HealthController {
       integrations: {
         payments: this.config.paymentsMode,
         maps: this.config.mapsProvider,
-        sms: this.config.smsMode,
-        email: this.config.emailMode,
+        // The delivery truth, not just the mode: TERMII_NO_KEY sends nothing.
+        sms: this.config.smsDelivery,
+        email: this.config.emailDelivery,
       },
       checks: { database, redis: cache },
       uptimeSeconds: Math.floor((Date.now() - this.startedAt) / 1000),

@@ -27,6 +27,13 @@ export const LIVE_EVENTS = {
   TRACKING_PING: 'tracking:update',
   DISPATCH_EXHAUSTED: 'dispatch:exhausted',
   SESSION_REVOKED: 'session:revoked',
+  /* ── in-app calling ── */
+  CALL_INCOMING: 'call:incoming',
+  CALL_ACCEPTED: 'call:accepted',
+  CALL_DECLINED: 'call:declined',
+  CALL_ENDED: 'call:ended',
+  CALL_SIGNAL: 'call:signal',
+  CALL_ERROR: 'call:error',
   ERROR: 'error:api',
 } as const;
 
@@ -58,7 +65,12 @@ export function connectLive(): void {
   });
 
   socket.on('connect', () => setConnected(true));
-  socket.on('disconnect', () => setConnected(false));
+  socket.on('disconnect', () => {
+    setConnected(false);
+    // Anything that only works over a live connection (a call, most obviously)
+    // must stop claiming to work the moment the connection goes.
+    window.dispatchEvent(new CustomEvent('live:dropped'));
+  });
   socket.on('connect_error', () => setConnected(false));
 
   socket.on(LIVE_EVENTS.SESSION_REVOKED, () => {
@@ -110,6 +122,19 @@ export function subscribeToDelivery(deliveryId: string): () => void {
   if (!socket) return () => {};
   socket.emit('subscribe:delivery', { deliveryId });
   return () => {};
+}
+
+/**
+ * Send an event up the live channel.
+ *
+ * Returns false when there is no socket — calling code should tell the user the
+ * channel is down rather than wait for a reply that cannot arrive.
+ */
+export function emitLive(event: string, payload: unknown, ack?: (reply: unknown) => void): boolean {
+  if (!socket) return false;
+  if (ack) socket.emit(event, payload, ack);
+  else socket.emit(event, payload);
+  return true;
 }
 
 /** React binding: run `handler` whenever the event arrives. */

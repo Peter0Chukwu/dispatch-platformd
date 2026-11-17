@@ -13,6 +13,8 @@ export interface ChatMessage {
 export interface ContactStatus {
   connected: boolean;
   provider: string;
+  /** True when the call happens inside the app, with no phone number anywhere. */
+  inApp?: boolean;
   reason: string | null;
 }
 

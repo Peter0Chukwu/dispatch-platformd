@@ -44,10 +44,28 @@ export const envSchema = z.object({
   MAPS_SEARCH_BIAS: z.string().optional().default('5.6222,6.3329'),
 
   SMS_MODE: z.enum(['CONSOLE', 'TERMII']).default('CONSOLE'),
-  /** Masked voice calling. CONSOLE = not connected yet; TERMII = number masking live. */
-  VOICE_MODE: z.enum(['CONSOLE', 'TERMII']).default('CONSOLE'),
+  /**
+   * How the two people on a job talk to each other.
+   *
+   * IN_APP  — a call inside the app (WebRTC, peer to peer). No phone number is
+   *           involved on either side, so nothing can leak. This is the default
+   *           because it needs no provider, no KYC and no credit.
+   * TERMII  — the provider rents a proxy number and bridges the two phones. Needs
+   *           a number-masking account with Termii: KYC, a number pool and
+   *           per-minute billing, activated by their support team.
+   * CONSOLE — off: the Call button explains that messaging is the way to talk.
+   */
+  VOICE_MODE: z.enum(['IN_APP', 'CONSOLE', 'TERMII']).default('IN_APP'),
   TERMII_API_KEY: z.string().optional().default(''),
   TERMII_SENDER_ID: z.string().default('TWL'),
+  /**
+   * Termii route. `dnd` is the transactional route Termii permits for OTPs and
+   * notices and it reaches numbers with do-not-disturb active — but it has to be
+   * switched on for your account by Termii support. `generic` is the promotional
+   * route: cheaper, but Termii's own documentation says not to use it for OTP, and
+   * it is not delivered to DND numbers or to MTN between 20:00 and 08:00.
+   */
+  TERMII_CHANNEL: z.enum(['dnd', 'generic', 'whatsapp']).default('dnd'),
 
   EMAIL_MODE: z.enum(['CONSOLE', 'RESEND']).default('CONSOLE'),
   RESEND_API_KEY: z.string().optional().default(''),

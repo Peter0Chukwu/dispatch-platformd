@@ -45,14 +45,28 @@ export class VoiceService {
     return this.mode !== 'CONSOLE';
   }
 
+  /** True when talking happens inside the app, with no phone number anywhere. */
+  get inApp(): boolean {
+    return this.mode === 'IN_APP';
+  }
+
   /** What the two screens show before anyone taps anything. */
   status() {
+    if (this.inApp) {
+      return {
+        connected: true,
+        provider: 'IN_APP' as const,
+        inApp: true,
+        reason: null,
+      };
+    }
     return {
       connected: this.connected,
       provider: this.mode,
+      inApp: false,
       reason: this.connected
         ? null
-        : 'Masked calling is not connected yet. Message the other person in the app — it is free and instant.',
+        : 'Calling is switched off. Message the other person in the app — it is free and instant.',
     };
   }
 
@@ -73,6 +87,13 @@ export class VoiceService {
     const isRider = user.type === 'RIDER' && !!user.riderId && delivery.riderId === user.riderId;
     if (!isCustomer && !isRider) throw AppError.notFound('Delivery not found');
 
+    if (this.inApp) {
+      // There is no number to hand out: an in-app call is started over the live
+      // socket (see CallSignalingService) and never leaves the two browsers.
+      throw AppError.conflict(
+        'Calls in this app happen inside the app, not by phone — open the delivery and press Call.',
+      );
+    }
     if (!this.connected) {
       throw AppError.conflict(this.status().reason!);
     }

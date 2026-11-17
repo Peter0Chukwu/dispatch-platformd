@@ -14,6 +14,35 @@ import type { UserType } from '@dispatch/shared';
 const MAX_FAILED_LOGINS = 5;
 const LOCKOUT_MINUTES = 15;
 
+/**
+ * What to tell the customer about the two messages we just tried to send.
+ *
+ * The flat `verification` object keeps the keys the browser already reads
+ * (`devToken`, `devCode`) and adds the truth about delivery, because "check your
+ * phone" when no SMS left the building is how a customer ends up staring at a
+ * verification screen that can never succeed.
+ */
+function describeVerification(
+  email: { devToken?: string; delivered: boolean; deliveryReason?: string },
+  phone: { devCode?: string; expiresInSeconds: number; delivered: boolean; deliveryReason?: string },
+) {
+  const both = email.delivered && phone.delivered;
+  return {
+    message: both
+      ? 'Account created. Check your email for the verification link and your phone for the code.'
+      : 'Account created. We could not deliver verification messages just now — open the verification page to try again.',
+    verification: {
+      ...(email.devToken ? { devToken: email.devToken } : {}),
+      emailDelivered: email.delivered,
+      ...(email.deliveryReason ? { emailReason: email.deliveryReason } : {}),
+      ...(phone.devCode ? { devCode: phone.devCode } : {}),
+      expiresInSeconds: phone.expiresInSeconds,
+      smsDelivered: phone.delivered,
+      ...(phone.deliveryReason ? { smsReason: phone.deliveryReason } : {}),
+    },
+  };
+}
+
 export interface RequestContext {
   ip?: string;
   userAgent?: string;
@@ -91,11 +120,8 @@ export class AuthService {
       userAgent: ctx.userAgent,
     });
 
-    return {
-      message: 'Account created. Check your email for the verification link and your phone for the code.',
-      userId: user.id,
-      verification: { ...emailResult, ...otpResult },
-    };
+    const { message, verification } = describeVerification(emailResult, otpResult);
+    return { message, userId: user.id, verification };
   }
 
   async registerRider(input: RegisterRiderInput, ctx: RequestContext) {
@@ -155,7 +181,11 @@ export class AuthService {
       email: user.email,
       firstName: user.firstName,
     });
-    await this.verification.sendPhoneOtp({ id: user.id, phone: user.phone, firstName: user.firstName });
+    const otpResult = await this.verification.sendPhoneOtp({
+      id: user.id,
+      phone: user.phone,
+      firstName: user.firstName,
+    });
 
     await this.audit.record({
       actorUserId: user.id,
@@ -167,12 +197,14 @@ export class AuthService {
       userAgent: ctx.userAgent,
     });
 
+    const { message, verification } = describeVerification(emailResult, otpResult);
     return {
-      message:
-        'Application received. Verify your email and phone, then upload your documents — an administrator will review your application.',
+      message: user.rider
+        ? `${message} Then upload your documents — an administrator will review your application.`
+        : message,
       userId: user.id,
       riderCode: user.rider?.riderCode,
-      verification: emailResult,
+      verification,
     };
   }
 
@@ -417,6 +449,26 @@ export class AuthService {
     });
     if (user.emailVerifiedAt) return { message: 'Your email is already verified.' };
     return this.verification.sendEmailVerification(user);
+  }
+
+  /**
+   * Resend the verification link for an address, without being signed in.
+   *
+   * A new customer is `PENDING` and has no session yet, so the authenticated
+   * resend above is no help to them: if the first email never arrived there was
+   * simply no way to ask for another one. The answer is deliberately the same
+   * whether or not the address exists — otherwise this endpoint becomes a way to
+   * discover who has an account here.
+   */
+  async resendEmailVerificationByAddress(email: string) {
+    const answer = { message: 'If that address has an account waiting for verification, a new link is on its way.' };
+    const user = await this.prisma.user.findUnique({
+      where: { email: email.trim().toLowerCase() },
+      select: { id: true, email: true, firstName: true, emailVerifiedAt: true, status: true },
+    });
+    if (!user || !user.email || user.emailVerifiedAt || user.status === 'SUSPENDED') return answer;
+    await this.verification.sendEmailVerification(user);
+    return answer;
   }
 
   // ─────────────────────────────── SESSIONS ────────────────────────────────

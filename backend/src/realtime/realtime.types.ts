@@ -29,6 +29,19 @@ export const RT = {
   DISPATCH_EXHAUSTED: 'dispatch:exhausted',
   /** The account was suspended mid-session: the socket is closed immediately. */
   SESSION_REVOKED: 'session:revoked',
+  /* ── in-app calling (voice never leaves the two browsers) ── */
+  /** Somebody is calling you about a live delivery. {@link CallPush} */
+  CALL_INCOMING: 'call:incoming',
+  /** The person you called picked up. */
+  CALL_ACCEPTED: 'call:accepted',
+  /** They declined, or the ring timed out. */
+  CALL_DECLINED: 'call:declined',
+  /** Either side hung up, or the call was closed for them. */
+  CALL_ENDED: 'call:ended',
+  /** WebRTC offer / answer / ICE candidate, relayed verbatim. */
+  CALL_SIGNAL: 'call:signal',
+  /** The call could not be placed at all. */
+  CALL_ERROR: 'call:error',
   ERROR: 'error:api',
   PONG: 'pong',
 } as const;
@@ -63,4 +76,14 @@ export interface RevokedPush {
   assignmentId: string;
   deliveryId: string;
   reason: 'TAKEN' | 'CANCELLED' | 'REASSIGNED' | 'SUSPENDED';
+}
+
+/** Nothing here is a phone number: there is no number in an in-app call. */
+export interface CallPush {
+  callId: string;
+  deliveryId: string;
+  /** CUSTOMER or RIDER — who is calling. */
+  from: 'CUSTOMER' | 'RIDER';
+  /** First name only, so the callee knows who it is without any contact detail. */
+  fromName: string;
 }

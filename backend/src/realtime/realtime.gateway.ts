@@ -12,7 +12,8 @@ import type { Server, Socket } from 'socket.io';
 import { PrismaService } from '../infra/prisma/prisma.service';
 import { PrincipalService } from '../auth/principal.service';
 import type { AuthPrincipal } from '../auth/auth.types';
-import { RT, type DeliveryPush, type OfferPush, type RevokedPush } from './realtime.types';
+import { RT, type CallPush, type DeliveryPush, type OfferPush, type RevokedPush } from './realtime.types';
+import { CallSignalingService } from './call-signaling.service';
 
 /** Where each kind of client listens. Rooms are namespaced so they can never collide. */
 export const room = {
@@ -65,7 +66,15 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
   constructor(
     private readonly principals: PrincipalService,
     private readonly prisma: PrismaService,
-  ) {}
+    private readonly calls: CallSignalingService,
+  ) {
+    // The broker owns the ringing deadline; the gateway owns the transport.
+    this.calls.attachNotifier({
+      missed: (userIds, callId) => {
+        for (const userId of userIds) this.emit(room.user(userId), RT.CALL_DECLINED, { callId, reason: 'MISSED' });
+      },
+    });
+  }
 
   async handleConnection(client: SocketData): Promise<void> {
     const raw = (client.handshake.auth?.token ?? '') as string | undefined;
@@ -104,9 +113,114 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
     this.logger.log(`Live connection: ${principal.type} ${principal.userId.slice(0, 8)} (${joined.length} rooms)`);
   }
 
-  handleDisconnect(client: SocketData): void {
+  async handleDisconnect(client: SocketData): Promise<void> {
     const principal = client.data.principal;
-    if (principal) this.logger.log(`Live disconnect: ${principal.type} ${principal.userId.slice(0, 8)}`);
+    if (!principal) return;
+    this.logger.log(`Live disconnect: ${principal.type} ${principal.userId.slice(0, 8)}`);
+
+    // A closed tab must not leave a call ringing for the other person. Only act
+    // when this was the last socket for that user — closing one of two tabs is not
+    // hanging up.
+    const remaining = await this.socketsFor(principal.userId);
+    if (remaining > 0) return;
+    for (const callId of this.calls.endForUser(principal.userId)) {
+      this.emit(room.user(principal.userId), RT.CALL_ENDED, { callId, reason: 'DISCONNECTED' });
+    }
+  }
+
+  /** How many live sockets this user still has. Zero means they are gone. */
+  private async socketsFor(userId: string): Promise<number> {
+    const server = this.server as unknown as {
+      adapter?: { rooms: Map<string, Set<string>> };
+      sockets?: { adapter?: { rooms: Map<string, Set<string>> } };
+    };
+    const adapter = server?.adapter ?? server?.sockets?.adapter;
+    return adapter?.rooms.get(room.user(userId))?.size ?? 0;
+  }
+
+  /* ──────────────────────────── in-app calling ──────────────────────────── */
+
+  /**
+   * Start a call about a delivery.
+   *
+   * The broker re-reads the delivery and decides whether these two people may
+   * speak; this handler only carries the answer to a socket. Nothing in the
+   * payload is a phone number, and nothing in it is trusted.
+   */
+  @SubscribeMessage('call:start')
+  async callStart(
+    @ConnectedSocket() client: SocketData,
+    @MessageBody() body: { deliveryId?: string },
+  ): Promise<{ ok: boolean; callId?: string; error?: string; message?: string }> {
+    const principal = client.data.principal;
+    if (!principal) return { ok: false, error: 'UNAUTHORIZED', message: 'Sign in to call.' };
+    if (!body?.deliveryId) return { ok: false, error: 'BAD_REQUEST', message: 'No delivery given.' };
+
+    const outcome = await this.calls.start(principal, body.deliveryId);
+    if (!outcome.ok) {
+      client.emit(RT.CALL_ERROR, { error: outcome.error, message: outcome.message });
+      return { ok: false, error: outcome.error, message: outcome.message };
+    }
+
+    const push: CallPush = {
+      callId: outcome.call.callId,
+      deliveryId: outcome.call.deliveryId,
+      from: principal.type === 'CUSTOMER' ? 'CUSTOMER' : 'RIDER',
+      fromName: principal.firstName ?? (principal.type === 'CUSTOMER' ? 'Your customer' : 'Your rider'),
+    };
+    this.emit(room.user(outcome.call.peerUserId), RT.CALL_INCOMING, push);
+    return { ok: true, callId: outcome.call.callId };
+  }
+
+  @SubscribeMessage('call:accept')
+  callAccept(
+    @ConnectedSocket() client: SocketData,
+    @MessageBody() body: { callId?: string },
+  ): { ok: boolean; error?: string } {
+    const principal = client.data.principal;
+    if (!principal || !body?.callId) return { ok: false, error: 'UNAUTHORIZED' };
+
+    const outcome = this.calls.accept(principal, body.callId);
+    if (!outcome.ok) return { ok: false, error: outcome.error };
+
+    this.emit(room.user(outcome.call.peerUserId), RT.CALL_ACCEPTED, { callId: outcome.call.callId });
+    return { ok: true };
+  }
+
+  @SubscribeMessage('call:end')
+  callEnd(
+    @ConnectedSocket() client: SocketData,
+    @MessageBody() body: { callId?: string; reason?: string },
+  ): { ok: boolean } {
+    const principal = client.data.principal;
+    if (!principal || !body?.callId) return { ok: false };
+
+    const result = this.calls.end(principal, body.callId);
+    if (!result.ended || !result.peerUserId) return { ok: false };
+    const event = body.reason === 'DECLINED' ? RT.CALL_DECLINED : RT.CALL_ENDED;
+    this.emit(room.user(result.peerUserId), event, { callId: body.callId, reason: body.reason ?? 'HUNG_UP' });
+    return { ok: true };
+  }
+
+  /**
+   * Offer / answer / ICE candidate.
+   *
+   * Relayed verbatim to the other leg, and only after the broker confirms the
+   * sender really is in that call. The gateway never inspects or stores SDP.
+   */
+  @SubscribeMessage('call:signal')
+  callSignal(
+    @ConnectedSocket() client: SocketData,
+    @MessageBody() body: { callId?: string; data?: unknown },
+  ): { ok: boolean } {
+    const principal = client.data.principal;
+    if (!principal || !body?.callId || body.data === undefined) return { ok: false };
+
+    const relayed = this.calls.relay(principal, body.callId, body.data);
+    if (!relayed) return { ok: false };
+
+    this.emit(room.user(relayed.peerUserId), RT.CALL_SIGNAL, { callId: body.callId, data: body.data });
+    return { ok: true };
   }
 
   /** Cheap liveness probe the client uses instead of polling. */

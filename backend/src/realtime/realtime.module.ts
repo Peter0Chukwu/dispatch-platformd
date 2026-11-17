@@ -1,6 +1,7 @@
 import { Global, Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
 import { RealtimeGateway } from './realtime.gateway';
+import { CallSignalingService } from './call-signaling.service';
 
 /**
  * Live channel, available everywhere.
@@ -12,7 +13,7 @@ import { RealtimeGateway } from './realtime.gateway';
 @Global()
 @Module({
   imports: [AuthModule],
-  providers: [RealtimeGateway],
-  exports: [RealtimeGateway],
+  providers: [RealtimeGateway, CallSignalingService],
+  exports: [RealtimeGateway, CallSignalingService],
 })
 export class RealtimeModule {}

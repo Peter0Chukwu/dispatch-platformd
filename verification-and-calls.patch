@@ -1,0 +1,2753 @@
+From 3c90759791dd0f90e037224dc630f9dd158b8694 Mon Sep 17 00:00:00 2001
+From: TWL Build <build@twl.local>
+Date: Tue, 17 Nov 2026 15:52:27 +0000
+Subject: [PATCH] verification that tells the truth, and calls that need no
+ phone number
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The verification screen could not work, and it was two separate faults.
+
+The emailed link pointed at /verify-email, which the app has never had — every
+click landed on the 404 page and the token was never used, so an address could
+never be confirmed. The link now points at /verify (and /verify-email is kept as
+an alias, so links already sitting in inboxes stop failing). While in there: the
+link was built from the first CORS origin, which on a careless deployment is a
+developer's laptop; FRONTEND_URL is now what it uses.
+
+The second fault was quieter. With no SMS or email provider configured, codes were
+written to the API log and the screens still said "we sent you a code" — the most
+useless sentence in software. The messaging drivers were placeholders that threw
+when a real provider was selected, which turned a registration into a 500. Now:
+
+  · SMS goes to Termii for real (approval, DND route, sender ID — all in
+    MESSAGES-AND-CALLS.md), email goes to Resend with an HTML body;
+  · both return DeliveryResult {delivered, driver, reason} instead of throwing,
+    so a provider outage costs a message, never an account;
+  · registration reports exactly which message went out, and the verification
+    screen says "we could not send the SMS just now" when that is the truth;
+  · a new signed-out resend endpoint exists, because a brand-new customer has no
+    session and previously had no way to ask for the link again.
+
+And calling. It used to be a Call button that could only throw "adapter is not
+implemented yet", because number masking in Nigeria needs KYC, a rented number
+pool and per-minute billing — none of it self-serve. The promise was never "dial
+a proxy number", it was "talk without either of you learning the other's number".
+An in-app call keeps that promise with no number in it at all: WebRTC, browser to
+browser, audio never through our server. The server only decides who may ring
+whom — the two parties of a live delivery, nobody else, one call at a time, 45
+seconds to answer, closed when the job closes. VOICE_MODE=TERMII stays available
+for the day a masking account exists.
+
+23 new tests (81 total, no database): Termii and Resend request shapes, error
+bodies that arrive with a 200, and every refusal the call broker can make.
+---
+ .env.example                                  |  21 +-
+ backend/src/auth/auth.controller.ts           |   8 +
+ backend/src/auth/auth.service.ts              |  70 +++-
+ backend/src/auth/verification.service.ts      |  65 +++-
+ backend/src/config/app.config.ts              |  19 ++
+ backend/src/config/env.config.ts              |  22 +-
+ backend/src/health/health.controller.ts       |   5 +-
+ backend/src/main.ts                           |   4 +
+ backend/src/messaging/messaging.service.ts    | 191 ++++++++++-
+ backend/src/messaging/voice.service.ts        |  23 +-
+ .../src/realtime/call-signaling.service.ts    | 304 +++++++++++++++++
+ backend/src/realtime/realtime.gateway.ts      | 122 ++++++-
+ backend/src/realtime/realtime.module.ts       |   5 +-
+ backend/src/realtime/realtime.types.ts        |  23 ++
+ backend/test/call-signaling.spec.ts           | 198 +++++++++++
+ backend/test/messaging.spec.ts                | 178 ++++++++++
+ deploy/.env.example                           |  12 +-
+ documentation/CREDENTIALS-SETUP.md            |  33 +-
+ documentation/MESSAGES-AND-CALLS.md           | 196 +++++++++++
+ documentation/RUNBOOK.md                      |  24 ++
+ frontend/src/App.tsx                          |   9 +
+ frontend/src/components/CallOverlay.tsx       |  99 ++++++
+ frontend/src/components/ContactCard.tsx       |  22 +-
+ frontend/src/hooks/useChat.ts                 |   2 +
+ frontend/src/lib/call.ts                      | 315 ++++++++++++++++++
+ frontend/src/lib/live.ts                      |  27 +-
+ .../src/pages/auth/RegisterCustomerPage.tsx   |   7 +-
+ frontend/src/pages/auth/RegisterRiderPage.tsx |   2 +-
+ frontend/src/pages/auth/VerifyPage.tsx        | 109 +++++-
+ 29 files changed, 2039 insertions(+), 76 deletions(-)
+ create mode 100644 backend/src/realtime/call-signaling.service.ts
+ create mode 100644 backend/test/call-signaling.spec.ts
+ create mode 100644 backend/test/messaging.spec.ts
+ create mode 100644 documentation/MESSAGES-AND-CALLS.md
+ create mode 100644 frontend/src/components/CallOverlay.tsx
+ create mode 100644 frontend/src/lib/call.ts
+
+diff --git a/.env.example b/.env.example
+index 3072304..ee8b9c5 100644
+--- a/.env.example
++++ b/.env.example
+@@ -47,15 +47,26 @@ MAPS_SEARCH_BIAS="5.6222,6.3329"
+ # Only when MAPS_PROVIDER=GOOGLE
+ GOOGLE_MAPS_API_KEY=
+ 
++# ── SMS (verification codes, rider alerts) ────────────────────────────────────
++# CONSOLE prints each message to the API log and sends nothing — good for
++# development, useless for a customer. TERMII sends for real.
++# Termii needs: an API key, an approved alphanumeric sender ID (3-11 characters),
++# and the DND route switched on for your account (ask their support; without it
++# OTPs do not reach numbers that have do-not-disturb active).
+ SMS_MODE=CONSOLE              # CONSOLE | TERMII
+ TERMII_API_KEY=
+ TERMII_SENDER_ID=TWL
++TERMII_CHANNEL=dnd            # dnd (transactional, required for OTP) | generic
+ 
+-# MASKED CALLS — the customer and rider reach each other through a proxy number,
+-# so neither ever sees the other's real one. CONSOLE means "not connected yet":
+-# the Call button explains that instead of dialling nothing. Switching to TERMII
+-# also needs a verified Termii account, an approved caller ID and a number pool.
+-VOICE_MODE=CONSOLE            # CONSOLE | TERMII
++# ── CALLS between customer and rider ─────────────────────────────────────────
++# IN_APP   — the call happens inside the app (WebRTC, browser to browser). No
++#            phone number exists on either side, so nothing can be revealed.
++#            Needs no provider, no KYC and no credit. This is the default.
++# TERMII   — Termii rents a proxy number and bridges the two phones. Needs a
++#            number-masking account: KYC, a rented number pool and per-minute
++#            billing, activated by Termii support (not self-serve).
++# CONSOLE  — calling off; the Call button says messaging is the way to talk.
++VOICE_MODE=IN_APP             # IN_APP | CONSOLE | TERMII
+ TERMII_VOICE_NUMBER_POOL=
+ 
+ EMAIL_MODE=CONSOLE            # CONSOLE | RESEND
+diff --git a/backend/src/auth/auth.controller.ts b/backend/src/auth/auth.controller.ts
+index 5162fd9..a9e33a3 100644
+--- a/backend/src/auth/auth.controller.ts
++++ b/backend/src/auth/auth.controller.ts
+@@ -149,6 +149,14 @@ export class AuthController {
+     return this.auth.resendEmailVerification(user);
+   }
+ 
++  /** Signed out, no session: the address is the only thing we have. */
++  @Public()
++  @RateLimit({ points: 3, windowSeconds: 300, keyBy: 'ip' })
++  @Post('resend-verification-email')
++  async resendVerificationEmail(@ZodBody(z.object({ email: z.string().trim().email() })) body: { email: string }) {
++    return this.auth.resendEmailVerificationByAddress(body.email);
++  }
++
+   @Public()
+   @RateLimit({ points: 5, windowSeconds: 300, keyBy: 'body', bodyField: 'phone' })
+   @Post('otp/request')
+diff --git a/backend/src/auth/auth.service.ts b/backend/src/auth/auth.service.ts
+index d25fbfc..e12b1ff 100644
+--- a/backend/src/auth/auth.service.ts
++++ b/backend/src/auth/auth.service.ts
+@@ -14,6 +14,35 @@ import type { UserType } from '@dispatch/shared';
+ const MAX_FAILED_LOGINS = 5;
+ const LOCKOUT_MINUTES = 15;
+ 
++/**
++ * What to tell the customer about the two messages we just tried to send.
++ *
++ * The flat `verification` object keeps the keys the browser already reads
++ * (`devToken`, `devCode`) and adds the truth about delivery, because "check your
++ * phone" when no SMS left the building is how a customer ends up staring at a
++ * verification screen that can never succeed.
++ */
++function describeVerification(
++  email: { devToken?: string; delivered: boolean; deliveryReason?: string },
++  phone: { devCode?: string; expiresInSeconds: number; delivered: boolean; deliveryReason?: string },
++) {
++  const both = email.delivered && phone.delivered;
++  return {
++    message: both
++      ? 'Account created. Check your email for the verification link and your phone for the code.'
++      : 'Account created. We could not deliver verification messages just now — open the verification page to try again.',
++    verification: {
++      ...(email.devToken ? { devToken: email.devToken } : {}),
++      emailDelivered: email.delivered,
++      ...(email.deliveryReason ? { emailReason: email.deliveryReason } : {}),
++      ...(phone.devCode ? { devCode: phone.devCode } : {}),
++      expiresInSeconds: phone.expiresInSeconds,
++      smsDelivered: phone.delivered,
++      ...(phone.deliveryReason ? { smsReason: phone.deliveryReason } : {}),
++    },
++  };
++}
++
+ export interface RequestContext {
+   ip?: string;
+   userAgent?: string;
+@@ -91,11 +120,8 @@ export class AuthService {
+       userAgent: ctx.userAgent,
+     });
+ 
+-    return {
+-      message: 'Account created. Check your email for the verification link and your phone for the code.',
+-      userId: user.id,
+-      verification: { ...emailResult, ...otpResult },
+-    };
++    const { message, verification } = describeVerification(emailResult, otpResult);
++    return { message, userId: user.id, verification };
+   }
+ 
+   async registerRider(input: RegisterRiderInput, ctx: RequestContext) {
+@@ -155,7 +181,11 @@ export class AuthService {
+       email: user.email,
+       firstName: user.firstName,
+     });
+-    await this.verification.sendPhoneOtp({ id: user.id, phone: user.phone, firstName: user.firstName });
++    const otpResult = await this.verification.sendPhoneOtp({
++      id: user.id,
++      phone: user.phone,
++      firstName: user.firstName,
++    });
+ 
+     await this.audit.record({
+       actorUserId: user.id,
+@@ -167,12 +197,14 @@ export class AuthService {
+       userAgent: ctx.userAgent,
+     });
+ 
++    const { message, verification } = describeVerification(emailResult, otpResult);
+     return {
+-      message:
+-        'Application received. Verify your email and phone, then upload your documents — an administrator will review your application.',
++      message: user.rider
++        ? `${message} Then upload your documents — an administrator will review your application.`
++        : message,
+       userId: user.id,
+       riderCode: user.rider?.riderCode,
+-      verification: emailResult,
++      verification,
+     };
+   }
+ 
+@@ -419,6 +451,26 @@ export class AuthService {
+     return this.verification.sendEmailVerification(user);
+   }
+ 
++  /**
++   * Resend the verification link for an address, without being signed in.
++   *
++   * A new customer is `PENDING` and has no session yet, so the authenticated
++   * resend above is no help to them: if the first email never arrived there was
++   * simply no way to ask for another one. The answer is deliberately the same
++   * whether or not the address exists — otherwise this endpoint becomes a way to
++   * discover who has an account here.
++   */
++  async resendEmailVerificationByAddress(email: string) {
++    const answer = { message: 'If that address has an account waiting for verification, a new link is on its way.' };
++    const user = await this.prisma.user.findUnique({
++      where: { email: email.trim().toLowerCase() },
++      select: { id: true, email: true, firstName: true, emailVerifiedAt: true, status: true },
++    });
++    if (!user || !user.email || user.emailVerifiedAt || user.status === 'SUSPENDED') return answer;
++    await this.verification.sendEmailVerification(user);
++    return answer;
++  }
++
+   // ─────────────────────────────── SESSIONS ────────────────────────────────
+ 
+   async refresh(refreshToken: string, ctx: RequestContext): Promise<AuthSession> {
+diff --git a/backend/src/auth/verification.service.ts b/backend/src/auth/verification.service.ts
+index 7152a19..30524b0 100644
+--- a/backend/src/auth/verification.service.ts
++++ b/backend/src/auth/verification.service.ts
+@@ -42,6 +42,21 @@ export class VerificationService {
+     return this.config.get('NODE_ENV', { infer: true }) !== 'production';
+   }
+ 
++  /**
++   * Where a link in an email should point.
++   *
++   * This used to be the first entry of CORS_ORIGINS, which is a list of origins
++   * allowed to call the API — not the address customers use. On a deployment where
++   * that list still said `http://localhost:5173`, every verification email carried
++   * a link to the developer's laptop. FRONTEND_URL is the public site; the CORS
++   * list is only the fallback for a machine that has not set it.
++   */
++  private get siteUrl(): string {
++    const frontend = this.config.get('FRONTEND_URL', { infer: true })?.trim();
++    const cors = this.config.get('CORS_ORIGINS', { infer: true }).split(',')[0]?.trim();
++    return (frontend || cors || 'http://localhost:5173').replace(/\/+$/, '');
++  }
++
+   private async issue(userId: string, purpose: 'EMAIL_VERIFY' | 'PHONE_OTP' | 'PASSWORD_RESET', value: string, destination: string, ttlMs: number) {
+     // Supersede any earlier outstanding code for the same purpose.
+     await this.prisma.verificationToken.updateMany({
+@@ -61,18 +76,29 @@ export class VerificationService {
+     return record;
+   }
+ 
+-  async sendEmailVerification(user: { id: string; email: string | null; firstName: string }): Promise<{ devToken?: string }> {
++  async sendEmailVerification(user: {
++    id: string;
++    email: string | null;
++    firstName: string;
++  }): Promise<{ devToken?: string; delivered: boolean; deliveryReason?: string }> {
+     if (!user.email) throw AppError.validation([{ field: 'email', message: 'No email address on this account' }]);
+     const token = randomBytes(32).toString('base64url');
+     await this.issue(user.id, 'EMAIL_VERIFY', token, user.email, TTL.EMAIL_VERIFY);
+-    const link = `${this.config.get('CORS_ORIGINS', { infer: true }).split(',')[0]}/verify-email?token=${token}`;
+-    await this.messaging.sendEmail({
++    // `/verify` is the route that actually exists — the old link pointed at
++    // `/verify-email`, which the app does not have, so every emailed link landed
++    // on a 404 and the account could never be verified.
++    const link = `${this.siteUrl}/verify?token=${token}`;
++    const delivery = await this.messaging.sendEmail({
+       to: user.email,
+       kind: 'EMAIL_VERIFICATION',
+       subject: 'Verify your email address',
+-      body: `Hello ${user.firstName}, confirm your email address to activate your account: ${link}`,
++      body: `Hello ${user.firstName}, confirm your email address to activate your account: ${link}\n\nThe link works for 24 hours.`,
+     });
+-    return this.exposeCodes ? { devToken: token } : {};
++    return {
++      ...(this.exposeCodes ? { devToken: token } : {}),
++      delivered: delivery.delivered,
++      deliveryReason: delivery.delivered ? undefined : delivery.reason,
++    };
+   }
+ 
+   async verifyEmail(token: string): Promise<{ userId: string }> {
+@@ -97,18 +123,26 @@ export class VerificationService {
+     return { userId: record.userId };
+   }
+ 
+-  async sendPhoneOtp(user: { id: string; phone: string | null; firstName: string }): Promise<{ devCode?: string; expiresInSeconds: number }> {
++  async sendPhoneOtp(user: {
++    id: string;
++    phone: string | null;
++    firstName: string;
++  }): Promise<{ devCode?: string; expiresInSeconds: number; delivered: boolean; deliveryReason?: string }> {
+     if (!user.phone) throw AppError.validation([{ field: 'phone', message: 'No phone number on this account' }]);
+     const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
+     await this.issue(user.id, 'PHONE_OTP', `${user.id}:${code}`, user.phone, TTL.PHONE_OTP);
+-    await this.messaging.sendSms({
++    const delivery = await this.messaging.sendSms({
+       to: user.phone,
+       kind: 'PHONE_OTP',
+-      body: `Your TWL verification code is ${code}. It expires in 10 minutes. Never share it.`,
++      body: `${code} is your Traders Welfare verification code. It expires in 10 minutes. Never share it.`,
+     });
+     return {
+       ...(this.exposeCodes ? { devCode: code } : {}),
+       expiresInSeconds: TTL.PHONE_OTP / 1000,
++      // The browser is told the truth: a code that never left the building must not
++      // be described as "sent".
++      delivered: delivery.delivered,
++      deliveryReason: delivery.delivered ? undefined : delivery.reason,
+     };
+   }
+ 
+@@ -144,7 +178,7 @@ export class VerificationService {
+    * Always returns success, whether or not the account exists — an enumeration
+    * attack must not learn which emails/phones are registered.
+    */
+-  async sendPasswordReset(identifier: string): Promise<{ devToken?: string }> {
++  async sendPasswordReset(identifier: string): Promise<{ devToken?: string; delivered: boolean }> {
+     const user = await this.prisma.user.findFirst({
+       where: {
+         OR: [
+@@ -157,19 +191,24 @@ export class VerificationService {
+     });
+     if (!user || !user.email) {
+       this.logger.log('Password reset requested for an unknown identifier — no message sent');
+-      return {};
++      // Deliberately identical to a successful request: the caller must not learn
++      // whether the account exists.
++      return { delivered: false };
+     }
+ 
+     const token = randomBytes(32).toString('base64url');
+     await this.issue(user.id, 'PASSWORD_RESET', token, user.email, TTL.PASSWORD_RESET);
+-    const link = `${this.config.get('CORS_ORIGINS', { infer: true }).split(',')[0]}/reset-password?token=${token}`;
+-    await this.messaging.sendEmail({
++    const link = `${this.siteUrl}/reset-password?token=${token}`;
++    const delivery = await this.messaging.sendEmail({
+       to: user.email,
+       kind: 'PASSWORD_RESET',
+       subject: 'Reset your password',
+       body: `Hello ${user.firstName}, use this link to choose a new password (valid for 1 hour): ${link}. If you did not ask for this, ignore this message.`,
+     });
+-    return this.exposeCodes ? { devToken: token } : {};
++    return {
++      ...(this.exposeCodes ? { devToken: token } : {}),
++      delivered: delivery.delivered,
++    };
+   }
+ 
+   async resetPassword(token: string, newPassword: string): Promise<void> {
+diff --git a/backend/src/config/app.config.ts b/backend/src/config/app.config.ts
+index b95153d..fe0fd6a 100644
+--- a/backend/src/config/app.config.ts
++++ b/backend/src/config/app.config.ts
+@@ -56,6 +56,25 @@ export class AppConfig {
+   }
+   get smsMode() { return this.config.get('SMS_MODE', { infer: true }); }
+   get emailMode() { return this.config.get('EMAIL_MODE', { infer: true }); }
++  get termiiApiKey(): string | undefined {
++    const key = this.config.get('TERMII_API_KEY', { infer: true })?.trim();
++    return key ? key : undefined;
++  }
++  get resendApiKey(): string | undefined {
++    const key = this.config.get('RESEND_API_KEY', { infer: true })?.trim();
++    return key ? key : undefined;
++  }
++  /**
++   * What the health block should say: the mode alone is misleading. `SMS_MODE=TERMII`
++   * with no key set delivers nothing, and that combination is exactly the one that
++   * looks configured and is not.
++   */
++  get smsDelivery(): string {
++    return this.smsMode === 'TERMII' ? (this.termiiApiKey ? 'TERMII' : 'TERMII_NO_KEY') : 'CONSOLE';
++  }
++  get emailDelivery(): string {
++    return this.emailMode === 'RESEND' ? (this.resendApiKey ? 'RESEND' : 'RESEND_NO_KEY') : 'CONSOLE';
++  }
+   get commissionPercent() { return this.config.get('DEFAULT_COMMISSION_PCT', { infer: true }); }
+   get offerTimeoutSeconds() { return this.config.get('DISPATCH_OFFER_TIMEOUT_SECONDS', { infer: true }); }
+   get maxActivePerRider() { return this.config.get('DISPATCH_MAX_ACTIVE_PER_RIDER', { infer: true }); }
+diff --git a/backend/src/config/env.config.ts b/backend/src/config/env.config.ts
+index 97a23a6..b32273b 100644
+--- a/backend/src/config/env.config.ts
++++ b/backend/src/config/env.config.ts
+@@ -44,10 +44,28 @@ export const envSchema = z.object({
+   MAPS_SEARCH_BIAS: z.string().optional().default('5.6222,6.3329'),
+ 
+   SMS_MODE: z.enum(['CONSOLE', 'TERMII']).default('CONSOLE'),
+-  /** Masked voice calling. CONSOLE = not connected yet; TERMII = number masking live. */
+-  VOICE_MODE: z.enum(['CONSOLE', 'TERMII']).default('CONSOLE'),
++  /**
++   * How the two people on a job talk to each other.
++   *
++   * IN_APP  — a call inside the app (WebRTC, peer to peer). No phone number is
++   *           involved on either side, so nothing can leak. This is the default
++   *           because it needs no provider, no KYC and no credit.
++   * TERMII  — the provider rents a proxy number and bridges the two phones. Needs
++   *           a number-masking account with Termii: KYC, a number pool and
++   *           per-minute billing, activated by their support team.
++   * CONSOLE — off: the Call button explains that messaging is the way to talk.
++   */
++  VOICE_MODE: z.enum(['IN_APP', 'CONSOLE', 'TERMII']).default('IN_APP'),
+   TERMII_API_KEY: z.string().optional().default(''),
+   TERMII_SENDER_ID: z.string().default('TWL'),
++  /**
++   * Termii route. `dnd` is the transactional route Termii permits for OTPs and
++   * notices and it reaches numbers with do-not-disturb active — but it has to be
++   * switched on for your account by Termii support. `generic` is the promotional
++   * route: cheaper, but Termii's own documentation says not to use it for OTP, and
++   * it is not delivered to DND numbers or to MTN between 20:00 and 08:00.
++   */
++  TERMII_CHANNEL: z.enum(['dnd', 'generic', 'whatsapp']).default('dnd'),
+ 
+   EMAIL_MODE: z.enum(['CONSOLE', 'RESEND']).default('CONSOLE'),
+   RESEND_API_KEY: z.string().optional().default(''),
+diff --git a/backend/src/health/health.controller.ts b/backend/src/health/health.controller.ts
+index 94eb92e..ecb4d64 100644
+--- a/backend/src/health/health.controller.ts
++++ b/backend/src/health/health.controller.ts
+@@ -42,8 +42,9 @@ export class HealthController {
+       integrations: {
+         payments: this.config.paymentsMode,
+         maps: this.config.mapsProvider,
+-        sms: this.config.smsMode,
+-        email: this.config.emailMode,
++        // The delivery truth, not just the mode: TERMII_NO_KEY sends nothing.
++        sms: this.config.smsDelivery,
++        email: this.config.emailDelivery,
+       },
+       checks: { database, redis: cache },
+       uptimeSeconds: Math.floor((Date.now() - this.startedAt) / 1000),
+diff --git a/backend/src/main.ts b/backend/src/main.ts
+index fab053a..765682e 100644
+--- a/backend/src/main.ts
++++ b/backend/src/main.ts
+@@ -9,6 +9,7 @@ import { AppModule } from './app.module';
+ import { AppConfig } from './config/app.config';
+ import { registerIndexPage } from './common/api-index-page';
+ import { decideCorsOrigin } from './common/cors';
++import { MessagingService } from './messaging/messaging.service';
+ 
+ async function bootstrap(): Promise<void> {
+   // `rawBody` is what makes payment webhook signature verification possible: the
+@@ -91,6 +92,9 @@ async function bootstrap(): Promise<void> {
+   await app.listen(config.port, '0.0.0.0');
+   logger.log(`${config.appName} API listening on http://0.0.0.0:${config.port}/${config.apiPrefix}`);
+   logger.log(`Environment: ${config.nodeEnv} · Payments: ${config.paymentsMode}`);
++  // One line that answers "are customers actually receiving codes?" without
++  // anyone having to read four environment variables.
++  logger.log(app.get(MessagingService).describe());
+   if (config.paymentsMode === 'DEVELOPMENT') {
+     logger.warn('PAYMENTS ARE SIMULATED (PAYMENTS_MODE=DEVELOPMENT). No real money can move.');
+   }
+diff --git a/backend/src/messaging/messaging.service.ts b/backend/src/messaging/messaging.service.ts
+index 2bf71a2..8970ec7 100644
+--- a/backend/src/messaging/messaging.service.ts
++++ b/backend/src/messaging/messaging.service.ts
+@@ -17,16 +17,35 @@ export interface OutboundMessage {
+     | 'DISPATCH_OFFER';
+ }
+ 
++/**
++ * What actually happened to a message.
++ *
++ * `delivered: false` is not an exception — it is a fact the caller has to be able
++ * to show. "We sent you a code" when nothing left the building is the single most
++ * confusing thing a sign-up flow can say, and it is exactly what a console-only
++ * driver used to cause in production.
++ */
++export interface DeliveryResult {
++  delivered: boolean;
++  /** 'console' | 'termii' | 'resend' — what tried to deliver it. */
++  driver: string;
++  /** Safe to log, never contains a key. */
++  reason?: string;
++}
++
+ /**
+  * OUTBOUND COMMUNICATIONS
+  *
+- * In development everything is printed to the API console and nothing leaves the
+- * machine — no SMS credit is spent, no email is delivered. This is deliberate:
+- * SMS costs money per message and testing must be free.
++ * Two drivers each, chosen by environment:
+  *
+- * In Phase 7 this becomes a queue-backed dispatcher with Termii (SMS) and Resend
+- * (email) drivers plus retry/backoff. The interface stays the same, so callers
+- * never change.
++ *   SMS_MODE   CONSOLE (print to the log) | TERMII  (Nigerian SMS, transactional route)
++ *   EMAIL_MODE CONSOLE (print to the log) | RESEND  (transactional email)
++ *
++ * A delivery failure never throws. It returns `delivered: false` with a reason,
++ * which the verification flows pass to the browser so the screen can say "we could
++ * not send that code — try again" instead of pretending. A failing SMS gateway must
++ * not turn a registration into a 500 either: the account exists either way, and the
++ * customer can request another code.
+  */
+ @Injectable()
+ export class MessagingService {
+@@ -42,19 +61,165 @@ export class MessagingService {
+     return this.config.get('EMAIL_MODE', { infer: true });
+   }
+ 
+-  async sendSms(message: OutboundMessage): Promise<void> {
++  /** True when an SMS would actually leave the building. */
++  get smsDelivers(): boolean {
++    return this.smsMode === 'TERMII' && !!this.config.get('TERMII_API_KEY', { infer: true });
++  }
++
++  /** True when an email would actually leave the building. */
++  get emailDelivers(): boolean {
++    return this.emailMode === 'RESEND' && !!this.config.get('RESEND_API_KEY', { infer: true });
++  }
++
++  /** One line for the boot log, so the owner never has to guess. */
++  describe(): string {
++    const sms = this.smsDelivers ? `Termii (${this.config.get('TERMII_CHANNEL', { infer: true })})` : 'console only';
++    const email = this.emailDelivers ? 'Resend' : 'console only';
++    return `SMS: ${sms} · Email: ${email}`;
++  }
++
++  // ── SMS ──────────────────────────────────────────────────────────────────
++
++  async sendSms(message: OutboundMessage): Promise<DeliveryResult> {
+     if (this.smsMode === 'CONSOLE') {
+       this.logger.log(`📱 SMS → ${message.to} [${message.kind}] :: ${message.body}`);
+-      return;
++      return { delivered: false, driver: 'console', reason: 'SMS_MODE=CONSOLE — printed to the log, not sent' };
++    }
++
++    const apiKey = this.config.get('TERMII_API_KEY', { infer: true });
++    if (!apiKey) {
++      this.logger.error('SMS_MODE=TERMII but TERMII_API_KEY is empty — nothing was sent');
++      return { delivered: false, driver: 'termii', reason: 'TERMII_API_KEY is not set' };
++    }
++
++    try {
++      const response = await fetch('https://api.ng.termii.com/api/sms/send', {
++        method: 'POST',
++        headers: { 'Content-Type': 'application/json' },
++        body: JSON.stringify({
++          // Termii wants international format without the plus.
++          to: toTermiiNumber(message.to),
++          from: this.config.get('TERMII_SENDER_ID', { infer: true }),
++          sms: message.body,
++          type: 'plain',
++          // The DND route is the one Termii permits for OTP and transactional
++          // traffic; the generic route is for promotional messages and does not
++          // reach numbers with do-not-disturb active.
++          channel: this.config.get('TERMII_CHANNEL', { infer: true }),
++          api_key: apiKey,
++        }),
++        signal: AbortSignal.timeout(10_000),
++      });
++
++      const body = (await response.text()).slice(0, 500);
++      if (!response.ok) {
++        this.logger.error(`Termii refused an SMS (${response.status}): ${body}`);
++        return { delivered: false, driver: 'termii', reason: `Termii responded ${response.status}` };
++      }
++      // Termii answers 200 with an error body for some failures, so the payload is
++      // read rather than trusting the status code alone.
++      if (/"code"\s*:\s*"?(4\d\d|5\d\d)/.test(body) || /invalid|not found|insufficient/i.test(body)) {
++        this.logger.error(`Termii returned an error for an SMS: ${body}`);
++        return { delivered: false, driver: 'termii', reason: 'Termii rejected the message' };
++      }
++      this.logger.log(`📱 SMS sent to ${maskPhone(message.to)} [${message.kind}]`);
++      return { delivered: true, driver: 'termii' };
++    } catch (error) {
++      this.logger.error(`Termii SMS failed: ${(error as Error).message}`);
++      return { delivered: false, driver: 'termii', reason: (error as Error).message };
+     }
+-    throw new Error('Termii SMS driver is configured in Phase 7');
+   }
+ 
+-  async sendEmail(message: OutboundMessage): Promise<void> {
++  // ── Email ────────────────────────────────────────────────────────────────
++
++  async sendEmail(message: OutboundMessage): Promise<DeliveryResult> {
+     if (this.emailMode === 'CONSOLE') {
+-      this.logger.log(`✉️  EMAIL → ${message.to} [${message.kind}] ${message.subject ?? ''} :: ${message.body}`);
+-      return;
++      this.logger.log(
++        `✉️  EMAIL → ${message.to} [${message.kind}] ${message.subject ?? ''} :: ${message.body}`,
++      );
++      return { delivered: false, driver: 'console', reason: 'EMAIL_MODE=CONSOLE — printed to the log, not sent' };
++    }
++
++    const apiKey = this.config.get('RESEND_API_KEY', { infer: true });
++    if (!apiKey) {
++      this.logger.error('EMAIL_MODE=RESEND but RESEND_API_KEY is empty — nothing was sent');
++      return { delivered: false, driver: 'resend', reason: 'RESEND_API_KEY is not set' };
++    }
++
++    try {
++      const response = await fetch('https://api.resend.com/emails', {
++        method: 'POST',
++        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
++        body: JSON.stringify({
++          from: this.config.get('EMAIL_FROM', { infer: true }),
++          to: [message.to],
++          subject: message.subject ?? 'Traders Welfare Logistics',
++          text: message.body,
++          html: renderEmail(message),
++        }),
++        signal: AbortSignal.timeout(10_000),
++      });
++
++      const body = (await response.text()).slice(0, 500);
++      if (!response.ok) {
++        this.logger.error(`Resend refused an email (${response.status}): ${body}`);
++        return { delivered: false, driver: 'resend', reason: `Resend responded ${response.status}` };
++      }
++      this.logger.log(`✉️  Email sent to ${maskEmail(message.to)} [${message.kind}]`);
++      return { delivered: true, driver: 'resend' };
++    } catch (error) {
++      this.logger.error(`Resend email failed: ${(error as Error).message}`);
++      return { delivered: false, driver: 'resend', reason: (error as Error).message };
+     }
+-    throw new Error('Resend email driver is configured in Phase 7');
+   }
+ }
++
++/* ─────────────────────────────── helpers ─────────────────────────────── */
++
++/** `+2348031234567` → `2348031234567`. Termii's `to` field has no plus. */
++export function toTermiiNumber(phone: string): string {
++  const digits = phone.replace(/[^\d]/g, '');
++  if (digits.startsWith('234')) return digits;
++  if (digits.startsWith('0')) return `234${digits.slice(1)}`;
++  return digits;
++}
++
++/** Never log a whole phone number. */
++function maskPhone(phone: string): string {
++  const digits = phone.replace(/[^\d]/g, '');
++  return `${digits.slice(0, 5)}…${digits.slice(-2)}`;
++}
++
++function maskEmail(email: string): string {
++  const [name, domain] = email.split('@');
++  if (!domain) return '***';
++  return `${name!.slice(0, 2)}***@${domain}`;
++}
++
++/**
++ * A plain, readable email. No images, no tracking pixels, no 600 kb of HTML — a
++ * verification link has to work in a phone's preview pane on a slow connection.
++ */
++function renderEmail(message: OutboundMessage): string {
++  const linkPattern = /(https?:\/\/[^\s]+)/g;
++  const linked = message.body
++    .split(linkPattern)
++    .map((part) => (linkPattern.test(part) ? `<a href="${part}" style="color:#047857">${part}</a>` : escapeHtml(part)))
++    .join('');
++  return `<!doctype html><html><body style="margin:0;padding:24px;background:#f8fafc;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif">
++  <div style="max-width:520px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:12px;padding:24px">
++    <p style="margin:0 0 4px;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#64748b">Traders Welfare Logistics</p>
++    <h1 style="margin:0 0 16px;font-size:18px;color:#0f172a">${escapeHtml(message.subject ?? 'Notification')}</h1>
++    <p style="margin:0;font-size:15px;line-height:1.6;color:#334155">${linked.replace(/\n/g, '<br>')}</p>
++  </div>
++  <p style="max-width:520px;margin:16px auto 0;font-size:12px;color:#94a3b8">If you did not expect this message you can ignore it.</p>
++</body></html>`;
++}
++
++function escapeHtml(value: string): string {
++  return value
++    .replace(/&/g, '&amp;')
++    .replace(/</g, '&lt;')
++    .replace(/>/g, '&gt;')
++    .replace(/"/g, '&quot;');
++}
+diff --git a/backend/src/messaging/voice.service.ts b/backend/src/messaging/voice.service.ts
+index 21a3542..0f9cced 100644
+--- a/backend/src/messaging/voice.service.ts
++++ b/backend/src/messaging/voice.service.ts
+@@ -45,14 +45,28 @@ export class VoiceService {
+     return this.mode !== 'CONSOLE';
+   }
+ 
++  /** True when talking happens inside the app, with no phone number anywhere. */
++  get inApp(): boolean {
++    return this.mode === 'IN_APP';
++  }
++
+   /** What the two screens show before anyone taps anything. */
+   status() {
++    if (this.inApp) {
++      return {
++        connected: true,
++        provider: 'IN_APP' as const,
++        inApp: true,
++        reason: null,
++      };
++    }
+     return {
+       connected: this.connected,
+       provider: this.mode,
++      inApp: false,
+       reason: this.connected
+         ? null
+-        : 'Masked calling is not connected yet. Message the other person in the app — it is free and instant.',
++        : 'Calling is switched off. Message the other person in the app — it is free and instant.',
+     };
+   }
+ 
+@@ -73,6 +87,13 @@ export class VoiceService {
+     const isRider = user.type === 'RIDER' && !!user.riderId && delivery.riderId === user.riderId;
+     if (!isCustomer && !isRider) throw AppError.notFound('Delivery not found');
+ 
++    if (this.inApp) {
++      // There is no number to hand out: an in-app call is started over the live
++      // socket (see CallSignalingService) and never leaves the two browsers.
++      throw AppError.conflict(
++        'Calls in this app happen inside the app, not by phone — open the delivery and press Call.',
++      );
++    }
+     if (!this.connected) {
+       throw AppError.conflict(this.status().reason!);
+     }
+diff --git a/backend/src/realtime/call-signaling.service.ts b/backend/src/realtime/call-signaling.service.ts
+new file mode 100644
+index 0000000..96d6e6b
+--- /dev/null
++++ b/backend/src/realtime/call-signaling.service.ts
+@@ -0,0 +1,304 @@
++import { Injectable, Logger } from '@nestjs/common';
++import { randomUUID } from 'node:crypto';
++import { PrismaService } from '../infra/prisma/prisma.service';
++import type { AuthPrincipal } from '../auth/auth.types';
++
++/** Statuses in which the two people on a job may reasonably need to talk. */
++const TALKABLE = new Set([
++  'ASSIGNED',
++  'ACCEPTED',
++  'ARRIVED_AT_PICKUP',
++  'PICKED_UP',
++  'IN_TRANSIT',
++  'ARRIVED_AT_DESTINATION',
++]);
++
++/** How long a call may ring before it is treated as missed. */
++const RING_MS = 45_000;
++/** A hard ceiling, so a call the browser forgot to end cannot live forever. */
++const CALL_MS = 60 * 60 * 1000;
++
++interface LiveCall {
++  id: string;
++  deliveryId: string;
++  callerUserId: string;
++  calleeUserId: string;
++  callerType: 'CUSTOMER' | 'RIDER';
++  startedAt: number;
++  answeredAt: number | null;
++  ringTimer?: NodeJS.Timeout;
++  killTimer?: NodeJS.Timeout;
++}
++
++/**
++ * How the broker tells the sockets about something it decided on its own — a call
++ * that rang out, or one that hit the hour ceiling. Wired once by the gateway; if
++ * nothing is listening (a unit test, a CLI) the bookkeeping still happens.
++ */
++export interface CallNotifier {
++  missed(userIds: string[], callId: string): void;
++}
++
++export type CallLeg = {
++  callId: string;
++  deliveryId: string;
++  /** Who to relay to. Never sent to the browser — the broker uses it itself. */
++  peerUserId: string;
++  peerType: 'CUSTOMER' | 'RIDER';
++};
++
++export type CallOutcome =
++  | { ok: true; call: CallLeg }
++  | { ok: false; error: string; message: string };
++
++/**
++ * IN-APP CALLING — the broker between two browsers
++ *
++ * Why this exists: the promise is that a customer and a rider can talk without
++ * either learning the other's phone number, and that the channel disappears when
++ * the job ends. The original plan was a provider that rents a proxy number, but
++ * number masking in Nigeria needs KYC, a pending-released number pool and
++ * per-minute billing — and until that account exists the Call button did nothing.
++ *
++ * A voice call placed *inside* the app keeps the same promise with no number
++ * involved at all: the audio never leaves the two browsers (WebRTC, peer to peer),
++ * and this service is only the introduction. That also makes the rule enforceable:
++ *
++ *   · only the two parties of that delivery may call each other
++ *   · only while the job is live (before pickup and after delivery, no)
++ *   · a fresh call id every time, so an old id cannot be replayed
++ *   · ringing expires on its own
++ *
++ * What it does NOT do: route audio through the server, record anything, or tell
++ * anybody a phone number. `CallSession` rows stay reserved for a future
++ * number-masking provider.
++ *
++ * Scale note: the registry is in memory, so it assumes one API instance (true of
++ * the current single-service deployment). Running more than one instance needs
++ * the registry moved to Redis — the same shape, a different store.
++ */
++@Injectable()
++export class CallSignalingService {
++  private readonly logger = new Logger('CallSignaling');
++  private readonly calls = new Map<string, LiveCall>();
++  private notifier: CallNotifier | null = null;
++
++  constructor(private readonly prisma: PrismaService) {}
++
++  /** The gateway registers itself here so timers can emit. */
++  attachNotifier(notifier: CallNotifier): void {
++    this.notifier = notifier;
++  }
++
++  /** Calls in flight right now — used by the health/status view and tests. */
++  get activeCount(): number {
++    return this.calls.size;
++  }
++
++  /**
++   * A participant asks to call the other side.
++   *
++   * Everything is decided from the database here: which delivery, who is on it,
++   * whether it is still live. The socket handshake already proved *who* is asking.
++   */
++  async start(principal: AuthPrincipal, deliveryId: string): Promise<CallOutcome> {
++    const delivery = await this.prisma.delivery.findUnique({
++      where: { id: deliveryId },
++      select: { id: true, status: true, customerId: true, riderId: true },
++    });
++    // Not found and not-yours answer identically: a stranger learns nothing about
++    // somebody else's parcel by probing ids.
++    if (!delivery) return deny('NOT_FOUND', 'Delivery not found');
++
++    const isCustomer = Boolean(principal.customerId) && delivery.customerId === principal.customerId;
++    const isRider = Boolean(principal.riderId) && delivery.riderId === principal.riderId;
++    if (!isCustomer && !isRider) return deny('NOT_FOUND', 'Delivery not found');
++
++    if (!delivery.riderId) return deny('NO_RIDER', 'Nobody is carrying this delivery yet.');
++
++    // A finished job must not reopen a line between the two people — that is the
++    // whole point of not handing out numbers.
++    if (!TALKABLE.has(delivery.status)) {
++      return deny('CLOSED', 'This delivery is closed, so calling is no longer available.');
++    }
++
++    const callerType: 'CUSTOMER' | 'RIDER' = isCustomer ? 'CUSTOMER' : 'RIDER';
++    const peerUserId = await this.peerUserIdFor(delivery, callerType === 'CUSTOMER' ? 'RIDER' : 'CUSTOMER');
++    if (!peerUserId) return deny('NO_RIDER', 'The other person is not reachable right now.');
++
++    // One call at a time per person: a second tap replaces nothing, it is refused,
++    // so two tabs cannot start a ringing war.
++    const busy = await this.busyCallFor(principal.userId, peerUserId);
++    if (busy !== 'none') {
++      return deny(
++        busy === 'caller' ? 'ALREADY_CALLING' : 'PEER_BUSY',
++        busy === 'caller' ? 'You are already on a call.' : 'They are on another call right now.',
++      );
++    }
++
++    const call: LiveCall = {
++      id: randomUUID(),
++      deliveryId: delivery.id,
++      callerUserId: principal.userId,
++      calleeUserId: peerUserId,
++      callerType,
++      startedAt: Date.now(),
++      answeredAt: null,
++    };
++    this.calls.set(call.id, call);
++
++    // Ring once, then give up; and a ceiling in case both browsers vanish.
++    call.ringTimer = this.after(RING_MS, () => {
++      const live = this.calls.get(call.id);
++      if (!live || live.answeredAt) return;
++      this.clear(call.id);
++      this.notifier?.missed([live.callerUserId, live.calleeUserId], live.id);
++      this.logger.log(`Call ${live.id.slice(0, 8)} rang out`);
++    });
++    call.killTimer = this.after(CALL_MS, () => {
++      const live = this.calls.get(call.id);
++      if (!live) return;
++      this.clear(call.id);
++      this.notifier?.missed([live.callerUserId, live.calleeUserId], live.id);
++    });
++
++    this.logger.log(`Call ${call.id.slice(0, 8)} ringing: ${callerType} → delivery ${deliveryId.slice(0, 8)}`);
++
++    return {
++      ok: true,
++      call: {
++        callId: call.id,
++        deliveryId: call.deliveryId,
++        peerUserId,
++        peerType: callerType === 'CUSTOMER' ? 'RIDER' : 'CUSTOMER',
++      },
++    };
++  }
++
++  /**
++   * Was the phone picked up? Returns who to tell, or null when the call is gone.
++   * Only the person being called may accept.
++   */
++  accept(principal: AuthPrincipal, callId: string): CallOutcome {
++    const call = this.calls.get(callId);
++    if (!call || call.calleeUserId !== principal.userId) return deny('NOT_FOUND', 'That call has ended.');
++
++    call.answeredAt = Date.now();
++    // Answered: the ringing deadline no longer applies.
++    if (call.ringTimer) clearTimeout(call.ringTimer);
++    call.ringTimer = undefined;
++
++    return {
++      ok: true,
++      call: {
++        callId: call.id,
++        deliveryId: call.deliveryId,
++        peerUserId: call.callerUserId,
++        peerType: call.callerType,
++      },
++    };
++  }
++
++  /** Decline, hang up, or give up. Any participant may end the call. */
++  end(principal: AuthPrincipal, callId: string): { ended: boolean; peerUserId?: string; deliveryId?: string } {
++    const call = this.calls.get(callId);
++    if (!call) return { ended: false };
++    if (call.callerUserId !== principal.userId && call.calleeUserId !== principal.userId) return { ended: false };
++
++    this.clear(call.id);
++    const peerUserId = call.callerUserId === principal.userId ? call.calleeUserId : call.callerUserId;
++    this.logger.log(
++      `Call ${call.id.slice(0, 8)} ended after ${call.answeredAt ? Math.round((Date.now() - call.answeredAt) / 1000) : 0}s`,
++    );
++    return { ended: true, peerUserId, deliveryId: call.deliveryId };
++  }
++
++  /**
++   * WebRTC offers, answers and ICE candidates.
++   *
++   * Checked against the call registry, not trusted from the client: a socket may
++   * only relay to the other leg of a call it is actually part of.
++   */
++  relay(principal: AuthPrincipal, callId: string, payload: unknown): { peerUserId: string } | null {
++    const call = this.calls.get(callId);
++    if (!call) return null;
++    const isCaller = call.callerUserId === principal.userId;
++    const isCallee = call.calleeUserId === principal.userId;
++    if (!isCaller && !isCallee) return null;
++    // Signalling before pickup is only offers from the caller; audio starts after
++    // the callee accepts, so nothing to protect beyond the pair themselves.
++    return { peerUserId: isCaller ? call.calleeUserId : call.callerUserId };
++  }
++
++  /** Nobody could be reached: used by the ringing timer. */
++  expire(callId: string): { callerUserId: string; calleeUserId: string } | null {
++    const call = this.calls.get(callId);
++    if (!call) return null;
++    this.clear(callId);
++    return { callerUserId: call.callerUserId, calleeUserId: call.calleeUserId };
++  }
++
++  /** Disconnect handling: a dropped socket must not leave a call ringing. */
++  endForUser(userId: string): string[] {
++    const ended: string[] = [];
++    for (const call of [...this.calls.values()]) {
++      if (call.callerUserId !== userId && call.calleeUserId !== userId) continue;
++      this.clear(call.id);
++      ended.push(call.id);
++    }
++    return ended;
++  }
++
++  /* ─────────────────────────────── internals ─────────────────────────────── */
++
++  private async peerUserIdFor(
++    delivery: { customerId: string; riderId: string | null },
++    side: 'CUSTOMER' | 'RIDER',
++  ): Promise<string | null> {
++    if (side === 'CUSTOMER') {
++      const customer = await this.prisma.customer.findUnique({
++        where: { id: delivery.customerId },
++        select: { user: { select: { id: true } } },
++      });
++      return customer?.user?.id ?? null;
++    }
++    if (!delivery.riderId) return null;
++    const rider = await this.prisma.rider.findUnique({
++      where: { id: delivery.riderId },
++      select: { user: { select: { id: true } } },
++    });
++    return rider?.user?.id ?? null;
++  }
++
++  private async busyCallFor(userId: string, peerUserId: string): Promise<'none' | 'caller' | 'peer'> {
++    for (const call of this.calls.values()) {
++      if (call.callerUserId === userId || call.calleeUserId === userId) return 'caller';
++      if (call.callerUserId === peerUserId || call.calleeUserId === peerUserId) return 'peer';
++    }
++    return 'none';
++  }
++
++  private after(ms: number, run: () => void): NodeJS.Timeout {
++    const timer = setTimeout(run, ms);
++    // A pending timer must never hold the process open (tests, short-lived CLIs).
++    timer.unref?.();
++    return timer;
++  }
++
++  private clear(callId: string): void {
++    const call = this.calls.get(callId);
++    if (!call) return;
++    if (call.ringTimer) clearTimeout(call.ringTimer);
++    if (call.killTimer) clearTimeout(call.killTimer);
++    this.calls.delete(callId);
++  }
++
++  /** Removed automatically after the call ends, so nothing accumulates in tests. */
++  reset(): void {
++    for (const id of [...this.calls.keys()]) this.clear(id);
++  }
++}
++
++function deny(error: string, message: string): CallOutcome {
++  return { ok: false, error, message };
++}
+diff --git a/backend/src/realtime/realtime.gateway.ts b/backend/src/realtime/realtime.gateway.ts
+index ccf2a29..de09296 100644
+--- a/backend/src/realtime/realtime.gateway.ts
++++ b/backend/src/realtime/realtime.gateway.ts
+@@ -12,7 +12,8 @@ import type { Server, Socket } from 'socket.io';
+ import { PrismaService } from '../infra/prisma/prisma.service';
+ import { PrincipalService } from '../auth/principal.service';
+ import type { AuthPrincipal } from '../auth/auth.types';
+-import { RT, type DeliveryPush, type OfferPush, type RevokedPush } from './realtime.types';
++import { RT, type CallPush, type DeliveryPush, type OfferPush, type RevokedPush } from './realtime.types';
++import { CallSignalingService } from './call-signaling.service';
+ 
+ /** Where each kind of client listens. Rooms are namespaced so they can never collide. */
+ export const room = {
+@@ -65,7 +66,15 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
+   constructor(
+     private readonly principals: PrincipalService,
+     private readonly prisma: PrismaService,
+-  ) {}
++    private readonly calls: CallSignalingService,
++  ) {
++    // The broker owns the ringing deadline; the gateway owns the transport.
++    this.calls.attachNotifier({
++      missed: (userIds, callId) => {
++        for (const userId of userIds) this.emit(room.user(userId), RT.CALL_DECLINED, { callId, reason: 'MISSED' });
++      },
++    });
++  }
+ 
+   async handleConnection(client: SocketData): Promise<void> {
+     const raw = (client.handshake.auth?.token ?? '') as string | undefined;
+@@ -104,9 +113,114 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
+     this.logger.log(`Live connection: ${principal.type} ${principal.userId.slice(0, 8)} (${joined.length} rooms)`);
+   }
+ 
+-  handleDisconnect(client: SocketData): void {
++  async handleDisconnect(client: SocketData): Promise<void> {
+     const principal = client.data.principal;
+-    if (principal) this.logger.log(`Live disconnect: ${principal.type} ${principal.userId.slice(0, 8)}`);
++    if (!principal) return;
++    this.logger.log(`Live disconnect: ${principal.type} ${principal.userId.slice(0, 8)}`);
++
++    // A closed tab must not leave a call ringing for the other person. Only act
++    // when this was the last socket for that user — closing one of two tabs is not
++    // hanging up.
++    const remaining = await this.socketsFor(principal.userId);
++    if (remaining > 0) return;
++    for (const callId of this.calls.endForUser(principal.userId)) {
++      this.emit(room.user(principal.userId), RT.CALL_ENDED, { callId, reason: 'DISCONNECTED' });
++    }
++  }
++
++  /** How many live sockets this user still has. Zero means they are gone. */
++  private async socketsFor(userId: string): Promise<number> {
++    const server = this.server as unknown as {
++      adapter?: { rooms: Map<string, Set<string>> };
++      sockets?: { adapter?: { rooms: Map<string, Set<string>> } };
++    };
++    const adapter = server?.adapter ?? server?.sockets?.adapter;
++    return adapter?.rooms.get(room.user(userId))?.size ?? 0;
++  }
++
++  /* ──────────────────────────── in-app calling ──────────────────────────── */
++
++  /**
++   * Start a call about a delivery.
++   *
++   * The broker re-reads the delivery and decides whether these two people may
++   * speak; this handler only carries the answer to a socket. Nothing in the
++   * payload is a phone number, and nothing in it is trusted.
++   */
++  @SubscribeMessage('call:start')
++  async callStart(
++    @ConnectedSocket() client: SocketData,
++    @MessageBody() body: { deliveryId?: string },
++  ): Promise<{ ok: boolean; callId?: string; error?: string; message?: string }> {
++    const principal = client.data.principal;
++    if (!principal) return { ok: false, error: 'UNAUTHORIZED', message: 'Sign in to call.' };
++    if (!body?.deliveryId) return { ok: false, error: 'BAD_REQUEST', message: 'No delivery given.' };
++
++    const outcome = await this.calls.start(principal, body.deliveryId);
++    if (!outcome.ok) {
++      client.emit(RT.CALL_ERROR, { error: outcome.error, message: outcome.message });
++      return { ok: false, error: outcome.error, message: outcome.message };
++    }
++
++    const push: CallPush = {
++      callId: outcome.call.callId,
++      deliveryId: outcome.call.deliveryId,
++      from: principal.type === 'CUSTOMER' ? 'CUSTOMER' : 'RIDER',
++      fromName: principal.firstName ?? (principal.type === 'CUSTOMER' ? 'Your customer' : 'Your rider'),
++    };
++    this.emit(room.user(outcome.call.peerUserId), RT.CALL_INCOMING, push);
++    return { ok: true, callId: outcome.call.callId };
++  }
++
++  @SubscribeMessage('call:accept')
++  callAccept(
++    @ConnectedSocket() client: SocketData,
++    @MessageBody() body: { callId?: string },
++  ): { ok: boolean; error?: string } {
++    const principal = client.data.principal;
++    if (!principal || !body?.callId) return { ok: false, error: 'UNAUTHORIZED' };
++
++    const outcome = this.calls.accept(principal, body.callId);
++    if (!outcome.ok) return { ok: false, error: outcome.error };
++
++    this.emit(room.user(outcome.call.peerUserId), RT.CALL_ACCEPTED, { callId: outcome.call.callId });
++    return { ok: true };
++  }
++
++  @SubscribeMessage('call:end')
++  callEnd(
++    @ConnectedSocket() client: SocketData,
++    @MessageBody() body: { callId?: string; reason?: string },
++  ): { ok: boolean } {
++    const principal = client.data.principal;
++    if (!principal || !body?.callId) return { ok: false };
++
++    const result = this.calls.end(principal, body.callId);
++    if (!result.ended || !result.peerUserId) return { ok: false };
++    const event = body.reason === 'DECLINED' ? RT.CALL_DECLINED : RT.CALL_ENDED;
++    this.emit(room.user(result.peerUserId), event, { callId: body.callId, reason: body.reason ?? 'HUNG_UP' });
++    return { ok: true };
++  }
++
++  /**
++   * Offer / answer / ICE candidate.
++   *
++   * Relayed verbatim to the other leg, and only after the broker confirms the
++   * sender really is in that call. The gateway never inspects or stores SDP.
++   */
++  @SubscribeMessage('call:signal')
++  callSignal(
++    @ConnectedSocket() client: SocketData,
++    @MessageBody() body: { callId?: string; data?: unknown },
++  ): { ok: boolean } {
++    const principal = client.data.principal;
++    if (!principal || !body?.callId || body.data === undefined) return { ok: false };
++
++    const relayed = this.calls.relay(principal, body.callId, body.data);
++    if (!relayed) return { ok: false };
++
++    this.emit(room.user(relayed.peerUserId), RT.CALL_SIGNAL, { callId: body.callId, data: body.data });
++    return { ok: true };
+   }
+ 
+   /** Cheap liveness probe the client uses instead of polling. */
+diff --git a/backend/src/realtime/realtime.module.ts b/backend/src/realtime/realtime.module.ts
+index 0f79d79..22e2fe1 100644
+--- a/backend/src/realtime/realtime.module.ts
++++ b/backend/src/realtime/realtime.module.ts
+@@ -1,6 +1,7 @@
+ import { Global, Module } from '@nestjs/common';
+ import { AuthModule } from '../auth/auth.module';
+ import { RealtimeGateway } from './realtime.gateway';
++import { CallSignalingService } from './call-signaling.service';
+ 
+ /**
+  * Live channel, available everywhere.
+@@ -12,7 +13,7 @@ import { RealtimeGateway } from './realtime.gateway';
+ @Global()
+ @Module({
+   imports: [AuthModule],
+-  providers: [RealtimeGateway],
+-  exports: [RealtimeGateway],
++  providers: [RealtimeGateway, CallSignalingService],
++  exports: [RealtimeGateway, CallSignalingService],
+ })
+ export class RealtimeModule {}
+diff --git a/backend/src/realtime/realtime.types.ts b/backend/src/realtime/realtime.types.ts
+index 6f2a3d7..a3e17d9 100644
+--- a/backend/src/realtime/realtime.types.ts
++++ b/backend/src/realtime/realtime.types.ts
+@@ -29,6 +29,19 @@ export const RT = {
+   DISPATCH_EXHAUSTED: 'dispatch:exhausted',
+   /** The account was suspended mid-session: the socket is closed immediately. */
+   SESSION_REVOKED: 'session:revoked',
++  /* ── in-app calling (voice never leaves the two browsers) ── */
++  /** Somebody is calling you about a live delivery. {@link CallPush} */
++  CALL_INCOMING: 'call:incoming',
++  /** The person you called picked up. */
++  CALL_ACCEPTED: 'call:accepted',
++  /** They declined, or the ring timed out. */
++  CALL_DECLINED: 'call:declined',
++  /** Either side hung up, or the call was closed for them. */
++  CALL_ENDED: 'call:ended',
++  /** WebRTC offer / answer / ICE candidate, relayed verbatim. */
++  CALL_SIGNAL: 'call:signal',
++  /** The call could not be placed at all. */
++  CALL_ERROR: 'call:error',
+   ERROR: 'error:api',
+   PONG: 'pong',
+ } as const;
+@@ -64,3 +77,13 @@ export interface RevokedPush {
+   deliveryId: string;
+   reason: 'TAKEN' | 'CANCELLED' | 'REASSIGNED' | 'SUSPENDED';
+ }
++
++/** Nothing here is a phone number: there is no number in an in-app call. */
++export interface CallPush {
++  callId: string;
++  deliveryId: string;
++  /** CUSTOMER or RIDER — who is calling. */
++  from: 'CUSTOMER' | 'RIDER';
++  /** First name only, so the callee knows who it is without any contact detail. */
++  fromName: string;
++}
+diff --git a/backend/test/call-signaling.spec.ts b/backend/test/call-signaling.spec.ts
+new file mode 100644
+index 0000000..542db6f
+--- /dev/null
++++ b/backend/test/call-signaling.spec.ts
+@@ -0,0 +1,198 @@
++import { afterEach, describe, expect, it, vi } from 'vitest';
++import { CallSignalingService } from '../src/realtime/call-signaling.service';
++import type { AuthPrincipal } from '../src/auth/auth.types';
++
++/**
++ * In-app calling — who may ring whom, and for how long.
++ *
++ * The promise to the user is narrow and must hold exactly: the two people on a
++ * live delivery can call each other, inside the app, with no phone number
++ * exchanged, and the line closes when the job does.
++ */
++
++const principal = (over: Partial<AuthPrincipal> = {}): AuthPrincipal =>
++  ({
++    userId: 'user-customer',
++    type: 'CUSTOMER',
++    audience: 'CUSTOMER',
++    customerId: 'cust-1',
++    roles: [],
++    permissions: [],
++    ...over,
++  }) as AuthPrincipal;
++
++const riderPrincipal = (): AuthPrincipal =>
++  principal({ userId: 'user-rider', type: 'RIDER', audience: 'RIDER', customerId: undefined, riderId: 'rid-1' } as never);
++
++/** A Prisma stand-in: only the four lookups the broker performs. */
++function stubPrisma(delivery: { id: string; status: string; customerId: string; riderId: string | null } | null) {
++  return {
++    delivery: { findUnique: vi.fn(async () => delivery) },
++    customer: { findUnique: vi.fn(async () => ({ user: { id: 'user-customer' } })) },
++    rider: { findUnique: vi.fn(async () => ({ user: { id: 'user-rider' } })) },
++  } as never;
++}
++
++const liveDelivery = {
++  id: 'del-1',
++  status: 'IN_TRANSIT',
++  customerId: 'cust-1',
++  riderId: 'rid-1',
++};
++
++describe('phase 7 — in-app calling', () => {
++  let service: CallSignalingService | null = null;
++
++  afterEach(() => {
++    service?.reset();
++    service = null;
++    vi.useRealTimers();
++  });
++
++  it('rings the other person when a customer calls a live delivery', async () => {
++    service = new CallSignalingService(stubPrisma(liveDelivery));
++
++    const outcome = await service.start(principal(), 'del-1');
++
++    expect(outcome.ok).toBe(true);
++    if (!outcome.ok) return;
++    expect(outcome.call.peerUserId).toBe('user-rider');
++    expect(outcome.call.peerType).toBe('RIDER');
++    expect(service.activeCount).toBe(1);
++  });
++
++  it('lets the rider call the customer back, and never exposes a phone number', async () => {
++    service = new CallSignalingService(stubPrisma(liveDelivery));
++
++    const outcome = await service.start(riderPrincipal(), 'del-1');
++
++    expect(outcome.ok).toBe(true);
++    if (!outcome.ok) return;
++    expect(outcome.call.peerUserId).toBe('user-customer');
++    // The whole object is ids and types — there is no field a number could hide in.
++    expect(JSON.stringify(outcome.call)).not.toMatch(/\d{10,}/);
++  });
++
++  it('refuses a stranger, without confirming the delivery exists', async () => {
++    service = new CallSignalingService(stubPrisma(liveDelivery));
++
++    const outcome = await service.start(
++      principal({ userId: 'user-nosy', customerId: 'cust-999' } as never),
++      'del-1',
++    );
++
++    expect(outcome).toMatchObject({ ok: false, error: 'NOT_FOUND' });
++  });
++
++  it('refuses when the job is done, so contact ends with the delivery', async () => {
++    service = new CallSignalingService(stubPrisma({ ...liveDelivery, status: 'DELIVERED' }));
++
++    const outcome = await service.start(principal(), 'del-1');
++
++    expect(outcome).toMatchObject({ ok: false, error: 'CLOSED' });
++  });
++
++  it('refuses before a rider is assigned', async () => {
++    service = new CallSignalingService(stubPrisma({ ...liveDelivery, status: 'PENDING', riderId: null }));
++
++    await expect(service.start(principal(), 'del-1')).resolves.toMatchObject({ ok: false, error: 'NO_RIDER' });
++  });
++
++  it('answers only for the person being called', async () => {
++    service = new CallSignalingService(stubPrisma(liveDelivery));
++    const started = await service.start(principal(), 'del-1');
++    if (!started.ok) throw new Error('call should have started');
++
++    // The caller cannot answer their own call, and a third party is nowhere.
++    expect(service.accept(principal(), started.call.callId)).toMatchObject({ ok: false });
++    expect(service.accept(principal({ userId: 'user-other' } as never), started.call.callId)).toMatchObject({
++      ok: false,
++    });
++    expect(service.accept(riderPrincipal(), started.call.callId)).toEqual({
++      ok: true,
++      call: {
++        callId: started.call.callId,
++        deliveryId: 'del-1',
++        peerUserId: 'user-customer',
++        peerType: 'CUSTOMER',
++      },
++    });
++  });
++
++  it('relays WebRTC signalling only between the two legs of one call', async () => {
++    service = new CallSignalingService(stubPrisma(liveDelivery));
++    const started = await service.start(principal(), 'del-1');
++    if (!started.ok) throw new Error('call should have started');
++
++    expect(service.relay(principal(), started.call.callId, { sdp: 'x' })).toEqual({ peerUserId: 'user-rider' });
++    expect(service.relay(riderPrincipal(), started.call.callId, { candidate: 'y' })).toEqual({
++      peerUserId: 'user-customer',
++    });
++    expect(service.relay(principal({ userId: 'user-other' } as never), started.call.callId, {})).toBeNull();
++    expect(service.relay(principal(), 'made-up-call-id', {})).toBeNull();
++  });
++
++  it('ends the call for both when either side hangs up', async () => {
++    service = new CallSignalingService(stubPrisma(liveDelivery));
++    const started = await service.start(principal(), 'del-1');
++    if (!started.ok) throw new Error('call should have started');
++
++    const ended = service.end(riderPrincipal(), started.call.callId);
++
++    expect(ended.ended).toBe(true);
++    expect(ended.peerUserId).toBe('user-customer');
++    expect(service.activeCount).toBe(0);
++    // An ended call cannot be replayed by an old id.
++    expect(service.relay(principal(), started.call.callId, {})).toBeNull();
++  });
++
++  it('refuses a second call while one is ringing, from either side', async () => {
++    service = new CallSignalingService(stubPrisma(liveDelivery));
++    await service.start(principal(), 'del-1');
++
++    // Both of them are already in that call — one ringing call per person, whoever
++    // started it, so two taps cannot produce two lines.
++    await expect(service.start(principal(), 'del-1')).resolves.toMatchObject({ ok: false, error: 'ALREADY_CALLING' });
++    await expect(service.start(riderPrincipal(), 'del-1')).resolves.toMatchObject({ ok: false, error: 'ALREADY_CALLING' });
++  });
++
++  it('gives up on its own when nobody answers', async () => {
++    vi.useFakeTimers();
++    const missed = vi.fn();
++    service = new CallSignalingService(stubPrisma(liveDelivery));
++    service.attachNotifier({ missed });
++
++    const started = await service.start(principal(), 'del-1');
++    if (!started.ok) throw new Error('call should have started');
++
++    vi.advanceTimersByTime(46_000);
++
++    expect(missed).toHaveBeenCalledWith(['user-customer', 'user-rider'], started.call.callId);
++    expect(service.activeCount).toBe(0);
++  });
++
++  it('stops ringing once the call is answered', async () => {
++    vi.useFakeTimers();
++    const missed = vi.fn();
++    service = new CallSignalingService(stubPrisma(liveDelivery));
++    service.attachNotifier({ missed });
++
++    const started = await service.start(principal(), 'del-1');
++    if (!started.ok) throw new Error('call should have started');
++    service.accept(riderPrincipal(), started.call.callId);
++
++    vi.advanceTimersByTime(46_000);
++
++    expect(missed).not.toHaveBeenCalled();
++    expect(service.activeCount).toBe(1);
++  });
++
++  it('clears the line when a closed tab was the last connection', async () => {
++    service = new CallSignalingService(stubPrisma(liveDelivery));
++    const started = await service.start(principal(), 'del-1');
++    if (!started.ok) throw new Error('call should have started');
++
++    expect(service.endForUser('user-customer')).toEqual([started.call.callId]);
++    expect(service.activeCount).toBe(0);
++  });
++});
+diff --git a/backend/test/messaging.spec.ts b/backend/test/messaging.spec.ts
+new file mode 100644
+index 0000000..d83cab6
+--- /dev/null
++++ b/backend/test/messaging.spec.ts
+@@ -0,0 +1,178 @@
++import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
++import { MessagingService, toTermiiNumber } from '../src/messaging/messaging.service';
++
++/**
++ * Outbound SMS and email.
++ *
++ * These drivers were the last thing standing between a customer and a working
++ * sign-up: in production the console driver printed the code to a server log the
++ * customer cannot read, and selecting a real provider threw "configured in Phase 7"
++ * into a 500. Both of those failures looked identical from the browser — a
++ * verification screen that never works.
++ */
++
++const configWith = (values: Record<string, unknown>) =>
++  ({
++    get: (key: string, _opts?: unknown) => values[key],
++  }) as never;
++
++const sms = {
++  to: '+2348031234567',
++  kind: 'PHONE_OTP' as const,
++  body: '123456 is your Traders Welfare verification code.',
++};
++
++const email = {
++  to: 'ada@example.com',
++  kind: 'EMAIL_VERIFICATION' as const,
++  subject: 'Verify your email address',
++  body: 'Hello Ada, confirm your email: https://twl.example.com/verify?token=abc',
++};
++
++describe('phase 7 — outbound messages', () => {
++  let fetchMock: ReturnType<typeof vi.fn>;
++
++  beforeEach(() => {
++    fetchMock = vi.fn();
++    vi.stubGlobal('fetch', fetchMock);
++  });
++
++  afterEach(() => {
++    vi.unstubAllGlobals();
++    vi.restoreAllMocks();
++  });
++
++  describe('SMS through Termii', () => {
++    const termiiConfig = configWith({
++      SMS_MODE: 'TERMII',
++      EMAIL_MODE: 'CONSOLE',
++      TERMII_API_KEY: 'tl-key',
++      TERMII_SENDER_ID: 'TWL',
++      TERMII_CHANNEL: 'dnd',
++    });
++
++    it('posts the message to the Nigerian endpoint with the transactional route', async () => {
++      fetchMock.mockResolvedValue({ ok: true, status: 200, text: async () => '{"message_id":"m1","balance":12}' });
++
++      const result = await new MessagingService(termiiConfig).sendSms(sms);
++
++      expect(result).toMatchObject({ delivered: true, driver: 'termii' });
++      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
++      expect(url).toBe('https://api.ng.termii.com/api/sms/send');
++      const body = JSON.parse(init.body as string);
++      // Termii wants international format without the plus.
++      expect(body.to).toBe('2348031234567');
++      expect(body.from).toBe('TWL');
++      expect(body.channel).toBe('dnd');
++      expect(body.type).toBe('plain');
++      expect(body.sms).toContain('123456');
++      expect(body.api_key).toBe('tl-key');
++    });
++
++    it('reports a refusal instead of throwing, so registration still completes', async () => {
++      fetchMock.mockResolvedValue({ ok: false, status: 402, text: async () => 'Insufficient balance' });
++
++      const result = await new MessagingService(termiiConfig).sendSms(sms);
++
++      expect(result.delivered).toBe(false);
++      expect(result.reason).toContain('402');
++    });
++
++    it('treats a 200 carrying an error body as a failure', async () => {
++      // Termii answers 200 with an error object for some rejections; trusting the
++      // status code alone would silently record a message nobody received.
++      fetchMock.mockResolvedValue({
++        ok: true,
++        status: 200,
++        text: async () => '{"code":"400","message":"Invalid sender id"}',
++      });
++
++      const result = await new MessagingService(termiiConfig).sendSms(sms);
++      expect(result.delivered).toBe(false);
++    });
++
++    it('says so plainly when the key is missing, and calls nobody', async () => {
++      const noKey = configWith({ SMS_MODE: 'TERMII', EMAIL_MODE: 'CONSOLE', TERMII_API_KEY: '' });
++
++      const result = await new MessagingService(noKey).sendSms(sms);
++
++      expect(fetchMock).not.toHaveBeenCalled();
++      expect(result.delivered).toBe(false);
++      expect(result.reason).toContain('TERMII_API_KEY');
++    });
++
++    it('normalises every shape of Nigerian number Termii will accept', () => {
++      expect(toTermiiNumber('+2348031234567')).toBe('2348031234567');
++      expect(toTermiiNumber('08031234567')).toBe('2348031234567');
++      expect(toTermiiNumber('2348031234567')).toBe('2348031234567');
++      expect(toTermiiNumber('0803 123 4567')).toBe('2348031234567');
++    });
++  });
++
++  describe('email through Resend', () => {
++    const resendConfig = configWith({
++      SMS_MODE: 'CONSOLE',
++      EMAIL_MODE: 'RESEND',
++      RESEND_API_KEY: 're-key',
++      EMAIL_FROM: 'Traders Welfare <no-reply@twl.example.com>',
++    });
++
++    it('posts a plain-text and html body with the bearer key', async () => {
++      fetchMock.mockResolvedValue({ ok: true, status: 200, text: async () => '{"id":"e1"}' });
++
++      const result = await new MessagingService(resendConfig).sendEmail(email);
++
++      expect(result).toMatchObject({ delivered: true, driver: 'resend' });
++      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
++      expect(url).toBe('https://api.resend.com/emails');
++      expect((init.headers as Record<string, string>).Authorization).toBe('Bearer re-key');
++      const body = JSON.parse(init.body as string);
++      expect(body.to).toEqual(['ada@example.com']);
++      expect(body.from).toBe('Traders Welfare <no-reply@twl.example.com>');
++      expect(body.text).toContain('/verify?token=abc');
++      // The link has to be clickable in the HTML part, in a mail client that strips nothing.
++      expect(body.html).toContain('href="https://twl.example.com/verify?token=abc"');
++    });
++
++    it('escapes the message so a name cannot inject markup', async () => {
++      fetchMock.mockResolvedValue({ ok: true, status: 200, text: async () => '{}' });
++
++      await new MessagingService(resendConfig).sendEmail({
++        ...email,
++        body: 'Hello <script>alert(1)</script>',
++      });
++
++      const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
++      expect(body.html).not.toContain('<script>');
++      expect(body.html).toContain('&lt;script&gt;');
++    });
++
++    it('reports a Resend rejection without throwing', async () => {
++      fetchMock.mockResolvedValue({
++        ok: false,
++        status: 403,
++        text: async () => '{"message":"The twl.example.com domain is not verified"}',
++      });
++
++      const result = await new MessagingService(resendConfig).sendEmail(email);
++      expect(result.delivered).toBe(false);
++      expect(result.reason).toContain('403');
++    });
++  });
++
++  describe('console mode', () => {
++    const consoleConfig = configWith({ SMS_MODE: 'CONSOLE', EMAIL_MODE: 'CONSOLE' });
++
++    it('never claims to have delivered anything', async () => {
++      const service = new MessagingService(consoleConfig);
++
++      await expect(service.sendSms(sms)).resolves.toMatchObject({ delivered: false, driver: 'console' });
++      await expect(service.sendEmail(email)).resolves.toMatchObject({ delivered: false, driver: 'console' });
++      expect(fetchMock).not.toHaveBeenCalled();
++    });
++
++    it('describes itself in one line for the boot log', () => {
++      expect(new MessagingService(consoleConfig).describe()).toBe('SMS: console only · Email: console only');
++    });
++  });
++});
+diff --git a/deploy/.env.example b/deploy/.env.example
+index 74e0ea8..6031aa7 100644
+--- a/deploy/.env.example
++++ b/deploy/.env.example
+@@ -84,15 +84,17 @@ VITE_GOOGLE_MAPS_API_KEY=
+ 
+ # ── messaging ────────────────────────────────────────────────────────────────
+ # CONSOLE logs messages instead of sending them — never use it for real riders.
++# CONSOLE sends nothing (it only writes the message to the API log). TERMII sends
++# for real: API key + approved sender ID + the DND route enabled for the account.
+ SMS_MODE=CONSOLE
+ TERMII_API_KEY=
+ TERMII_SENDER_ID=TWL
++TERMII_CHANNEL=dnd            # dnd (transactional, required for OTP) | generic
+ 
+-# MASKED CALLS — the customer and rider reach each other through a proxy number,
+-# so neither ever sees the other's real one. CONSOLE means "not connected yet":
+-# the Call button explains that instead of dialling nothing. Switching to TERMII
+-# also needs a verified Termii account, an approved caller ID and a number pool.
+-VOICE_MODE=CONSOLE            # CONSOLE | TERMII
++# CALLS — IN_APP is a browser-to-browser call inside the app: no phone number is
++# involved on either side. TERMII rents a proxy number instead and needs a
++# number-masking account (KYC + number pool + per-minute billing).
++VOICE_MODE=IN_APP             # IN_APP | CONSOLE | TERMII
+ TERMII_VOICE_NUMBER_POOL=
+ EMAIL_MODE=CONSOLE
+ RESEND_API_KEY=
+diff --git a/documentation/CREDENTIALS-SETUP.md b/documentation/CREDENTIALS-SETUP.md
+index 4278345..b8f6b6b 100644
+--- a/documentation/CREDENTIALS-SETUP.md
++++ b/documentation/CREDENTIALS-SETUP.md
+@@ -192,15 +192,43 @@ Used for OTPs and rider offer alerts (the SMS fallback behind the socket).
+ 3. Request a **sender ID** (e.g. `DispX`). Approval is required before production traffic — this is the one
+    step that can take a few days, so start it early.
+ 4. Set `TERMII_SENDER_ID` to the approved value.
++5. **Ask Termii support to enable the DND (transactional) route on your account**, in writing. The
++   `generic` route is for promotional traffic: it is refused for OTPs, it does not reach numbers with
++   do-not-disturb active, and MTN blocks it between 20:00 and 08:00. Without the DND route, OTP delivery
++   is unreliable no matter how correct your key is.
+ 
+ ```dotenv
+ SMS_MODE=TERMII
+ TERMII_API_KEY="TL..."
+ TERMII_SENDER_ID="DispX"
++TERMII_CHANNEL=dnd          # dnd (transactional, needed for OTP) | generic
+ ```
+ 
++**How to tell it is on:** `GET /api/v1/health` → `integrations.sms` reads `TERMII` when the key is
++present and `TERMII_NO_KEY` when the mode is set but the key is empty — the state that looks configured
++and sends nothing. The full walk-through is in [MESSAGES-AND-CALLS.md](MESSAGES-AND-CALLS.md).
++
+ **Cost:** ~₦3.5–₦5 per message. Until then `SMS_MODE=CONSOLE` writes every message to the API log, which is
+-why the dev OTP/`devCode` flow works end to end without an SMS bill.
++why the dev OTP/`devCode` flow works end to end without an SMS bill — but it sends nothing, and the
++verification screen now says so rather than claiming a code went out.
++
++---
++
++## 4b. Calls — in-app (working) or masked numbers (needs their support)
++
++**In-app calling is on by default** (`VOICE_MODE=IN_APP`): the customer and the rider talk inside the
++app, browser to browser. No phone number exists on either side, so the "never reveal a number" rule
++holds by construction, and the line closes with the delivery.
++
++```dotenv
++VOICE_MODE=IN_APP           # IN_APP | CONSOLE | TERMII
++```
++
++To make a **real handset ring** instead, you need Termii's **number masking** product: KYC documents, a
++rented pool of numbers and per-minute billing, activated by their support team (it is not self-serve).
++When that account exists, set `VOICE_MODE=TERMII` and implement `requestCall()` in
++`backend/src/messaging/voice.service.ts` — that one method is the whole adapter. See
++[MESSAGES-AND-CALLS.md](MESSAGES-AND-CALLS.md#phone-to-phone-with-a-proxy-number-voice_modetermii-not-connected).
+ 
+ ---
+ 
+@@ -253,7 +281,8 @@ so documents are never publicly guessable.)
+ 
+ **After changing any value:** restart the API (`npm run dev --workspace @dispatch/api`) and check
+ `GET /api/v1/health` — it reports the live integration modes:
+-`{"integrations":{"payments":"SANDBOX","maps":"GOOGLE","sms":"TERMII","email":"RESEND"}}`.
++`{"integrations":{"payments":"SANDBOX","maps":"GEOAPIFY","sms":"TERMII","email":"RESEND"}}` —
++`TERMII_NO_KEY` / `RESEND_NO_KEY` mean the mode is selected but the key is missing.
+ 
+ ---
+ 
+diff --git a/documentation/MESSAGES-AND-CALLS.md b/documentation/MESSAGES-AND-CALLS.md
+new file mode 100644
+index 0000000..f90023b
+--- /dev/null
++++ b/documentation/MESSAGES-AND-CALLS.md
+@@ -0,0 +1,196 @@
++# Messages, verification and calls
++
++Everything a customer needs in the first five minutes — "prove you are you" — and
++everything the two people on a delivery need while it is happening. Written for
++whoever is running this deployment, not for a developer reading code.
++
++---
++
++## 1. The verification screen
++
++Sign-up creates the account and immediately tries to send **two** things:
++
++| Step | What is sent | Where it goes | How long it lasts |
++|---|---|---|---|
++| Email | a link | `‹site›/verify?token=…` | 24 hours |
++| Phone | a 6-digit code | `‹site›/verify` (type it in) | 10 minutes |
++
++Open the verification screen from the link in the email, or from `/verify`. Either
++way it is one screen with two halves: the email link confirms the address by
++itself (no typing), then the six digits confirm the phone.
++
++### What changed, and why the screen used to fail
++
++1. **The emailed link pointed at a page that did not exist.** The link was built as
++   `/verify-email?token=…` but the app only had `/verify`. Every click landed on
++   the 404 page, so the token was never used and the address could never be
++   confirmed. The link is now `/verify?token=…`, and `/verify-email` still works so
++   old links in people's inboxes stop failing.
++2. **The screen said "we sent you a code" whether or not anything was sent.** With
++   no SMS provider configured the code was written to the API log — useful for a
++   developer, invisible to a customer. The API now reports whether each message
++   actually left, and the screen says "we could not send the email just now"
++   instead of pretending. The code still works; the customer just knows to ask for
++   another one.
++3. **There was no way to ask for the email again.** A brand-new account has no
++   session yet, so the old resend button refused with a 401. There is now a
++   "Send the link again" button that needs only the address.
++4. **A failed message no longer breaks sign-up.** Previously any provider problem
++   threw, which turned registration into a 500 and lost the account. Messages are
++   now best-effort: the account is created, and the delivery result is reported.
++
++### Turning on real email (Resend)
++
++1. Sign up at <https://resend.com> (3,000 emails/month on the free tier).
++2. **Domains → Add domain**, then add the DNS records Resend shows you. Until the
++   domain is verified, Resend will only deliver to your own address.
++3. **API Keys → Create**, and copy the key.
++4. In the API environment:
++
++```dotenv
++EMAIL_MODE=RESEND
++RESEND_API_KEY="re_…"
++EMAIL_FROM="Traders Welfare <no-reply@yourdomain.com>"
++```
++
++### Turning on real SMS (Termii)
++
++1. Sign up at <https://termii.com> and top up a little credit (roughly ₦3.5–₦5 a
++   message).
++2. **Sender ID** — request one (3–11 letters/digits, e.g. `TWL`). Approval takes a
++   few days, so start it first.
++3. **The DND route.** Termii has two routes. `generic` is the promotional one: it
++   is blocked for OTP traffic, it does not reach numbers with do-not-disturb
++   active, and it cannot be used for OTPs. `dnd` is the transactional route we
++   need, and Termii support must switch it on for your account. Ask them in
++   writing: *"Please enable the DND/transactional route on my account for OTP
++   delivery."*
++4. In the API environment:
++
++```dotenv
++SMS_MODE=TERMII
++TERMII_API_KEY="TL…"
++TERMII_SENDER_ID="TWL"
++TERMII_CHANNEL=dnd
++```
++
++### How to check it is really on
++
++- `GET /api/v1/health` → `integrations.sms` and `.email` report **`TERMII`** and
++  **`RESEND`**. If they say `TERMII_NO_KEY` / `RESEND_NO_KEY`, the mode is selected
++  but the key is missing — a combination that looks configured and sends nothing.
++- The API boot log prints one line: `SMS: TERMII · Email: RESEND` (or
++  `console only`).
++- End to end: register a new account with a real address and a real number. The
++  email arrives within seconds; the SMS usually within 10.
++
++---
++
++## 2. Calls between the customer and the rider
++
++The rule that has not changed: **neither person ever learns the other's phone
++number, and the line closes when the delivery does.**
++
++There are two ways to honour that. Only one of them works without a provider
++account, and it is the one that is on:
++
++### In-app calling (on by default — `VOICE_MODE=IN_APP`)
++
++The call happens inside the app: the browser-to-browser audio connection known as
++WebRTC. There is no phone number anywhere in it, so there is nothing to reveal and
++nothing to leak. Pressing **Call** in the Contact card on a live delivery makes the
++other person's phone ring *inside the app*; they press **Answer**.
++
++What the server enforces (not the browser):
++
++- only the two people on that delivery may call each other;
++- only while the job is live — before a rider is assigned, and after delivery
++  (delivered, cancelled, failed), the call is refused;
++- one call at a time per person;
++- a call that is not answered stops ringing after 45 seconds;
++- a closed tab hangs the call up, so the other side is never left ringing;
++- a fresh call id every time, so an old id cannot be replayed.
++
++The audio never passes through our server and nothing is recorded.
++
++**Two honest limits.**
++
++1. *Both people must be online.* The call arrives over the live connection the app
++   keeps open. Someone with the app closed gets nothing — a phone-style
++   notification needs a push service (see §3).
++2. *Some networks block direct audio.* The connection uses free STUN servers to
++   find a path. Most home and mobile networks are fine; some corporate firewalls
++   and a minority of carrier NATs are not. When that happens the screen says the
++   call could not connect and points at the message box, which always works. The
++   fix is a TURN relay (e.g. Metered or Twilio), a paid per-gigabyte service —
++   a deployment decision, and a five-line change when you want it.
++
++### Phone-to-phone with a proxy number (`VOICE_MODE=TERMII`, not connected)
++
++The other route is the one people usually mean by "masked calling": the provider
++rents a temporary number, both parties dial it, and the provider joins the two
++calls. Neither sees the other's real number.
++
++This is **not self-serve**. It needs a Termii (or Africa's Talking) number-masking
++account with KYC documents, a rented pool of numbers and per-minute billing, and it
++is switched on by their support team. When that exists, `requestCall()` in
++`backend/src/messaging/voice.service.ts` is the single place that changes, and the
++Contact card starts ringing real handsets instead of the app.
++
++Until then the Contact card says *"Calls happen inside the app"* — it does not
++pretend to dial a number.
++
++### What to try in a demo
++
++1. Sign in as the customer (`/login`), book a delivery, and let a rider accept it
++   (or accept it in the rider portal on a second browser profile).
++2. Both open the delivery. Under **Contact**, press **Call**.
++3. The other browser shows "Customer is calling" with **Answer** / **Decline**.
++4. Speak — allow the microphone when the browser asks. The timer starts once the
++   audio is connected.
++5. Mark the delivery delivered, then press **Call** again: it is refused, because
++   the job is over. That refusal is the feature.
++
++---
++
++## 3. What still has to be connected
++
++The platform runs today without any of the paid accounts below: the demo is real,
++it just does not yet reach the outside world in these specific ways. In rough order
++of urgency.
++
++| # | What | What it unlocks | Where the key goes | Cost / lead time |
++|---|---|---|---|---|
++| 1 | **Resend** + a verified sending domain | Verification emails, password resets, receipts | `RESEND_API_KEY`, `EMAIL_FROM` | Free to 3,000/month · ~15 min (DNS) |
++| 2 | **Termii** sender ID + **DND route** | Real SMS codes and rider alerts | `TERMII_API_KEY`, `TERMII_SENDER_ID`, `TERMII_CHANNEL=dnd` | ~₦4/message · sender ID a few days |
++| 3 | **Paystack** (and/or Flutterwave) live keys + webhook URL | Customers paying into the wallet; rider payouts | `PAYSTACK_SECRET_KEY`, `PAYSTACK_WEBHOOK_SECRET` | Free · instant (sandbox works now) |
++| 4 | **Push notifications** (Firebase Cloud Messaging) | Calls and new-job alerts reaching a closed app or a locked phone | a Firebase project + a service key | Free · a day's work |
++| 5 | **TURN relay** (optional, Metered/Twilio) | In-app calls on networks that block direct audio | add to `ICE_SERVERS` in `frontend/src/lib/call.ts` | ~$1–$10/month |
++| 6 | **Termii number masking** (only if you want a real handset to ring) | Phone-to-phone calls through a proxy number | `VOICE_MODE=TERMII`, number pool | KYC + per-minute · support request |
++| 7 | **Geoapify** production key | Address search, road distance and the map — currently a demo key | `VITE_GEOAPIFY_API_KEY` (rebuild the site), `GEOAPIFY_API_KEY` | Free to 3,000 credits/day |
++| 8 | **Postgres that never pauses** | Data surviving the free tier's one-week idle pause | `DATABASE_URL`, `DIRECT_URL` | Supabase free / ~$25 month to stop pausing |
++| 9 | **A domain** | A link people trust in an email or an SMS | `FRONTEND_URL`, `CORS_ORIGINS` | ~₦15,000/year |
++| 10 | **A server that does not sleep** | No 30–60 second cold start before the first page loads | a paid instance | ~$5–7/month |
++
++Things already connected and working: Geoapify maps and address search, the
++database and Redis, chat over the live channel, in-app calling, saved places,
++staff invitations, and payments in **sandbox** mode (real flows, test cards).
++
++---
++
++## 4. Where the code lives
++
++| Concern | File |
++|---|---|
++| Outbound SMS (Termii) and email (Resend) | `backend/src/messaging/messaging.service.ts` |
++| Verification codes, links, resends | `backend/src/auth/verification.service.ts` |
++| The registration responses that report delivery | `backend/src/auth/auth.service.ts` |
++| Proxy-number calling (not connected) and the call status the screens read | `backend/src/messaging/voice.service.ts` |
++| In-app call permission rules and ringing timeout | `backend/src/realtime/call-signaling.service.ts` |
++| Call events on the live channel | `backend/src/realtime/realtime.gateway.ts` |
++| The call itself, in the browser | `frontend/src/lib/call.ts` |
++| The call panel | `frontend/src/components/CallOverlay.tsx` |
++| The verification screen | `frontend/src/pages/auth/VerifyPage.tsx` |
++
++Tests: `backend/test/messaging.spec.ts` and `backend/test/call-signaling.spec.ts`
++(23 tests between them, no database needed).
+diff --git a/documentation/RUNBOOK.md b/documentation/RUNBOOK.md
+index 19959d8..3b4aa26 100644
+--- a/documentation/RUNBOOK.md
++++ b/documentation/RUNBOOK.md
+@@ -383,6 +383,30 @@ that reference it. If the ledger does not balance, that is a **P1** — stop and
+ because something bypassed the service layer. If it balances and the rider disagrees, it is a
+ policy question (commission, hold period), answerable from `rider_earnings`.
+ 
++### "A customer says the verification link does not work"
++
++1. Open `GET /api/v1/health` and look at `integrations.email`. `CONSOLE` means nothing was ever
++   sent — the message is in the API log (`docker compose logs api | grep -i verification`).
++   `RESEND_NO_KEY` means the mode is on but the key is empty.
++2. If email is on, check the link in the message: it should read `‹FRONTEND_URL›/verify?token=…`.
++   A link built from the wrong address means `FRONTEND_URL` is unset and the fallback (the first
++   CORS origin) is pointing at a developer machine.
++3. The customer can ask for a fresh link from the verification screen — **Send the link again**
++   needs only the address, and works without signing in.
++4. Phone codes: a correct Termii key is not enough. If `TERMII_CHANNEL=generic`, OTPs are refused or
++   blocked; ask Termii support for the **DND/transactional** route. Full detail in
++   [MESSAGES-AND-CALLS.md](MESSAGES-AND-CALLS.md).
++
++### "The Call button says the call could not connect"
++
++The audio in an in-app call goes straight from one browser to the other, so a network that blocks
++direct connections (some offices, a minority of mobile carriers) cannot complete it. The message
++box on the same card always works. The permanent fix is a TURN relay — see
++[MESSAGES-AND-CALLS.md](MESSAGES-AND-CALLS.md) §2.
++
++If the button is missing or greyed out, the delivery is not live: calling is refused before a
++rider is assigned and after the job is delivered or cancelled. That is deliberate.
++
+ ### "Reports are queued forever"
+ 
+ See §3.2. Restarting `api` is the fix 9 times out of 10; a lost job can be re-requested from
+diff --git a/frontend/src/App.tsx b/frontend/src/App.tsx
+index 2887b86..ded6407 100644
+--- a/frontend/src/App.tsx
++++ b/frontend/src/App.tsx
+@@ -45,10 +45,15 @@ import {
+   RequirePermission,
+ } from "./routes/guards";
+ import NotFoundPage from "./pages/NotFoundPage";
++import { CallOverlay } from "./components/CallOverlay";
+ 
+ export default function App() {
+   return (
+     <Suspense fallback={<FullPageLoader label="Loading…" />}>
++      {/* Mounted once, above every route: a call follows the person from screen to
++          screen instead of dying when they open their wallet mid-conversation. It
++          draws nothing unless there is a call. */}
++      <CallOverlay />
+       <Routes>
+         {/* Public */}
+         <Route path="/" element={<LandingPage />} />
+@@ -88,7 +93,11 @@ export default function App() {
+             </RedirectIfAuthenticated>
+           }
+         />
++        {/* `/verify` is the screen; `/verify-email` is kept as an alias because
++            links already sitting in people's inboxes were built with that path and
++            pointed at a 404 — the reason "the verification link does not work". */}
+         <Route path="/verify" element={<VerifyPage />} />
++        <Route path="/verify-email" element={<VerifyPage />} />
+         {/* Staff invitations. Public, because the invitee has no account yet — the
+             token in the URL is the credential, and it works exactly once. */}
+         <Route
+diff --git a/frontend/src/components/CallOverlay.tsx b/frontend/src/components/CallOverlay.tsx
+new file mode 100644
+index 0000000..154d0cc
+--- /dev/null
++++ b/frontend/src/components/CallOverlay.tsx
+@@ -0,0 +1,99 @@
++import { useEffect, useRef, useState } from 'react';
++import { Button } from './ui';
++import {
++  acceptCall,
++  declineCall,
++  dismissCall,
++  endCall,
++  remoteStream,
++  subscribeToCall,
++  toggleMute,
++  type CallSnapshot,
++} from '../lib/call';
++
++/**
++ * The call itself, drawn over whatever screen the person was on.
++ *
++ * It renders nothing at all until a call exists, so it can be mounted once at the
++ * top of the app and forgotten. Every decision about who may call whom happens on
++ * the server; this component only shows the state and offers the two buttons a
++ * person expects: answer or decline, mute or hang up.
++ */
++export function CallOverlay() {
++  const [call, setCall] = useState<CallSnapshot>({ phase: 'idle', muted: false, seconds: 0 });
++  const audioRef = useRef<HTMLAudioElement>(null);
++
++  useEffect(() => subscribeToCall(setCall), []);
++
++  // The other person's voice. Attached on every snapshot because the underlying
++  // stream object is replaced when the connection is established.
++  useEffect(() => {
++    const stream = remoteStream();
++    const element = audioRef.current;
++    if (!element || !stream) return;
++    element.srcObject = stream;
++    void element.play().catch(() => undefined);
++  }, [call.phase, call.callId]);
++
++  if (call.phase === 'idle') return null;
++
++  const label = call.peerLabel ?? 'the other person';
++  const titles: Record<string, string> = {
++    dialling: `Calling ${label}…`,
++    ringing: `${label} is calling`,
++    connecting: 'Connecting…',
++    active: `On a call with ${label}`,
++    ended: 'Call ended',
++  };
++
++  const timer = `${String(Math.floor(call.seconds / 60)).padStart(2, '0')}:${String(call.seconds % 60).padStart(2, '0')}`;
++
++  return (
++    <div
++      className="fixed inset-x-3 bottom-4 z-50 mx-auto max-w-sm rounded-2xl border border-ink-200 bg-white p-4 shadow-xl sm:inset-x-auto sm:right-6"
++      role="dialog"
++      aria-label="Call"
++    >
++      <audio ref={audioRef} autoPlay playsInline className="hidden" />
++
++      <p className="text-sm font-semibold text-ink-900">{titles[call.phase]}</p>
++      {call.phase === 'active' && <p className="mt-0.5 font-mono text-xs text-ink-500">{timer}</p>}
++      {call.note && <p className="mt-1 text-[13px] leading-relaxed text-ink-600">{call.note}</p>}
++      {call.phase !== 'active' && call.phase !== 'ended' && (
++        <p className="mt-1 text-[13px] leading-relaxed text-ink-600">
++          No phone numbers are shared — the call happens inside the app.
++        </p>
++      )}
++
++      <div className="mt-3 flex flex-wrap gap-2">
++        {call.phase === 'ringing' && (
++          <>
++            <Button variant="accent" onClick={() => void acceptCall()}>
++              Answer
++            </Button>
++            <Button variant="secondary" onClick={declineCall}>
++              Decline
++            </Button>
++          </>
++        )}
++
++        {(call.phase === 'dialling' || call.phase === 'connecting' || call.phase === 'active') && (
++          <>
++            <Button variant="secondary" onClick={() => toggleMute()}>
++              {call.muted ? 'Unmute' : 'Mute'}
++            </Button>
++            <Button variant="danger" onClick={endCall}>
++              Hang up
++            </Button>
++          </>
++        )}
++
++        {call.phase === 'ended' && (
++          <Button variant="secondary" onClick={dismissCall}>
++            Close
++          </Button>
++        )}
++      </div>
++    </div>
++  );
++}
+diff --git a/frontend/src/components/ContactCard.tsx b/frontend/src/components/ContactCard.tsx
+index 1a6ed39..3d1a856 100644
+--- a/frontend/src/components/ContactCard.tsx
++++ b/frontend/src/components/ContactCard.tsx
+@@ -4,6 +4,7 @@ import { Badge, Button, Card, CardBody, CardHeader, Input, useToast } from './ui
+ import { LIVE_EVENTS, useLiveEvent } from '../lib/live';
+ import { useApiError } from '../contexts/AuthContext';
+ import { useContactStatus, useMessages, useRequestCall, useSendMessage } from '../hooks/useChat';
++import { startCall } from '../lib/call';
+ 
+ /**
+  * CONTACT — the customer and the rider reaching each other without either one
+@@ -66,8 +67,19 @@ export function ContactCard({
+     }
+   };
+ 
++  /**
++   * Two ways to reach each other, one card.
++   *
++   * In-app calling (the default) needs no phone number at all, so it is simply
++   * started here. The provider-number path below is kept for the day a
++   * number-masking account exists — it rings the real handset instead.
++   */
+   const placeCall = async () => {
+     setError(null);
++    if (contact.data?.inApp) {
++      await startCall(deliveryId);
++      return;
++    }
+     try {
+       const result = await call.mutateAsync();
+       notify({
+@@ -91,7 +103,7 @@ export function ContactCard({
+         }
+         action={
+           contact.data?.connected ? (
+-            <Badge tone="success">calling ready</Badge>
++            <Badge tone="success">{contact.data.inApp ? 'in-app calls' : 'calling ready'}</Badge>
+           ) : (
+             <Badge tone="neutral">messaging only</Badge>
+           )
+@@ -149,9 +161,11 @@ export function ContactCard({
+ 
+         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-ink-100 pt-3">
+           <p className="text-xs text-ink-500">
+-            {contact.data?.connected
+-              ? 'Calls are bridged through a proxy number — neither side sees a real one.'
+-              : 'Calling is not connected yet. Messaging works right now and costs nothing.'}
++            {contact.data?.inApp
++              ? 'Calls happen inside the app. No phone numbers are shared, and the line closes with the delivery.'
++              : contact.data?.connected
++                ? 'Calls are bridged through a proxy number — neither side sees a real one.'
++                : 'Calling is switched off. Messaging works right now and costs nothing.'}
+           </p>
+           <Button
+             variant="secondary"
+diff --git a/frontend/src/hooks/useChat.ts b/frontend/src/hooks/useChat.ts
+index 84b5d43..310a458 100644
+--- a/frontend/src/hooks/useChat.ts
++++ b/frontend/src/hooks/useChat.ts
+@@ -13,6 +13,8 @@ export interface ChatMessage {
+ export interface ContactStatus {
+   connected: boolean;
+   provider: string;
++  /** True when the call happens inside the app, with no phone number anywhere. */
++  inApp?: boolean;
+   reason: string | null;
+ }
+ 
+diff --git a/frontend/src/lib/call.ts b/frontend/src/lib/call.ts
+new file mode 100644
+index 0000000..b88f7cf
+--- /dev/null
++++ b/frontend/src/lib/call.ts
+@@ -0,0 +1,315 @@
++import { LIVE_EVENTS, emitLive, onLive } from './live';
++
++/**
++ * IN-APP CALLING (client side)
++ *
++ * A customer and a rider can talk about a live delivery without either of them
++ * ever seeing the other's phone number — because no number is involved at all.
++ * The audio goes straight from one browser to the other (WebRTC); the server only
++ * introduces them and enforces who may ring whom, for how long.
++ *
++ * This file is the whole client half of that: the state machine the screens
++ * render, and the peer connection behind it. It is deliberately outside React so
++ * a call survives navigation between pages — a customer who opens their wallet
++ * mid-call does not lose the call.
++ *
++ * Honest limits, stated here rather than discovered in a demo:
++ *   · Both people must be signed in and online (the socket must be up).
++ *   · Connection uses public STUN servers only. On a network that blocks direct
++ *     peer-to-peer audio (some corporate and mobile-carrier NATs) the call cannot
++ *     connect; the UI then says so and points at chat. A TURN relay fixes that and
++ *     costs money per gigabyte — it is a deployment decision, not a code one.
++ *   · Nothing is recorded, and nothing is stored on the server.
++ */
++
++export type CallPhase = 'idle' | 'dialling' | 'ringing' | 'connecting' | 'active' | 'ended';
++
++export interface CallSnapshot {
++  phase: CallPhase;
++  callId?: string;
++  /** Who is on the other end, for the label: "Customer" / "Rider" / their first name. */
++  peerLabel?: string;
++  deliveryId?: string;
++  /** Why the call stopped, phrased for a person. */
++  note?: string;
++  muted: boolean;
++  /** Seconds connected, for the timer. */
++  seconds: number;
++}
++
++const IDLE: CallSnapshot = { phase: 'idle', muted: false, seconds: 0 };
++
++const ICE_SERVERS: RTCIceServer[] = [
++  { urls: 'stun:stun.l.google.com:19302' },
++  { urls: 'stun:global.stun.twilio.com:3478' },
++];
++
++let snapshot: CallSnapshot = IDLE;
++const listeners = new Set<(next: CallSnapshot) => void>();
++
++let peer: RTCPeerConnection | null = null;
++let media: MediaStream | null = null;
++let localStream: MediaStream | null = null;
++let ticker: ReturnType<typeof setInterval> | null = null;
++/** Signals that arrive before the callee has picked up. */
++let pendingOffer: RTCSessionDescriptionInit | null = null;
++
++export function subscribeToCall(listener: (next: CallSnapshot) => void): () => void {
++  listeners.add(listener);
++  listener(snapshot);
++  return () => {
++    listeners.delete(listener);
++  };
++}
++
++export function currentCall(): CallSnapshot {
++  return snapshot;
++}
++
++/** The other person's audio, for the <audio> element in the overlay. */
++export function remoteStream(): MediaStream | null {
++  return media;
++}
++
++function set(next: Partial<CallSnapshot>): void {
++  snapshot = { ...snapshot, ...next };
++  for (const listener of listeners) listener(snapshot);
++}
++
++function reset(note?: string, keepVisible = false): void {
++  stopTicker();
++  pendingOffer = null;
++  peer?.close();
++  peer = null;
++  for (const track of localStream?.getTracks() ?? []) track.stop();
++  localStream = null;
++  media = null;
++
++  if (keepVisible && note) set({ ...IDLE, phase: 'ended', note });
++  else set(IDLE);
++}
++
++function stopTicker(): void {
++  if (ticker) clearInterval(ticker);
++  ticker = null;
++}
++
++function startTicker(since: number): void {
++  stopTicker();
++  ticker = setInterval(() => {
++    if (snapshot.phase !== 'active') return;
++    set({ seconds: Math.max(0, Math.round((Date.now() - since) / 1000)) });
++  }, 1000);
++}
++
++/* ─────────────────────────────── microphone ─────────────────────────────── */
++
++async function openMicrophone(): Promise<boolean> {
++  if (localStream) return true;
++  if (!navigator.mediaDevices?.getUserMedia) {
++    reset('This browser cannot make in-app calls. Use the message box instead.', true);
++    return false;
++  }
++  try {
++    localStream = await navigator.mediaDevices.getUserMedia({
++      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
++    });
++    return true;
++  } catch {
++    // Denied permission, or no microphone. Say which, without being dramatic.
++    reset(
++      'We could not use your microphone. Allow microphone access in the browser, or message instead — the thread works without it.',
++      true,
++    );
++    return false;
++  }
++}
++
++/* ─────────────────────────────── the call ─────────────────────────────── */
++
++/** Call the other person on this delivery. */
++export async function startCall(deliveryId: string): Promise<void> {
++  if (snapshot.phase !== 'idle' && snapshot.phase !== 'ended') return;
++
++  set({ ...IDLE, phase: 'dialling', deliveryId, note: undefined });
++  if (!(await openMicrophone())) return;
++
++  const sent = emitLive('call:start', { deliveryId }, (reply) => {
++    const answer = reply as { ok?: boolean; callId?: string; error?: string; message?: string };
++    if (!answer?.ok || !answer.callId) {
++      reset(answer?.message ?? 'The call could not be placed.', true);
++      return;
++    }
++    set({ phase: 'ringing', callId: answer.callId });
++  });
++
++  if (!sent) reset('You are offline. Check your connection and try again.', true);
++}
++
++/** Accept the incoming call. */
++export async function acceptCall(): Promise<void> {
++  if (snapshot.phase !== 'ringing' || !snapshot.callId) return;
++  const callId = snapshot.callId;
++
++  set({ phase: 'connecting' });
++  if (!(await openMicrophone())) return;
++
++  emitLive('call:accept', { callId });
++  // Any offer that arrived while it was ringing is applied now.
++  if (pendingOffer) {
++    await applyOffer(pendingOffer);
++    pendingOffer = null;
++  }
++}
++
++/** Decline the incoming call. */
++export function declineCall(): void {
++  const callId = snapshot.callId;
++  if (callId) emitLive('call:end', { callId, reason: 'DECLINED' });
++  reset('Call declined.');
++}
++
++/** Hang up — from either side, at any point. */
++export function endCall(): void {
++  const callId = snapshot.callId;
++  if (callId) emitLive('call:end', { callId, reason: 'HUNG_UP' });
++  reset();
++}
++
++export function toggleMute(): boolean {
++  const next = !snapshot.muted;
++  for (const track of localStream?.getAudioTracks() ?? []) track.enabled = !next;
++  set({ muted: next });
++  return next;
++}
++
++export function dismissCall(): void {
++  if (snapshot.phase === 'ended') reset();
++}
++
++/* ─────────────────────────────── peer wiring ─────────────────────────────── */
++
++function ensurePeer(callId: string): RTCPeerConnection {
++  if (peer) return peer;
++
++  const connection = new RTCPeerConnection({ iceServers: ICE_SERVERS });
++  peer = connection;
++
++  for (const track of localStream?.getTracks() ?? []) connection.addTrack(track, localStream!);
++
++  connection.onicecandidate = (event) => {
++    if (event.candidate) emitLive('call:signal', { callId, data: { kind: 'ice', candidate: event.candidate } });
++  };
++
++  media = new MediaStream();
++  connection.ontrack = (event) => {
++    media = event.streams[0] ?? media;
++  };
++
++  connection.onconnectionstatechange = () => {
++    const state = connection.connectionState;
++    if (state === 'connected') {
++      set({ phase: 'active', seconds: 0 });
++      startTicker(Date.now());
++    }
++    if (state === 'failed') {
++      reset('The call could not connect — your network may block direct audio. Try the message box.', true);
++    }
++    if (state === 'disconnected') {
++      // Give it a moment: mobile networks drop and come straight back. If it stays
++      // down, the call is over and the UI must not pretend otherwise.
++      setTimeout(() => {
++        if (peer?.connectionState === 'disconnected') {
++          reset('The call dropped. You can call again while the delivery is live.', true);
++        }
++      }, 8000);
++    }
++  };
++
++  return connection;
++}
++
++async function applyOffer(offer: RTCSessionDescriptionInit): Promise<void> {
++  const callId = snapshot.callId;
++  if (!callId) return;
++  const connection = ensurePeer(callId);
++  await connection.setRemoteDescription(offer);
++  const answer = await connection.createAnswer();
++  await connection.setLocalDescription(answer);
++  emitLive('call:signal', { callId, data: { kind: 'answer', sdp: answer } });
++}
++
++/* ─────────────────────────── incoming events ─────────────────────────── */
++
++onLive(LIVE_EVENTS.CALL_INCOMING, (payload) => {
++  const push = payload as { callId: string; deliveryId: string; from: 'CUSTOMER' | 'RIDER'; fromName?: string };
++  if (snapshot.phase !== 'idle' && snapshot.phase !== 'ended') {
++    // Already busy: tell the caller rather than leaving them ringing at a wall.
++    emitLive('call:end', { callId: push.callId, reason: 'DECLINED' });
++    return;
++  }
++  set({
++    ...IDLE,
++    phase: 'ringing',
++    callId: push.callId,
++    deliveryId: push.deliveryId,
++    peerLabel: push.fromName ?? (push.from === 'CUSTOMER' ? 'Customer' : 'Rider'),
++    note: undefined,
++  });
++});
++
++onLive(LIVE_EVENTS.CALL_ACCEPTED, (payload) => {
++  const { callId } = payload as { callId: string };
++  if (snapshot.callId !== callId) return;
++
++  set({ phase: 'connecting' });
++  const connection = ensurePeer(callId);
++  // The caller offers once it knows the other side picked up.
++  void (async () => {
++    const offer = await connection.createOffer();
++    await connection.setLocalDescription(offer);
++    emitLive('call:signal', { callId, data: { kind: 'offer', sdp: offer } });
++  })();
++});
++
++onLive(LIVE_EVENTS.CALL_SIGNAL, (payload) => {
++  const { callId, data } = payload as {
++    callId: string;
++    data: { kind: 'offer' | 'answer' | 'ice'; sdp?: RTCSessionDescriptionInit; candidate?: RTCIceCandidateInit };
++  };
++  if (snapshot.callId !== callId || !data) return;
++
++  if (data.kind === 'offer') {
++    // Callee: hold the offer until they actually pick up.
++    if (snapshot.phase === 'ringing') pendingOffer = data.sdp ?? null;
++    else void applyOffer(data.sdp!);
++    return;
++  }
++
++  const connection = peer;
++  if (!connection) return;
++  if (data.kind === 'answer' && data.sdp) void connection.setRemoteDescription(data.sdp);
++  if (data.kind === 'ice' && data.candidate) void connection.addIceCandidate(data.candidate).catch(() => undefined);
++});
++
++for (const event of [LIVE_EVENTS.CALL_DECLINED, LIVE_EVENTS.CALL_ENDED]) {
++  onLive(event, (payload) => {
++    const { callId, reason } = payload as { callId: string; reason?: string };
++    if (snapshot.callId !== callId) return;
++    reset(reason === 'MISSED' ? 'No answer.' : 'The call ended.');
++  });
++}
++
++onLive(LIVE_EVENTS.CALL_ERROR, (payload) => {
++  const { message } = payload as { message?: string };
++  reset(message ?? 'The call could not be placed.', true);
++});
++
++/** A dropped socket means no call — stop pretending otherwise. */
++export function handleLiveDropped(): void {
++  if (snapshot.phase !== 'idle') reset('The connection dropped, so the call ended.', true);
++}
++
++// live.ts avoids importing this file (that would be a cycle), so it announces the
++// drop on the window and the call state listens for it.
++window.addEventListener('live:dropped', handleLiveDropped);
+diff --git a/frontend/src/lib/live.ts b/frontend/src/lib/live.ts
+index 0ee83f7..96a1951 100644
+--- a/frontend/src/lib/live.ts
++++ b/frontend/src/lib/live.ts
+@@ -27,6 +27,13 @@ export const LIVE_EVENTS = {
+   TRACKING_PING: 'tracking:update',
+   DISPATCH_EXHAUSTED: 'dispatch:exhausted',
+   SESSION_REVOKED: 'session:revoked',
++  /* ── in-app calling ── */
++  CALL_INCOMING: 'call:incoming',
++  CALL_ACCEPTED: 'call:accepted',
++  CALL_DECLINED: 'call:declined',
++  CALL_ENDED: 'call:ended',
++  CALL_SIGNAL: 'call:signal',
++  CALL_ERROR: 'call:error',
+   ERROR: 'error:api',
+ } as const;
+ 
+@@ -58,7 +65,12 @@ export function connectLive(): void {
+   });
+ 
+   socket.on('connect', () => setConnected(true));
+-  socket.on('disconnect', () => setConnected(false));
++  socket.on('disconnect', () => {
++    setConnected(false);
++    // Anything that only works over a live connection (a call, most obviously)
++    // must stop claiming to work the moment the connection goes.
++    window.dispatchEvent(new CustomEvent('live:dropped'));
++  });
+   socket.on('connect_error', () => setConnected(false));
+ 
+   socket.on(LIVE_EVENTS.SESSION_REVOKED, () => {
+@@ -112,6 +124,19 @@ export function subscribeToDelivery(deliveryId: string): () => void {
+   return () => {};
+ }
+ 
++/**
++ * Send an event up the live channel.
++ *
++ * Returns false when there is no socket — calling code should tell the user the
++ * channel is down rather than wait for a reply that cannot arrive.
++ */
++export function emitLive(event: string, payload: unknown, ack?: (reply: unknown) => void): boolean {
++  if (!socket) return false;
++  if (ack) socket.emit(event, payload, ack);
++  else socket.emit(event, payload);
++  return true;
++}
++
+ /** React binding: run `handler` whenever the event arrives. */
+ export function useLiveEvent(event: string, handler: Handler): void {
+   useEffect(() => onLive(event, handler), [event, handler]);
+diff --git a/frontend/src/pages/auth/RegisterCustomerPage.tsx b/frontend/src/pages/auth/RegisterCustomerPage.tsx
+index 05556bf..56639d4 100644
+--- a/frontend/src/pages/auth/RegisterCustomerPage.tsx
++++ b/frontend/src/pages/auth/RegisterCustomerPage.tsx
+@@ -25,7 +25,12 @@ export default function RegisterCustomerPage() {
+     try {
+       const response = await api.post<{
+         message: string;
+-        verification: { devToken?: string; devCode?: string };
++        verification: {
++          devToken?: string;
++          devCode?: string;
++          emailDelivered?: boolean;
++          smsDelivered?: boolean;
++        };
+       }>('/auth/register/customer', values, { skipAuthRefresh: true });
+       navigate('/verify', {
+         state: { email: values.email, phone: values.phone, verification: response.verification },
+diff --git a/frontend/src/pages/auth/RegisterRiderPage.tsx b/frontend/src/pages/auth/RegisterRiderPage.tsx
+index 0ad0088..bb6be85 100644
+--- a/frontend/src/pages/auth/RegisterRiderPage.tsx
++++ b/frontend/src/pages/auth/RegisterRiderPage.tsx
+@@ -45,7 +45,7 @@ export default function RegisterRiderPage() {
+   const onSubmit = handleSubmit(async (values) => {
+     setFormError(null);
+     try {
+-      const response = await api.post<{ message: string; riderCode?: string; verification: { devToken?: string } }>(
++      const response = await api.post<{ message: string; riderCode?: string; verification: { devToken?: string; devCode?: string; emailDelivered?: boolean; smsDelivered?: boolean } }>(
+         '/auth/register/rider',
+         values,
+         { skipAuthRefresh: true },
+diff --git a/frontend/src/pages/auth/VerifyPage.tsx b/frontend/src/pages/auth/VerifyPage.tsx
+index fae96b4..76badb6 100644
+--- a/frontend/src/pages/auth/VerifyPage.tsx
++++ b/frontend/src/pages/auth/VerifyPage.tsx
+@@ -19,15 +19,31 @@ export default function VerifyPage() {
+   const state = (location.state ?? {}) as {
+     email?: string;
+     phone?: string;
+-    verification?: { devToken?: string; devCode?: string };
++    verification?: {
++      devToken?: string;
++      devCode?: string;
++      emailDelivered?: boolean;
++      smsDelivered?: boolean;
++    };
+     rider?: boolean;
+   };
+ 
++  /**
++   * Whether the codes actually left the building.
++   *
++   * When the API could not reach the SMS or email provider it says so, and this
++   * screen says so too — "we sent you a code" is the most useless sentence in
++   * software when nothing was sent. `undefined` means we were not told (an older
++   * response, or arriving from an emailed link), which is not the same as "failed".
++   */
++  const emailFailed = state.verification?.emailDelivered === false;
++  const smsFailed = state.verification?.smsDelivered === false;
++
+   const [emailToken, setEmailToken] = useState(params.get('token') ?? state.verification?.devToken ?? '');
+   const [code, setCode] = useState(state.verification?.devCode ?? '');
+   const [phone, setPhone] = useState(state.phone ?? '');
+   const [status, setStatus] = useState<{ tone: 'success' | 'danger' | 'info'; message: string } | null>(null);
+-  const [busy, setBusy] = useState<'email' | 'phone' | 'resend' | null>(null);
++  const [busy, setBusy] = useState<'email' | 'phone' | 'resend' | 'resendEmail' | null>(null);
+   const autoRan = useRef(false);
+ 
+   const verifyEmail = async (token: string) => {
+@@ -67,13 +83,21 @@ export default function VerifyPage() {
+   const resend = async () => {
+     setBusy('resend');
+     try {
+-      const response = await api.post<{ devCode?: string; message: string }>(
++      const response = await api.post<{ devCode?: string; message: string; delivered?: boolean }>(
+         '/auth/otp/request',
+         { phone },
+         { skipAuthRefresh: true },
+       );
+       if (response.devCode) setCode(response.devCode);
+-      setStatus({ tone: 'info', message: response.message });
++      if (response.delivered === false) {
++        setStatus({
++          tone: 'danger',
++          message:
++            'We could not send the code to that number just now. Check the number and try again in a minute.',
++        });
++        return;
++      }
++      setStatus({ tone: 'info', message: 'A new code is on its way to your phone.' });
+     } catch (error) {
+       setStatus({ tone: 'danger', message: error instanceof ApiError ? error.userMessage : 'Could not resend' });
+     } finally {
+@@ -81,10 +105,43 @@ export default function VerifyPage() {
+     }
+   };
+ 
++  /**
++   * Ask for another verification email.
++   *
++   * This is the signed-out route on purpose: a brand-new customer has no session
++   * yet, so if the first email went to spam there was previously no way forward at
++   * all. The reply is worded the same whether or not the address exists.
++   */
++  const resendEmail = async () => {
++    if (!state.email) return;
++    setBusy('resendEmail');
++    try {
++      const response = await api.post<{ message: string }>(
++        '/auth/resend-verification-email',
++        { email: state.email },
++        { skipAuthRefresh: true },
++      );
++      setStatus({ tone: 'info', message: response.message });
++    } catch (error) {
++      setStatus({
++        tone: 'danger',
++        message: error instanceof ApiError ? error.userMessage : 'Could not send the email',
++      });
++    } finally {
++      setBusy(null);
++    }
++  };
++
+   return (
+     <AuthLayout
+       title="Verify your account"
+-      subtitle={state.email ? `We sent a link to ${state.email} and a code to your phone.` : 'Confirm your email and phone number.'}
++      subtitle={
++        emailFailed || smsFailed
++          ? 'Confirm your email and phone number. One of the messages below did not go out — you can send it again.'
++          : state.email
++            ? `We sent a link to ${state.email} and a code to your phone.`
++            : 'Confirm your email and phone number.'
++      }
+       footer={
+         <>
+           Already verified?{' '}
+@@ -97,19 +154,49 @@ export default function VerifyPage() {
+       <div className="space-y-5">
+         {status && <Alert tone={status.tone}>{status.message}</Alert>}
+ 
++        {(emailFailed || smsFailed) && (
++          <Alert tone="warning" title="Some messages did not go out">
++            {emailFailed && smsFailed
++              ? 'We could not send the email or the SMS just now.'
++              : emailFailed
++                ? 'We could not send the email just now.'
++                : 'We could not send the SMS just now.'}{' '}
++            Your account exists and nothing is lost — use the resend buttons below, or contact support
++            if it keeps happening.
++          </Alert>
++        )}
++
+         <section className="card-surface p-4">
+           <h2 className="text-sm font-semibold text-ink-900">1. Email address</h2>
+-          <p className="mt-0.5 text-xs text-ink-500">Paste the code from the link we emailed you.</p>
++          <p className="mt-0.5 text-xs text-ink-500">
++            We emailed you a link — opening it confirms your address automatically. If you would rather confirm
++            here, paste the part of the link that comes after <code>token=</code>.
++          </p>
+           <div className="mt-3 space-y-3">
+             <Input
+-              label="Verification code"
++              label="Code from the email"
+               value={emailToken}
+               onChange={(event) => setEmailToken(event.target.value)}
+-              placeholder="Paste the token from your email"
++              placeholder="Paste the long code from the link"
+             />
+-            <Button variant="secondary" onClick={() => void verifyEmail(emailToken)} isLoading={busy === 'email'} disabled={!emailToken}>
+-              Verify email
+-            </Button>
++            <div className="flex flex-wrap gap-2">
++              <Button
++                variant="secondary"
++                onClick={() => void verifyEmail(emailToken)}
++                isLoading={busy === 'email'}
++                disabled={!emailToken}
++              >
++                Verify email
++              </Button>
++              <Button
++                variant="ghost"
++                onClick={() => void resendEmail()}
++                isLoading={busy === 'resendEmail'}
++                disabled={!state.email}
++              >
++                Send the link again
++              </Button>
++            </div>
+           </div>
+         </section>
+ 
+-- 
+2.47.3
+

@@ -25,7 +25,12 @@ export default function RegisterCustomerPage() {
     try {
       const response = await api.post<{
         message: string;
-        verification: { devToken?: string; devCode?: string };
+        verification: {
+          devToken?: string;
+          devCode?: string;
+          emailDelivered?: boolean;
+          smsDelivered?: boolean;
+        };
       }>('/auth/register/customer', values, { skipAuthRefresh: true });
       navigate('/verify', {
         state: { email: values.email, phone: values.phone, verification: response.verification },

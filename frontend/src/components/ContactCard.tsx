@@ -4,6 +4,7 @@ import { Badge, Button, Card, CardBody, CardHeader, Input, useToast } from './ui
 import { LIVE_EVENTS, useLiveEvent } from '../lib/live';
 import { useApiError } from '../contexts/AuthContext';
 import { useContactStatus, useMessages, useRequestCall, useSendMessage } from '../hooks/useChat';
+import { startCall } from '../lib/call';
 
 /**
  * CONTACT — the customer and the rider reaching each other without either one
@@ -66,8 +67,19 @@ export function ContactCard({
     }
   };
 
+  /**
+   * Two ways to reach each other, one card.
+   *
+   * In-app calling (the default) needs no phone number at all, so it is simply
+   * started here. The provider-number path below is kept for the day a
+   * number-masking account exists — it rings the real handset instead.
+   */
   const placeCall = async () => {
     setError(null);
+    if (contact.data?.inApp) {
+      await startCall(deliveryId);
+      return;
+    }
     try {
       const result = await call.mutateAsync();
       notify({
@@ -91,7 +103,7 @@ export function ContactCard({
         }
         action={
           contact.data?.connected ? (
-            <Badge tone="success">calling ready</Badge>
+            <Badge tone="success">{contact.data.inApp ? 'in-app calls' : 'calling ready'}</Badge>
           ) : (
             <Badge tone="neutral">messaging only</Badge>
           )
@@ -149,9 +161,11 @@ export function ContactCard({
 
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-ink-100 pt-3">
           <p className="text-xs text-ink-500">
-            {contact.data?.connected
-              ? 'Calls are bridged through a proxy number — neither side sees a real one.'
-              : 'Calling is not connected yet. Messaging works right now and costs nothing.'}
+            {contact.data?.inApp
+              ? 'Calls happen inside the app. No phone numbers are shared, and the line closes with the delivery.'
+              : contact.data?.connected
+                ? 'Calls are bridged through a proxy number — neither side sees a real one.'
+                : 'Calling is switched off. Messaging works right now and costs nothing.'}
           </p>
           <Button
             variant="secondary"

@@ -149,6 +149,14 @@ export class AuthController {
     return this.auth.resendEmailVerification(user);
   }
 
+  /** Signed out, no session: the address is the only thing we have. */
+  @Public()
+  @RateLimit({ points: 3, windowSeconds: 300, keyBy: 'ip' })
+  @Post('resend-verification-email')
+  async resendVerificationEmail(@ZodBody(z.object({ email: z.string().trim().email() })) body: { email: string }) {
+    return this.auth.resendEmailVerificationByAddress(body.email);
+  }
+
   @Public()
   @RateLimit({ points: 5, windowSeconds: 300, keyBy: 'body', bodyField: 'phone' })
   @Post('otp/request')

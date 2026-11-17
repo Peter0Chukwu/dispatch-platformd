@@ -1,42 +1,38 @@
-saved places: a new neighbourhood is a row now, not a deploy
+verification that tells the truth, and calls that need no phone number
 
-The twelve Benin City pickup points lived in two source files that had to be kept
-in step by hand — one for the API, one for the browser. Every new neighbourhood
-meant editing both, rebuilding the web image, and redeploying. That is the wrong
-shape for a business whose coverage area grows.
+The verification screen could not work, and it was two separate faults.
 
-They are a table now: saved_locations, seeded by the migration with exactly the
-twelve places the platform launched with (no booking changes underneath anyone),
-and maintained at Admin → Saved places.
+The emailed link pointed at /verify-email, which the app has never had — every
+click landed on the 404 page and the token was never used, so an address could
+never be confirmed. The link now points at /verify (and /verify-email is kept as
+an alias, so links already sitting in inboxes stop failing). While in there: the
+link was built from the first CORS origin, which on a careless deployment is a
+developer's laptop; FRONTEND_URL is now what it uses.
 
-  · The screen lists every place, live or hidden, and adds/edits one in a form
-    that will look the coordinates up from the address using the same geocoder
-    the booking form uses, showing what it found before saving. Coordinates are
-    what fares and dispatch radii are measured from, so they are never guessed
-    silently.
-  · Hiding beats deleting: a place that has carried a thousand parcels is the
-    historical label for them. Hide takes it off the booking form; Restore puts
-    it back. Nothing in delivery history changes.
-  · Menu entry and route sit behind settings:read / settings:write — these are
-    settings, not money and not people, and every fare is recomputed server-side
-    from the coordinates.
-  · Every write is audited, so "why did the fare for Ikpoba Hill change?" has an
-    answer that is not a guess.
+The second fault was quieter. With no SMS or email provider configured, codes were
+written to the API log and the screens still said "we sent you a code" — the most
+useless sentence in software. The messaging drivers were placeholders that threw
+when a real provider was selected, which turned a registration into a 500. Now:
 
-The API reads the table on the autocomplete hot path, so the active list is cached
-in memory (60 s) and dropped the instant an admin writes — a new place appears on
-the customer's next keystroke, which is what makes this worth doing at all.
+  · SMS goes to Termii for real (approval, DND route, sender ID — all in
+    MESSAGES-AND-CALLS.md), email goes to Resend with an HTML body;
+  · both return DeliveryResult {delivered, driver, reason} instead of throwing,
+    so a provider outage costs a message, never an account;
+  · registration reports exactly which message went out, and the verification
+    screen says "we could not send the SMS just now" when that is the truth;
+  · a new signed-out resend endpoint exists, because a brand-new customer has no
+    session and previously had no way to ask for the link again.
 
-Two safety nets, in order. If the table cannot be read — a deployment that has not
-run the migration — the API logs one warning and serves the built-in list, so the
-booking form keeps working. And the browser keeps a bundled copy for the same
-reason. Neither is the source of truth; both are floors.
+And calling. It used to be a Call button that could only throw "adapter is not
+implemented yet", because number masking in Nigeria needs KYC, a rented number
+pool and per-minute billing — none of it self-serve. The promise was never "dial
+a proxy number", it was "talk without either of you learning the other's number".
+An in-app call keeps that promise with no number in it at all: WebRTC, browser to
+browser, audio never through our server. The server only decides who may ring
+whom — the two parties of a live delivery, nobody else, one call at a time, 45
+seconds to answer, closed when the job closes. VOICE_MODE=TERMII stays available
+for the day a masking account exists.
 
-7 new tests (cache reuse, invalidation on write, the missing-table fallback, a
-database place outranking a provider's answer, and the built-in fallback), 59
-unit tests green, tsc clean on both sides, vite build produces a bundle.
-The migration's CREATE TABLE was checked byte-for-byte against `prisma migrate
-diff`. The DB-backed e2e suite and the migration itself have not run here — there
-is no Postgres in this sandbox — so `npx prisma migrate deploy` on the deployment
-is the step to watch.
+23 new tests (81 total, no database): Termii and Resend request shapes, error
+bodies that arrive with a 200, and every refusal the call broker can make.
 

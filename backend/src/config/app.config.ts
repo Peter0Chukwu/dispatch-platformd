@@ -56,6 +56,25 @@ export class AppConfig {
   }
   get smsMode() { return this.config.get('SMS_MODE', { infer: true }); }
   get emailMode() { return this.config.get('EMAIL_MODE', { infer: true }); }
+  get termiiApiKey(): string | undefined {
+    const key = this.config.get('TERMII_API_KEY', { infer: true })?.trim();
+    return key ? key : undefined;
+  }
+  get resendApiKey(): string | undefined {
+    const key = this.config.get('RESEND_API_KEY', { infer: true })?.trim();
+    return key ? key : undefined;
+  }
+  /**
+   * What the health block should say: the mode alone is misleading. `SMS_MODE=TERMII`
+   * with no key set delivers nothing, and that combination is exactly the one that
+   * looks configured and is not.
+   */
+  get smsDelivery(): string {
+    return this.smsMode === 'TERMII' ? (this.termiiApiKey ? 'TERMII' : 'TERMII_NO_KEY') : 'CONSOLE';
+  }
+  get emailDelivery(): string {
+    return this.emailMode === 'RESEND' ? (this.resendApiKey ? 'RESEND' : 'RESEND_NO_KEY') : 'CONSOLE';
+  }
   get commissionPercent() { return this.config.get('DEFAULT_COMMISSION_PCT', { infer: true }); }
   get offerTimeoutSeconds() { return this.config.get('DISPATCH_OFFER_TIMEOUT_SECONDS', { infer: true }); }
   get maxActivePerRider() { return this.config.get('DISPATCH_MAX_ACTIVE_PER_RIDER', { infer: true }); }

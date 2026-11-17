@@ -45,7 +45,7 @@ export default function RegisterRiderPage() {
   const onSubmit = handleSubmit(async (values) => {
     setFormError(null);
     try {
-      const response = await api.post<{ message: string; riderCode?: string; verification: { devToken?: string } }>(
+      const response = await api.post<{ message: string; riderCode?: string; verification: { devToken?: string; devCode?: string; emailDelivered?: boolean; smsDelivered?: boolean } }>(
         '/auth/register/rider',
         values,
         { skipAuthRefresh: true },

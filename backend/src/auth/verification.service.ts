@@ -42,6 +42,21 @@ export class VerificationService {
     return this.config.get('NODE_ENV', { infer: true }) !== 'production';
   }
 
+  /**
+   * Where a link in an email should point.
+   *
+   * This used to be the first entry of CORS_ORIGINS, which is a list of origins
+   * allowed to call the API — not the address customers use. On a deployment where
+   * that list still said `http://localhost:5173`, every verification email carried
+   * a link to the developer's laptop. FRONTEND_URL is the public site; the CORS
+   * list is only the fallback for a machine that has not set it.
+   */
+  private get siteUrl(): string {
+    const frontend = this.config.get('FRONTEND_URL', { infer: true })?.trim();
+    const cors = this.config.get('CORS_ORIGINS', { infer: true }).split(',')[0]?.trim();
+    return (frontend || cors || 'http://localhost:5173').replace(/\/+$/, '');
+  }
+
   private async issue(userId: string, purpose: 'EMAIL_VERIFY' | 'PHONE_OTP' | 'PASSWORD_RESET', value: string, destination: string, ttlMs: number) {
     // Supersede any earlier outstanding code for the same purpose.
     await this.prisma.verificationToken.updateMany({
@@ -61,18 +76,29 @@ export class VerificationService {
     return record;
   }
 
-  async sendEmailVerification(user: { id: string; email: string | null; firstName: string }): Promise<{ devToken?: string }> {
+  async sendEmailVerification(user: {
+    id: string;
+    email: string | null;
+    firstName: string;
+  }): Promise<{ devToken?: string; delivered: boolean; deliveryReason?: string }> {
     if (!user.email) throw AppError.validation([{ field: 'email', message: 'No email address on this account' }]);
     const token = randomBytes(32).toString('base64url');
     await this.issue(user.id, 'EMAIL_VERIFY', token, user.email, TTL.EMAIL_VERIFY);
-    const link = `${this.config.get('CORS_ORIGINS', { infer: true }).split(',')[0]}/verify-email?token=${token}`;
-    await this.messaging.sendEmail({
+    // `/verify` is the route that actually exists — the old link pointed at
+    // `/verify-email`, which the app does not have, so every emailed link landed
+    // on a 404 and the account could never be verified.
+    const link = `${this.siteUrl}/verify?token=${token}`;
+    const delivery = await this.messaging.sendEmail({
       to: user.email,
       kind: 'EMAIL_VERIFICATION',
       subject: 'Verify your email address',
-      body: `Hello ${user.firstName}, confirm your email address to activate your account: ${link}`,
+      body: `Hello ${user.firstName}, confirm your email address to activate your account: ${link}\n\nThe link works for 24 hours.`,
     });
-    return this.exposeCodes ? { devToken: token } : {};
+    return {
+      ...(this.exposeCodes ? { devToken: token } : {}),
+      delivered: delivery.delivered,
+      deliveryReason: delivery.delivered ? undefined : delivery.reason,
+    };
   }
 
   async verifyEmail(token: string): Promise<{ userId: string }> {
@@ -97,18 +123,26 @@ export class VerificationService {
     return { userId: record.userId };
   }
 
-  async sendPhoneOtp(user: { id: string; phone: string | null; firstName: string }): Promise<{ devCode?: string; expiresInSeconds: number }> {
+  async sendPhoneOtp(user: {
+    id: string;
+    phone: string | null;
+    firstName: string;
+  }): Promise<{ devCode?: string; expiresInSeconds: number; delivered: boolean; deliveryReason?: string }> {
     if (!user.phone) throw AppError.validation([{ field: 'phone', message: 'No phone number on this account' }]);
     const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
     await this.issue(user.id, 'PHONE_OTP', `${user.id}:${code}`, user.phone, TTL.PHONE_OTP);
-    await this.messaging.sendSms({
+    const delivery = await this.messaging.sendSms({
       to: user.phone,
       kind: 'PHONE_OTP',
-      body: `Your TWL verification code is ${code}. It expires in 10 minutes. Never share it.`,
+      body: `${code} is your Traders Welfare verification code. It expires in 10 minutes. Never share it.`,
     });
     return {
       ...(this.exposeCodes ? { devCode: code } : {}),
       expiresInSeconds: TTL.PHONE_OTP / 1000,
+      // The browser is told the truth: a code that never left the building must not
+      // be described as "sent".
+      delivered: delivery.delivered,
+      deliveryReason: delivery.delivered ? undefined : delivery.reason,
     };
   }
 
@@ -144,7 +178,7 @@ export class VerificationService {
    * Always returns success, whether or not the account exists — an enumeration
    * attack must not learn which emails/phones are registered.
    */
-  async sendPasswordReset(identifier: string): Promise<{ devToken?: string }> {
+  async sendPasswordReset(identifier: string): Promise<{ devToken?: string; delivered: boolean }> {
     const user = await this.prisma.user.findFirst({
       where: {
         OR: [
@@ -157,19 +191,24 @@ export class VerificationService {
     });
     if (!user || !user.email) {
       this.logger.log('Password reset requested for an unknown identifier — no message sent');
-      return {};
+      // Deliberately identical to a successful request: the caller must not learn
+      // whether the account exists.
+      return { delivered: false };
     }
 
     const token = randomBytes(32).toString('base64url');
     await this.issue(user.id, 'PASSWORD_RESET', token, user.email, TTL.PASSWORD_RESET);
-    const link = `${this.config.get('CORS_ORIGINS', { infer: true }).split(',')[0]}/reset-password?token=${token}`;
-    await this.messaging.sendEmail({
+    const link = `${this.siteUrl}/reset-password?token=${token}`;
+    const delivery = await this.messaging.sendEmail({
       to: user.email,
       kind: 'PASSWORD_RESET',
       subject: 'Reset your password',
       body: `Hello ${user.firstName}, use this link to choose a new password (valid for 1 hour): ${link}. If you did not ask for this, ignore this message.`,
     });
-    return this.exposeCodes ? { devToken: token } : {};
+    return {
+      ...(this.exposeCodes ? { devToken: token } : {}),
+      delivered: delivery.delivered,
+    };
   }
 
   async resetPassword(token: string, newPassword: string): Promise<void> {

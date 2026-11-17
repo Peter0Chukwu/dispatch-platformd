@@ -192,15 +192,43 @@ Used for OTPs and rider offer alerts (the SMS fallback behind the socket).
 3. Request a **sender ID** (e.g. `DispX`). Approval is required before production traffic — this is the one
    step that can take a few days, so start it early.
 4. Set `TERMII_SENDER_ID` to the approved value.
+5. **Ask Termii support to enable the DND (transactional) route on your account**, in writing. The
+   `generic` route is for promotional traffic: it is refused for OTPs, it does not reach numbers with
+   do-not-disturb active, and MTN blocks it between 20:00 and 08:00. Without the DND route, OTP delivery
+   is unreliable no matter how correct your key is.
 
 ```dotenv
 SMS_MODE=TERMII
 TERMII_API_KEY="TL..."
 TERMII_SENDER_ID="DispX"
+TERMII_CHANNEL=dnd          # dnd (transactional, needed for OTP) | generic
 ```
 
+**How to tell it is on:** `GET /api/v1/health` → `integrations.sms` reads `TERMII` when the key is
+present and `TERMII_NO_KEY` when the mode is set but the key is empty — the state that looks configured
+and sends nothing. The full walk-through is in [MESSAGES-AND-CALLS.md](MESSAGES-AND-CALLS.md).
+
 **Cost:** ~₦3.5–₦5 per message. Until then `SMS_MODE=CONSOLE` writes every message to the API log, which is
-why the dev OTP/`devCode` flow works end to end without an SMS bill.
+why the dev OTP/`devCode` flow works end to end without an SMS bill — but it sends nothing, and the
+verification screen now says so rather than claiming a code went out.
+
+---
+
+## 4b. Calls — in-app (working) or masked numbers (needs their support)
+
+**In-app calling is on by default** (`VOICE_MODE=IN_APP`): the customer and the rider talk inside the
+app, browser to browser. No phone number exists on either side, so the "never reveal a number" rule
+holds by construction, and the line closes with the delivery.
+
+```dotenv
+VOICE_MODE=IN_APP           # IN_APP | CONSOLE | TERMII
+```
+
+To make a **real handset ring** instead, you need Termii's **number masking** product: KYC documents, a
+rented pool of numbers and per-minute billing, activated by their support team (it is not self-serve).
+When that account exists, set `VOICE_MODE=TERMII` and implement `requestCall()` in
+`backend/src/messaging/voice.service.ts` — that one method is the whole adapter. See
+[MESSAGES-AND-CALLS.md](MESSAGES-AND-CALLS.md#phone-to-phone-with-a-proxy-number-voice_modetermii-not-connected).
 
 ---
 
@@ -253,7 +281,8 @@ so documents are never publicly guessable.)
 
 **After changing any value:** restart the API (`npm run dev --workspace @dispatch/api`) and check
 `GET /api/v1/health` — it reports the live integration modes:
-`{"integrations":{"payments":"SANDBOX","maps":"GOOGLE","sms":"TERMII","email":"RESEND"}}`.
+`{"integrations":{"payments":"SANDBOX","maps":"GEOAPIFY","sms":"TERMII","email":"RESEND"}}` —
+`TERMII_NO_KEY` / `RESEND_NO_KEY` mean the mode is selected but the key is missing.
 
 ---
 

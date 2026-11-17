@@ -45,10 +45,15 @@ import {
   RequirePermission,
 } from "./routes/guards";
 import NotFoundPage from "./pages/NotFoundPage";
+import { CallOverlay } from "./components/CallOverlay";
 
 export default function App() {
   return (
     <Suspense fallback={<FullPageLoader label="Loading…" />}>
+      {/* Mounted once, above every route: a call follows the person from screen to
+          screen instead of dying when they open their wallet mid-conversation. It
+          draws nothing unless there is a call. */}
+      <CallOverlay />
       <Routes>
         {/* Public */}
         <Route path="/" element={<LandingPage />} />
@@ -88,7 +93,11 @@ export default function App() {
             </RedirectIfAuthenticated>
           }
         />
+        {/* `/verify` is the screen; `/verify-email` is kept as an alias because
+            links already sitting in people's inboxes were built with that path and
+            pointed at a 404 — the reason "the verification link does not work". */}
         <Route path="/verify" element={<VerifyPage />} />
+        <Route path="/verify-email" element={<VerifyPage />} />
         {/* Staff invitations. Public, because the invitee has no account yet — the
             token in the URL is the credential, and it works exactly once. */}
         <Route

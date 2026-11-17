@@ -19,15 +19,31 @@ export default function VerifyPage() {
   const state = (location.state ?? {}) as {
     email?: string;
     phone?: string;
-    verification?: { devToken?: string; devCode?: string };
+    verification?: {
+      devToken?: string;
+      devCode?: string;
+      emailDelivered?: boolean;
+      smsDelivered?: boolean;
+    };
     rider?: boolean;
   };
+
+  /**
+   * Whether the codes actually left the building.
+   *
+   * When the API could not reach the SMS or email provider it says so, and this
+   * screen says so too — "we sent you a code" is the most useless sentence in
+   * software when nothing was sent. `undefined` means we were not told (an older
+   * response, or arriving from an emailed link), which is not the same as "failed".
+   */
+  const emailFailed = state.verification?.emailDelivered === false;
+  const smsFailed = state.verification?.smsDelivered === false;
 
   const [emailToken, setEmailToken] = useState(params.get('token') ?? state.verification?.devToken ?? '');
   const [code, setCode] = useState(state.verification?.devCode ?? '');
   const [phone, setPhone] = useState(state.phone ?? '');
   const [status, setStatus] = useState<{ tone: 'success' | 'danger' | 'info'; message: string } | null>(null);
-  const [busy, setBusy] = useState<'email' | 'phone' | 'resend' | null>(null);
+  const [busy, setBusy] = useState<'email' | 'phone' | 'resend' | 'resendEmail' | null>(null);
   const autoRan = useRef(false);
 
   const verifyEmail = async (token: string) => {
@@ -67,15 +83,50 @@ export default function VerifyPage() {
   const resend = async () => {
     setBusy('resend');
     try {
-      const response = await api.post<{ devCode?: string; message: string }>(
+      const response = await api.post<{ devCode?: string; message: string; delivered?: boolean }>(
         '/auth/otp/request',
         { phone },
         { skipAuthRefresh: true },
       );
       if (response.devCode) setCode(response.devCode);
-      setStatus({ tone: 'info', message: response.message });
+      if (response.delivered === false) {
+        setStatus({
+          tone: 'danger',
+          message:
+            'We could not send the code to that number just now. Check the number and try again in a minute.',
+        });
+        return;
+      }
+      setStatus({ tone: 'info', message: 'A new code is on its way to your phone.' });
     } catch (error) {
       setStatus({ tone: 'danger', message: error instanceof ApiError ? error.userMessage : 'Could not resend' });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  /**
+   * Ask for another verification email.
+   *
+   * This is the signed-out route on purpose: a brand-new customer has no session
+   * yet, so if the first email went to spam there was previously no way forward at
+   * all. The reply is worded the same whether or not the address exists.
+   */
+  const resendEmail = async () => {
+    if (!state.email) return;
+    setBusy('resendEmail');
+    try {
+      const response = await api.post<{ message: string }>(
+        '/auth/resend-verification-email',
+        { email: state.email },
+        { skipAuthRefresh: true },
+      );
+      setStatus({ tone: 'info', message: response.message });
+    } catch (error) {
+      setStatus({
+        tone: 'danger',
+        message: error instanceof ApiError ? error.userMessage : 'Could not send the email',
+      });
     } finally {
       setBusy(null);
     }
@@ -84,7 +135,13 @@ export default function VerifyPage() {
   return (
     <AuthLayout
       title="Verify your account"
-      subtitle={state.email ? `We sent a link to ${state.email} and a code to your phone.` : 'Confirm your email and phone number.'}
+      subtitle={
+        emailFailed || smsFailed
+          ? 'Confirm your email and phone number. One of the messages below did not go out — you can send it again.'
+          : state.email
+            ? `We sent a link to ${state.email} and a code to your phone.`
+            : 'Confirm your email and phone number.'
+      }
       footer={
         <>
           Already verified?{' '}
@@ -97,19 +154,49 @@ export default function VerifyPage() {
       <div className="space-y-5">
         {status && <Alert tone={status.tone}>{status.message}</Alert>}
 
+        {(emailFailed || smsFailed) && (
+          <Alert tone="warning" title="Some messages did not go out">
+            {emailFailed && smsFailed
+              ? 'We could not send the email or the SMS just now.'
+              : emailFailed
+                ? 'We could not send the email just now.'
+                : 'We could not send the SMS just now.'}{' '}
+            Your account exists and nothing is lost — use the resend buttons below, or contact support
+            if it keeps happening.
+          </Alert>
+        )}
+
         <section className="card-surface p-4">
           <h2 className="text-sm font-semibold text-ink-900">1. Email address</h2>
-          <p className="mt-0.5 text-xs text-ink-500">Paste the code from the link we emailed you.</p>
+          <p className="mt-0.5 text-xs text-ink-500">
+            We emailed you a link — opening it confirms your address automatically. If you would rather confirm
+            here, paste the part of the link that comes after <code>token=</code>.
+          </p>
           <div className="mt-3 space-y-3">
             <Input
-              label="Verification code"
+              label="Code from the email"
               value={emailToken}
               onChange={(event) => setEmailToken(event.target.value)}
-              placeholder="Paste the token from your email"
+              placeholder="Paste the long code from the link"
             />
-            <Button variant="secondary" onClick={() => void verifyEmail(emailToken)} isLoading={busy === 'email'} disabled={!emailToken}>
-              Verify email
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant="secondary"
+                onClick={() => void verifyEmail(emailToken)}
+                isLoading={busy === 'email'}
+                disabled={!emailToken}
+              >
+                Verify email
+              </Button>
+              <Button
+                variant="ghost"
+                onClick={() => void resendEmail()}
+                isLoading={busy === 'resendEmail'}
+                disabled={!state.email}
+              >
+                Send the link again
+              </Button>
+            </div>
           </div>
         </section>
 

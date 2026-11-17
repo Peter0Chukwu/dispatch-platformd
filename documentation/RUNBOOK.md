@@ -383,6 +383,30 @@ that reference it. If the ledger does not balance, that is a **P1** — stop and
 because something bypassed the service layer. If it balances and the rider disagrees, it is a
 policy question (commission, hold period), answerable from `rider_earnings`.
 
+### "A customer says the verification link does not work"
+
+1. Open `GET /api/v1/health` and look at `integrations.email`. `CONSOLE` means nothing was ever
+   sent — the message is in the API log (`docker compose logs api | grep -i verification`).
+   `RESEND_NO_KEY` means the mode is on but the key is empty.
+2. If email is on, check the link in the message: it should read `‹FRONTEND_URL›/verify?token=…`.
+   A link built from the wrong address means `FRONTEND_URL` is unset and the fallback (the first
+   CORS origin) is pointing at a developer machine.
+3. The customer can ask for a fresh link from the verification screen — **Send the link again**
+   needs only the address, and works without signing in.
+4. Phone codes: a correct Termii key is not enough. If `TERMII_CHANNEL=generic`, OTPs are refused or
+   blocked; ask Termii support for the **DND/transactional** route. Full detail in
+   [MESSAGES-AND-CALLS.md](MESSAGES-AND-CALLS.md).
+
+### "The Call button says the call could not connect"
+
+The audio in an in-app call goes straight from one browser to the other, so a network that blocks
+direct connections (some offices, a minority of mobile carriers) cannot complete it. The message
+box on the same card always works. The permanent fix is a TURN relay — see
+[MESSAGES-AND-CALLS.md](MESSAGES-AND-CALLS.md) §2.
+
+If the button is missing or greyed out, the delivery is not live: calling is refused before a
+rider is assigned and after the job is delivered or cancelled. That is deliberate.
+
 ### "Reports are queued forever"
 
 See §3.2. Restarting `api` is the fix 9 times out of 10; a lost job can be re-requested from

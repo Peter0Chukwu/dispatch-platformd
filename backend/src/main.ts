@@ -9,6 +9,7 @@ import { AppModule } from './app.module';
 import { AppConfig } from './config/app.config';
 import { registerIndexPage } from './common/api-index-page';
 import { decideCorsOrigin } from './common/cors';
+import { MessagingService } from './messaging/messaging.service';
 
 async function bootstrap(): Promise<void> {
   // `rawBody` is what makes payment webhook signature verification possible: the
@@ -91,6 +92,9 @@ async function bootstrap(): Promise<void> {
   await app.listen(config.port, '0.0.0.0');
   logger.log(`${config.appName} API listening on http://0.0.0.0:${config.port}/${config.apiPrefix}`);
   logger.log(`Environment: ${config.nodeEnv} · Payments: ${config.paymentsMode}`);
+  // One line that answers "are customers actually receiving codes?" without
+  // anyone having to read four environment variables.
+  logger.log(app.get(MessagingService).describe());
   if (config.paymentsMode === 'DEVELOPMENT') {
     logger.warn('PAYMENTS ARE SIMULATED (PAYMENTS_MODE=DEVELOPMENT). No real money can move.');
   }
