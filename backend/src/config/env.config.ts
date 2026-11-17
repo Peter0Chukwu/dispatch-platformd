@@ -40,6 +40,8 @@ export const envSchema = z.object({
   GOOGLE_MAPS_API_KEY: z.string().optional().default(''),
   /** Geoapify: tiles, address suggestions, geocoding and routing from one key. */
   GEOAPIFY_API_KEY: z.string().optional().default(''),
+  /** 'lon,lat' the provider should rank results around. Defaults to Benin City. */
+  MAPS_SEARCH_BIAS: z.string().optional().default('5.6222,6.3329'),
 
   SMS_MODE: z.enum(['CONSOLE', 'TERMII']).default('CONSOLE'),
   /** Masked voice calling. CONSOLE = not connected yet; TERMII = number masking live. */

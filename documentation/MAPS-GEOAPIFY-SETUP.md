@@ -69,6 +69,18 @@ exhausted. `429` = you hit the 5 requests/second limit.
 
 ---
 
+## 3½. Two rules built into the suggestions
+
+**The platform's own Benin City locations always rank first.** Typing `ring` returns our
+surveyed Ring Road — not Ring Road *in Lagos*, which is what a plain OpenStreetMap search
+returns (the Lagos one is bigger and better mapped). Typing `sapele` returns Benin-Sapele
+Road, not the town of Sapele in Delta State. The provider fills in everything the saved
+list does not cover.
+
+**Suggestions are biased to the depot city.** `MAPS_SEARCH_BIAS=5.6222,6.3329` (Ring Road,
+Benin City — longitude first) is sent with every request so nearby results win ties. Change
+it if you ever operate from another city.
+
 ## 4. What a booking costs you
 
 The free plan gives **3,000 credits a day**, and:

@@ -1,39 +1,28 @@
-maps: Geoapify, so maps work without a Google Cloud account
+maps: our own Benin City locations outrank the geocoder's idea of relevance
 
-Google wants a billing account before it answers a single request, and that
-account was a dead end. Geoapify does not: no card, commercial use allowed with
-attribution, 3,000 credits a day, and ONE key for suggestions, geocoding,
-reverse geocoding, routing and the map tiles.
+Tested the new key against real queries for Benin City. The roads are there, but a
+plain provider search answers the wrong question:
 
-MAPS_PROVIDER=GEOAPIFY is now the recommended setting. The adapter follows the
-same shape as the Google one, so pricing, dispatch radii, ETAs and the booking
-form are untouched:
+  "ring road"  → Ring Road, LAGOS 100242 (a different state, 300 km away)
+  "sapele"     → Sapele, Delta State before Benin-Sapele Road
+  "ikpoba hill"→ nothing
 
-  · suggestions  GET /v1/geocode/autocomplete   (filter=countrycode:ng)
-  · typed address GET /v1/geocode/search
-  · a pin       GET /v1/geocode/reverse
-  · a route     GET /v1/routing?mode=drive     → metres and seconds
+That is not a Geoapify fault; OpenStreetMap simply has more Ring Roads in Nigeria
+than ours, and the biggest one wins. A courier platform cannot ship a booking form
+that offers a street in Lagos to someone sending a parcel across Benin City.
 
-Suggestions arrive already geocoded, so picking one costs ONE request instead of
-Google's autocomplete-plus-details pair. GeoJSON is longitude-first; a swap would
-place every pickup in the Gulf of Guinea and nothing downstream would notice, so
-test/maps.geoapify.spec.ts asserts the order, the Nigeria filter, the metres and
-seconds conversion (including an account configured in miles), and that every
-failure path falls back to the stub. Nine cases.
+So autocomplete() now merges: our twelve surveyed Benin City locations whose NAME
+matches what was typed come first, then the provider fills the rest, and a
+provider result within 200 m of one of ours is dropped as the same place said
+twice. The local match is strict on purpose — words must appear in the name, not
+the address, or "road" would drag in half the table and bury a precise hit.
 
-The live map moves from Google's JavaScript API to Leaflet over Geoapify tiles —
-one small open library instead of a vendor script tag, dynamically imported so
-only screens that show a map pay for it, with the "Powered by Geoapify" and
-OpenStreetMap credits the free plan requires. Markers are circle markers, which
-need no icon assets and cannot appear as broken images. Without a key it still
-falls back to the schematic, which draws the same coordinates and says so.
+Every suggestion request also carries MAPS_SEARCH_BIAS (default 5.6222,6.3329 —
+Ring Road, Benin City, longitude first) so near results win ties. It is
+configuration: another city means changing one variable, not the code.
 
-The product copy follows: the picker says "Address suggestions as you type"
-instead of naming a vendor, the tracking card says "Road route" for any real
-provider, and the admin city view badges STREET MAP or OUTLINE.
-
-documentation/MAPS-GEOAPIFY-SETUP.md is the click-by-click; CREDENTIALS-SETUP §3
-now leads with Geoapify and keeps Google as 3b. VITE_GEOAPIFY_API_KEY is wired
-through Dockerfile.web and docker-compose as a build arg, because that is the
-step people miss.
+The Google adapter goes through the same merge, so both providers behave alike.
+Test fixtures moved to Sakponba Road — a real Benin City street the platform does
+NOT keep locally — so the provider-mapping tests exercise the adapter rather than
+the merge. 52 unit tests pass.
 

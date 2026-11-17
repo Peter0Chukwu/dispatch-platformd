@@ -1,54 +1,39 @@
-TRADERS WELFARE — MAPS NOW RUN ON GEOAPIFY
-==========================================
+TRADERS WELFARE — SUGGESTIONS FIXED FOR BENIN CITY
+==================================================
 
-WHAT THIS IS
-  Maps without a Google Cloud account. Commit 54b30cc, on top of a3e2bfc.
+YOUR KEY IS GOOD. This patch is about what the key ANSWERS.
 
-  Geoapify: no card, no billing screen, 3,000 free requests a day, commercial
-  use allowed with attribution, and ONE key covers address suggestions,
-  geocoding, road distance/ETA and the map tiles themselves.
+WHAT THE TEST SHOWED
+  "ring road"    → Ring Road, LAGOS 100242  (wrong state, 300 km away)
+  "sapele"       → Sapele, Delta State      (not Benin-Sapele Road)
+  "ikpoba hill"  → nothing
 
-WHAT YOU DO (about five minutes)
-  1. https://myprojects.geoapify.com/register  — email only, no card.
-  2. Create a project, then copy its API key (one long string).
-  3. Backend service environment:
-         MAPS_PROVIDER=GEOAPIFY
-         GEOAPIFY_API_KEY=your-key
-  4. Web service environment:
-         VITE_GEOAPIFY_API_KEY=your-key
-     Same key. Bare, no quotes.
-  5. REDEPLOY / REBUILD THE WEB SERVICE. Vite bakes VITE_ variables in at build
-     time; restarting alone will not show the map.
+  OpenStreetMap has more than one Ring Road in Nigeria and the biggest wins a
+  plain search. That would have put a Lagos street on a Benin City booking form.
 
-HOW TO TELL IT WORKED
-  · https://<your-api-host>/api/v1 now shows  maps: GEOAPIFY
-  · Booking form: type "sapele" — the caption changes from "Popular Benin City
-    locations." to "Address suggestions as you type."
-  · A fare shows a road distance, and the tracking card says "Road route".
-  · The tracking page shows a street map with "Powered by Geoapify".
+WHAT CHANGED (commit fe6f3e7)
+  1. The platform's own twelve Benin City locations now always rank FIRST when
+     the typed words appear in their name. The provider fills in the rest.
+  2. A provider result within 200 m of one of ours is dropped — same place,
+     said twice.
+  3. Every suggestion request carries MAPS_SEARCH_BIAS, default Ring Road, Benin
+     City (5.6222,6.3329). Another city = change that one variable.
 
-IF IT DOES NOT WORK
-  The API log names the failing call, e.g.
-    Geoapify routing failed, falling back to the stub estimate:
-    Geoapify routing responded 401
-  401 = key wrong (often a stray quote). 403 = key deleted. 429 = too fast.
-
-APPLY THE CODE (VS Code Source Control tab first)
-  Unzip over C:\Users\USER\Documents\dispatch-platform, stage the 21 changed
-  files plus the 2 new ones (test/maps.geoapify.spec.ts and
-  documentation/MAPS-GEOAPIFY-SETUP.md), commit with COMMIT-MESSAGE.txt, push.
-  Terminal instead:
-      git apply --stat geoapify.patch
-      git apply geoapify.patch
-      npm install          # leaflet is now a dependency
+APPLY (VS Code Source Control tab first)
+  Unzip over C:\Users\USER\Documents\dispatch-platform, stage the 9 changed
+  files, commit with COMMIT-MESSAGE.txt, push, then REDEPLOY THE API SERVICE.
+  Terminal:
+      git apply --stat suggestions-fix.patch
+      git apply suggestions-fix.patch
       git add -A && git commit -F COMMIT-MESSAGE.txt && git push
 
-READ
-  documentation/MAPS-GEOAPIFY-SETUP.md  ← (in the repo at
-  documentation/MAPS-GEOAPIFY-SETUP.md) the full walkthrough, including what a
-  booking costs against the daily allowance.
+  No new dependency, no migration, no frontend rebuild — backend only.
 
-NOTHING IS LOST BY WAITING
-  With no key the app still works: real Benin City coordinates, a straight-line
-  distance model, and screens that say "estimated". Google stays supported
-  (MAPS_PROVIDER=GOOGLE) if you ever sort that account out.
+TRY AFTER THE REDEPLOY
+  Booking form, type "ring"    → Ring Road — Oba Ovonramwen Square comes first.
+  Type "sapele"                → Sapele Road — Oregbeni first.
+  Type "sakponba"              → provider suggestions, as before.
+
+  The twelve saved locations are in backend/src/pricing/maps.service.ts
+  (STUB_PLACES) and frontend/src/lib/benin-city-locations.ts. Both lists should
+  match; if you add a pickup point to one, add it to the other.

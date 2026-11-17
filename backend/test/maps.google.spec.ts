@@ -18,14 +18,17 @@ const config = {
   googleMapsApiKey: 'test-key',
 } as unknown as AppConfig;
 
+// Deliberately a place the platform does NOT have in its own table: a query that
+// matches a saved location is served by that location first (see the Geoapify
+// spec), so this fixture tests the provider mapping on its own.
 const autocompleteResponse = {
   suggestions: [
     {
       placePrediction: {
-        placeId: 'place-ring-road',
-        text: { text: 'Ring Road, Benin City, Nigeria' },
+        placeId: 'place-sakponba',
+        text: { text: 'Sakponba Road, Benin City, Nigeria' },
         structuredFormat: {
-          mainText: { text: 'Ring Road' },
+          mainText: { text: 'Sakponba Road' },
           secondaryText: { text: 'Benin City, Nigeria' },
         },
       },
@@ -34,10 +37,10 @@ const autocompleteResponse = {
 };
 
 const detailsResponse = {
-  id: 'place-ring-road',
-  displayName: { text: 'Ring Road' },
-  formattedAddress: 'Ring Road, Oba Ovonramwen Square, Benin City 300102, Edo, Nigeria',
-  location: { latitude: 6.3329, longitude: 5.6222 },
+  id: 'place-sakponba',
+  displayName: { text: 'Sakponba Road' },
+  formattedAddress: 'Sakponba Road, Benin City 300102, Edo, Nigeria',
+  location: { latitude: 6.3403, longitude: 5.6252 },
 };
 
 const routesResponse = { routes: [{ distanceMeters: 7123, duration: '842s' }] };
@@ -62,7 +65,7 @@ describe('phase 8 — the Google adapter speaks the current APIs', () => {
         .mockResolvedValueOnce({ ok: true, json: async () => detailsResponse });
 
       const service = new MapsService(config);
-      const results = await service.autocomplete('ring road', 6);
+      const results = await service.autocomplete('sakponba road', 6);
 
       const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
       expect(url).toBe('https://places.googleapis.com/v1/places:autocomplete');
@@ -71,18 +74,18 @@ describe('phase 8 — the Google adapter speaks the current APIs', () => {
       expect(url).not.toContain('key=');
 
       const sent = JSON.parse(init.body as string) as { input: string; includedRegionCodes: string[] };
-      expect(sent.input).toBe('ring road');
+      expect(sent.input).toBe('sakponba road');
       // Never offer a suggestion outside Nigeria.
       expect(sent.includedRegionCodes).toEqual(['ng']);
 
       expect(results).toHaveLength(1);
       expect(results[0]).toMatchObject({
-        id: 'place-ring-road',
-        name: 'Ring Road',
-        address: 'Ring Road, Oba Ovonramwen Square, Benin City 300102, Edo, Nigeria',
+        id: 'place-sakponba',
+        name: 'Sakponba Road',
+        address: 'Sakponba Road, Benin City 300102, Edo, Nigeria',
         landmark: 'Benin City, Nigeria',
-        lat: 6.3329,
-        lng: 5.6222,
+        lat: 6.3403,
+        lng: 5.6252,
         source: 'GOOGLE',
       });
     });
@@ -92,10 +95,10 @@ describe('phase 8 — the Google adapter speaks the current APIs', () => {
         .mockResolvedValueOnce({ ok: true, json: async () => autocompleteResponse })
         .mockResolvedValueOnce({ ok: true, json: async () => detailsResponse });
 
-      await new MapsService(config).autocomplete('ring road');
+      await new MapsService(config).autocomplete('sakponba road');
 
       const [url, init] = fetchMock.mock.calls[1] as [string, RequestInit];
-      expect(url).toBe('https://places.googleapis.com/v1/places/place-ring-road');
+      expect(url).toBe('https://places.googleapis.com/v1/places/place-sakponba');
       expect((init.headers as Record<string, string>)['X-Goog-FieldMask']).toBe(
         'id,displayName,formattedAddress,location',
       );

@@ -1,0 +1,487 @@
+diff --git a/.env.example b/.env.example
+index 3ebd4c7..3072304 100644
+--- a/.env.example
++++ b/.env.example
+@@ -41,6 +41,9 @@ FLUTTERWAVE_WEBHOOK_HASH=
+ MAPS_PROVIDER=STUB            # STUB | GEOAPIFY | GOOGLE   (MAPBOX is reserved)
+ # Geoapify: suggestions, geocoding, routing and map tiles from one free key.
+ GEOAPIFY_API_KEY=
++# 'lon,lat' that address suggestions are ranked around — the depot city.
++# Defaults to Ring Road, Benin City.
++MAPS_SEARCH_BIAS="5.6222,6.3329"
+ # Only when MAPS_PROVIDER=GOOGLE
+ GOOGLE_MAPS_API_KEY=
+ 
+diff --git a/backend/src/config/app.config.ts b/backend/src/config/app.config.ts
+index 0d05ceb..b95153d 100644
+--- a/backend/src/config/app.config.ts
++++ b/backend/src/config/app.config.ts
+@@ -41,6 +41,11 @@ export class AppConfig {
+     const key = this.config.get('GEOAPIFY_API_KEY', { infer: true })?.trim();
+     return key ? key : undefined;
+   }
++  /** 'lon,lat' that suggestions are ranked around — the depot city. */
++  get mapsSearchBias(): string | undefined {
++    const bias = this.config.get('MAPS_SEARCH_BIAS', { infer: true })?.trim();
++    return bias ? bias : undefined;
++  }
+   /** Number of proxy hops to trust when reading X-Forwarded-For. */
+   get trustProxy(): number { return this.config.get('TRUST_PROXY', { infer: true }); }
+   get storageDriver() { return this.config.get('STORAGE_DRIVER', { infer: true }); }
+diff --git a/backend/src/config/env.config.ts b/backend/src/config/env.config.ts
+index fa4e1a6..97a23a6 100644
+--- a/backend/src/config/env.config.ts
++++ b/backend/src/config/env.config.ts
+@@ -40,6 +40,8 @@ export const envSchema = z.object({
+   GOOGLE_MAPS_API_KEY: z.string().optional().default(''),
+   /** Geoapify: tiles, address suggestions, geocoding and routing from one key. */
+   GEOAPIFY_API_KEY: z.string().optional().default(''),
++  /** 'lon,lat' the provider should rank results around. Defaults to Benin City. */
++  MAPS_SEARCH_BIAS: z.string().optional().default('5.6222,6.3329'),
+ 
+   SMS_MODE: z.enum(['CONSOLE', 'TERMII']).default('CONSOLE'),
+   /** Masked voice calling. CONSOLE = not connected yet; TERMII = number masking live. */
+diff --git a/backend/src/pricing/maps.service.ts b/backend/src/pricing/maps.service.ts
+index 9fe26fe..ecc89b1 100644
+--- a/backend/src/pricing/maps.service.ts
++++ b/backend/src/pricing/maps.service.ts
+@@ -97,8 +97,8 @@ export class MapsService {
+       const key = this.config.geoapifyApiKey;
+       if (key) {
+         try {
+-          const results = await this.geoapifyPlaces('autocomplete', trimmed, key, limit);
+-          if (results.length > 0) return results;
++          const remote = await this.geoapifyPlaces('autocomplete', trimmed, key, limit);
++          if (remote.length > 0) return this.mergeLocalFirst(trimmed, remote, limit);
+         } catch (error) {
+           this.logger.warn(`Geoapify suggestions failed, falling back to local places: ${(error as Error).message}`);
+         }
+@@ -108,8 +108,8 @@ export class MapsService {
+       const key = this.config.googleMapsApiKey;
+       if (key) {
+         try {
+-          const results = await this.googleAutocomplete(trimmed, key, limit);
+-          if (results.length > 0) return results;
++          const remote = await this.googleAutocomplete(trimmed, key, limit);
++          if (remote.length > 0) return this.mergeLocalFirst(trimmed, remote, limit);
+         } catch (error) {
+           this.logger.warn(`Google autocomplete failed, falling back to local places: ${(error as Error).message}`);
+         }
+@@ -118,6 +118,43 @@ export class MapsService {
+     return stubSearch(trimmed, limit);
+   }
+ 
++  /**
++   * The platform's own Benin City locations, ahead of the provider's answers.
++   *
++   * A geocoder orders by its own idea of relevance, and in Benin City that idea is
++   * often wrong: typing "ring" returns Ring Road, LAGOS (300 km away, a different
++   * state, a different business), because OpenStreetMap has many Ring Roads in
++   * Nigeria and the biggest one wins. Typing "sapele" returns the town of Sapele in
++   * Delta State before Benin-Sapele Road, where the riders actually drive.
++   *
++   * So: our twelve surveyed locations that match the text come first, and the
++   * provider fills the rest. They are real coordinates the platform already prices
++   * against, not a decoration — and a provider result that lands within 200 m of one
++   * of them is the same place said twice, so it is dropped.
++   *
++   * The local match is deliberately strict: every word the customer typed has to
++   * appear in the location's NAME. Matching against the address too would make
++   * "road" pull in half the table and bury a precise provider hit.
++   */
++  private mergeLocalFirst(query: string, remote: PlaceResult[], limit: number): PlaceResult[] {
++    const local = matchLocalByName(query);
++    if (local.length === 0) return remote.slice(0, limit);
++
++    const seen = new Set(local.map((place) => `${place.name.toLowerCase()}|${place.lat.toFixed(2)}|${place.lng.toFixed(2)}`));
++    const extras = remote.filter((place) => {
++      // Same spot as one of ours, whatever it calls itself.
++      if (local.some((own) => haversineKm({ lat: own.lat, lng: own.lng }, { lat: place.lat, lng: place.lng }) < 0.2)) {
++        return false;
++      }
++      const key = `${place.name.toLowerCase()}|${place.lat.toFixed(2)}|${place.lng.toFixed(2)}`;
++      if (seen.has(key)) return false;
++      seen.add(key);
++      return true;
++    });
++
++    return [...local, ...extras].slice(0, limit);
++  }
++
+   /** Turn a written address into coordinates. Used when a rider types a landmark. */
+   async geocode(address: string): Promise<GeocodeResult | null> {
+     const trimmed = address.trim();
+@@ -257,6 +294,10 @@ export class MapsService {
+       limit: String(limit),
+       apiKey: key,
+     });
++    // Prefer places near the depot city. `bias` is longitude-first, like the rest of
++    // Geoapify's geo parameters.
++    const bias = this.config.mapsSearchBias;
++    if (bias) params.set('bias', `proximity:${bias}`);
+     const response = await fetch(`https://api.geoapify.com/v1/geocode/${kind}?${params}`, {
+       signal: AbortSignal.timeout(5000),
+     });
+@@ -548,6 +589,29 @@ function stubSearch(query: string, limit: number): PlaceResult[] {
+     }));
+ }
+ 
++/** Local places whose NAME contains every word of the query (3+ letters). */
++function matchLocalByName(query: string, limit = 3): PlaceResult[] {
++  const terms = normalise(query)
++    .split(' ')
++    .filter((term) => term.length >= 3);
++  if (terms.length === 0) return [];
++
++  return STUB_PLACES.filter((place) => {
++    const name = normalise(place.name);
++    return terms.every((term) => name.includes(term));
++  })
++    .slice(0, limit)
++    .map((place) => ({
++      id: place.id,
++      name: place.name,
++      address: place.address,
++      landmark: place.landmark,
++      lat: place.lat,
++      lng: place.lng,
++      source: 'STUB' as const,
++    }));
++}
++
+ function nearestStubLocation(point: Point) {
+   let best: (typeof STUB_PLACES)[number] | null = null;
+   let bestKm = Number.POSITIVE_INFINITY;
+diff --git a/backend/test/maps.geoapify.spec.ts b/backend/test/maps.geoapify.spec.ts
+index 218a504..124d30b 100644
+--- a/backend/test/maps.geoapify.spec.ts
++++ b/backend/test/maps.geoapify.spec.ts
+@@ -16,7 +16,11 @@ const config = {
+   geoapifyApiKey: 'test-key',
+ } as unknown as AppConfig;
+ 
+-/** A suggestion for Ring Road, exactly as Geoapify shapes it. */
++/**
++ * A suggestion, exactly as Geoapify shapes it — for Sakponba Road, which is
++ * deliberately a place the platform does NOT keep in its own table, so these
++ * tests exercise the adapter by itself.
++ */
+ const autocompleteBody = {
+   type: 'FeatureCollection',
+   features: [
+@@ -24,18 +28,18 @@ const autocompleteBody = {
+       type: 'Feature',
+       properties: {
+         place_id: '51f2c3a4d5e6f7',
+-        name: 'Ring Road',
+-        formatted: 'Ring Road, Benin City, 300102, Nigeria',
+-        address_line1: 'Ring Road',
++        name: 'Sakponba Road',
++        formatted: 'Sakponba Road, Benin City, 300102, Nigeria',
++        address_line1: 'Sakponba Road',
+         address_line2: 'Benin City, 300102, Nigeria',
+         suburb: 'Oredo',
+         city: 'Benin City',
+-        lat: 6.3329,
+-        lon: 5.6222,
++        lat: 6.3403,
++        lon: 5.6252,
+         country_code: 'ng',
+       },
+       // Longitude first, deliberately: this is what the API really sends.
+-      geometry: { type: 'Point', coordinates: [5.6222, 6.3329] },
++      geometry: { type: 'Point', coordinates: [5.6252, 6.3403] },
+     },
+     {
+       type: 'Feature',
+@@ -80,11 +84,11 @@ describe('phase 8 — the Geoapify adapter', () => {
+     it('asks the autocomplete endpoint, restricted to Nigeria, with the key', async () => {
+       fetchMock.mockResolvedValueOnce({ ok: true, json: async () => autocompleteBody });
+ 
+-      const results = await new MapsService(config).autocomplete('ring road', 6);
++      const results = await new MapsService(config).autocomplete('sakponba road', 6);
+ 
+       const url = new URL(fetchMock.mock.calls[0]![0] as string);
+       expect(url.origin + url.pathname).toBe('https://api.geoapify.com/v1/geocode/autocomplete');
+-      expect(url.searchParams.get('text')).toBe('ring road');
++      expect(url.searchParams.get('text')).toBe('sakponba road');
+       expect(url.searchParams.get('filter')).toBe('countrycode:ng');
+       expect(url.searchParams.get('apiKey')).toBe('test-key');
+       expect(url.searchParams.get('limit')).toBe('6');
+@@ -92,11 +96,11 @@ describe('phase 8 — the Geoapify adapter', () => {
+       expect(results).toHaveLength(1);
+       expect(results[0]).toMatchObject({
+         id: '51f2c3a4d5e6f7',
+-        name: 'Ring Road',
+-        address: 'Ring Road, Benin City, 300102, Nigeria',
++        name: 'Sakponba Road',
++        address: 'Sakponba Road, Benin City, 300102, Nigeria',
+         landmark: 'Oredo',
+-        lat: 6.3329,
+-        lng: 5.6222,
++        lat: 6.3403,
++        lng: 5.6252,
+         source: 'GEOAPIFY',
+       });
+     });
+@@ -104,16 +108,80 @@ describe('phase 8 — the Geoapify adapter', () => {
+     it('reads longitude before latitude, and drops a feature with no position', async () => {
+       fetchMock.mockResolvedValueOnce({ ok: true, json: async () => autocompleteBody });
+ 
+-      const [place] = await new MapsService(config).autocomplete('ring road');
+-      // The two are far apart on the globe: a swap would put this at 5.62N 6.33E,
++      const [place] = await new MapsService(config).autocomplete('sakponba road');
++      // The two are far apart on the globe: a swap would put this at 5.62N 6.34E,
+       // in the Gulf of Guinea, and nothing else in the system would notice.
+-      expect(place!.lat).toBe(6.3329);
+-      expect(place!.lng).toBe(5.6222);
++      expect(place!.lat).toBe(6.3403);
++      expect(place!.lng).toBe(5.6252);
+ 
+-      const all = await new MapsService(config).autocomplete('ring road');
++      const all = await new MapsService(config).autocomplete('sakponba road');
+       expect(all.some((row) => row.id === 'no-position')).toBe(false);
+     });
+ 
++    it('sends the depot city as a bias, longitude first', async () => {
++      fetchMock.mockResolvedValueOnce({ ok: true, json: async () => autocompleteBody });
++
++      const configWithBias = { ...config, mapsSearchBias: '5.6222,6.3329' } as unknown as AppConfig;
++      await new MapsService(configWithBias).autocomplete('ring road');
++
++      const url = new URL(fetchMock.mock.calls[0]![0] as string);
++      expect(url.searchParams.get('bias')).toBe('proximity:5.6222,6.3329');
++    });
++
++    it('puts the platform’s own Benin City locations ahead of the provider’s answers', async () => {
++      // Geoapify really does answer "ring road" with Ring Road, LAGOS — 300 km and a
++      // different state. The platform's own surveyed points must win.
++      fetchMock.mockResolvedValueOnce({
++        ok: true,
++        json: async () => ({
++          features: [
++            {
++              properties: {
++                place_id: 'lagos-ring-road',
++                name: 'Ring Road',
++                formatted: 'Ring Road, Lagos 100242, LA, Nigeria',
++                lat: 6.5,
++                lon: 3.37,
++              },
++              geometry: { coordinates: [3.37, 6.5] },
++            },
++          ],
++        }),
++      });
++
++      const results = await new MapsService(config).autocomplete('ring');
++
++      expect(results[0]!.id).toBe('ring-road');
++      expect(results[0]!.source).toBe('STUB');
++      expect(results.some((place) => place.source === 'GEOAPIFY')).toBe(true);
++    });
++
++    it('does not list the same place twice when ours and theirs agree', async () => {
++      fetchMock.mockResolvedValueOnce({
++        ok: true,
++        json: async () => ({
++          features: [
++            {
++              properties: {
++                place_id: 'osm-ring-road',
++                name: 'Ring Road',
++                formatted: 'Ring Road, Oba Ovonramwen Square, Benin City',
++                // Within 200 m of the platform's own Ring Road point.
++                lat: 6.3335,
++                lon: 5.6225,
++              },
++              geometry: { coordinates: [5.6225, 6.3335] },
++            },
++          ],
++        }),
++      });
++
++      const results = await new MapsService(config).autocomplete('ring');
++      const ringRoads = results.filter((place) => place.name.toLowerCase().includes('ring road'));
++      expect(ringRoads).toHaveLength(1);
++      expect(ringRoads[0]!.source).toBe('STUB');
++    });
++
+     it('falls back to the platform table when Geoapify answers with an error', async () => {
+       fetchMock.mockResolvedValue({ ok: false, status: 429, json: async () => ({}) });
+ 
+@@ -127,24 +195,24 @@ describe('phase 8 — the Geoapify adapter', () => {
+     it('turns a written address into coordinates with one search call', async () => {
+       fetchMock.mockResolvedValueOnce({ ok: true, json: async () => autocompleteBody });
+ 
+-      const result = await new MapsService(config).geocode('Ring Road, Benin City');
++      const result = await new MapsService(config).geocode('Sakponba Road, Benin City');
+ 
+       const url = new URL(fetchMock.mock.calls[0]![0] as string);
+       expect(url.pathname).toBe('/v1/geocode/search');
+-      expect(result).toMatchObject({ lat: 6.3329, lng: 5.6222, source: 'GEOAPIFY', approximate: false });
++      expect(result).toMatchObject({ lat: 6.3403, lng: 5.6252, source: 'GEOAPIFY', approximate: false });
+     });
+ 
+     it('names the nearest place when reverse geocoding', async () => {
+       fetchMock.mockResolvedValueOnce({ ok: true, json: async () => autocompleteBody });
+ 
+-      const result = await new MapsService(config).reverseGeocode({ lat: 6.3329, lng: 5.6222 });
++      const result = await new MapsService(config).reverseGeocode({ lat: 6.3403, lng: 5.6252 });
+ 
+       const url = new URL(fetchMock.mock.calls[0]![0] as string);
+       expect(url.pathname).toBe('/v1/geocode/reverse');
+-      expect(url.searchParams.get('lat')).toBe('6.3329');
+-      expect(url.searchParams.get('lon')).toBe('5.6222');
++      expect(url.searchParams.get('lat')).toBe('6.3403');
++      expect(url.searchParams.get('lon')).toBe('5.6252');
+       expect(result).toMatchObject({
+-        address: 'Ring Road, Benin City, 300102, Nigeria',
++        address: 'Sakponba Road, Benin City, 300102, Nigeria',
+         source: 'GEOAPIFY',
+       });
+     });
+diff --git a/backend/test/maps.google.spec.ts b/backend/test/maps.google.spec.ts
+index 6b2ae62..fa6c7a6 100644
+--- a/backend/test/maps.google.spec.ts
++++ b/backend/test/maps.google.spec.ts
+@@ -18,14 +18,17 @@ const config = {
+   googleMapsApiKey: 'test-key',
+ } as unknown as AppConfig;
+ 
++// Deliberately a place the platform does NOT have in its own table: a query that
++// matches a saved location is served by that location first (see the Geoapify
++// spec), so this fixture tests the provider mapping on its own.
+ const autocompleteResponse = {
+   suggestions: [
+     {
+       placePrediction: {
+-        placeId: 'place-ring-road',
+-        text: { text: 'Ring Road, Benin City, Nigeria' },
++        placeId: 'place-sakponba',
++        text: { text: 'Sakponba Road, Benin City, Nigeria' },
+         structuredFormat: {
+-          mainText: { text: 'Ring Road' },
++          mainText: { text: 'Sakponba Road' },
+           secondaryText: { text: 'Benin City, Nigeria' },
+         },
+       },
+@@ -34,10 +37,10 @@ const autocompleteResponse = {
+ };
+ 
+ const detailsResponse = {
+-  id: 'place-ring-road',
+-  displayName: { text: 'Ring Road' },
+-  formattedAddress: 'Ring Road, Oba Ovonramwen Square, Benin City 300102, Edo, Nigeria',
+-  location: { latitude: 6.3329, longitude: 5.6222 },
++  id: 'place-sakponba',
++  displayName: { text: 'Sakponba Road' },
++  formattedAddress: 'Sakponba Road, Benin City 300102, Edo, Nigeria',
++  location: { latitude: 6.3403, longitude: 5.6252 },
+ };
+ 
+ const routesResponse = { routes: [{ distanceMeters: 7123, duration: '842s' }] };
+@@ -62,7 +65,7 @@ describe('phase 8 — the Google adapter speaks the current APIs', () => {
+         .mockResolvedValueOnce({ ok: true, json: async () => detailsResponse });
+ 
+       const service = new MapsService(config);
+-      const results = await service.autocomplete('ring road', 6);
++      const results = await service.autocomplete('sakponba road', 6);
+ 
+       const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+       expect(url).toBe('https://places.googleapis.com/v1/places:autocomplete');
+@@ -71,18 +74,18 @@ describe('phase 8 — the Google adapter speaks the current APIs', () => {
+       expect(url).not.toContain('key=');
+ 
+       const sent = JSON.parse(init.body as string) as { input: string; includedRegionCodes: string[] };
+-      expect(sent.input).toBe('ring road');
++      expect(sent.input).toBe('sakponba road');
+       // Never offer a suggestion outside Nigeria.
+       expect(sent.includedRegionCodes).toEqual(['ng']);
+ 
+       expect(results).toHaveLength(1);
+       expect(results[0]).toMatchObject({
+-        id: 'place-ring-road',
+-        name: 'Ring Road',
+-        address: 'Ring Road, Oba Ovonramwen Square, Benin City 300102, Edo, Nigeria',
++        id: 'place-sakponba',
++        name: 'Sakponba Road',
++        address: 'Sakponba Road, Benin City 300102, Edo, Nigeria',
+         landmark: 'Benin City, Nigeria',
+-        lat: 6.3329,
+-        lng: 5.6222,
++        lat: 6.3403,
++        lng: 5.6252,
+         source: 'GOOGLE',
+       });
+     });
+@@ -92,10 +95,10 @@ describe('phase 8 — the Google adapter speaks the current APIs', () => {
+         .mockResolvedValueOnce({ ok: true, json: async () => autocompleteResponse })
+         .mockResolvedValueOnce({ ok: true, json: async () => detailsResponse });
+ 
+-      await new MapsService(config).autocomplete('ring road');
++      await new MapsService(config).autocomplete('sakponba road');
+ 
+       const [url, init] = fetchMock.mock.calls[1] as [string, RequestInit];
+-      expect(url).toBe('https://places.googleapis.com/v1/places/place-ring-road');
++      expect(url).toBe('https://places.googleapis.com/v1/places/place-sakponba');
+       expect((init.headers as Record<string, string>)['X-Goog-FieldMask']).toBe(
+         'id,displayName,formattedAddress,location',
+       );
+diff --git a/deploy/.env.example b/deploy/.env.example
+index 082f226..74e0ea8 100644
+--- a/deploy/.env.example
++++ b/deploy/.env.example
+@@ -76,6 +76,8 @@ FLUTTERWAVE_WEBHOOK_HASH=CHANGE_ME_from_flutterwave_dashboard
+ MAPS_PROVIDER=STUB
+ GEOAPIFY_API_KEY=
+ VITE_GEOAPIFY_API_KEY=
++# 'lon,lat' that suggestions are ranked around — the depot city (Benin City here).
++MAPS_SEARCH_BIAS=5.6222,6.3329
+ # Only if you chose MAPS_PROVIDER=google
+ GOOGLE_MAPS_API_KEY=
+ VITE_GOOGLE_MAPS_API_KEY=
+diff --git a/documentation/CREDENTIALS-SETUP.md b/documentation/CREDENTIALS-SETUP.md
+index 0ebfad4..4278345 100644
+--- a/documentation/CREDENTIALS-SETUP.md
++++ b/documentation/CREDENTIALS-SETUP.md
+@@ -116,10 +116,14 @@ project.
+    VITE_GEOAPIFY_API_KEY=your-geoapify-key
+    ```
+ 
+-4. What a booking costs against the 3,000 daily credits: **1** for the route, **1** if the customer's
++4. Optional but recommended: `MAPS_SEARCH_BIAS` is the `lon,lat` that suggestions are ranked
++   around. It defaults to Ring Road, Benin City (`5.6222,6.3329`). Change it if you ever
++   operate from another city — it is what stops "ring" answering with Ring Road, Lagos.
++
++5. What a booking costs against the 3,000 daily credits: **1** for the route, **1** if the customer's
+    typed address has to be geocoded, and **0.25 per map tile** (a typical map view is 20–30 tiles, so
+    roughly 5–8 credits). That is several hundred map views plus thousands of bookings a day.
+-5. The free plan requires the **"Powered by Geoapify"** attribution and OpenStreetMap credit — the
++6. The free plan requires the **"Powered by Geoapify"** attribution and OpenStreetMap credit — the
+    map component renders both automatically; do not remove them.
+ 
+ **Coverage, measured:** OpenStreetMap has Benin City's roads (Ring Road → Ugbowo routes as 10.6 km),
+diff --git a/documentation/MAPS-GEOAPIFY-SETUP.md b/documentation/MAPS-GEOAPIFY-SETUP.md
+index e02202d..e23fa2a 100644
+--- a/documentation/MAPS-GEOAPIFY-SETUP.md
++++ b/documentation/MAPS-GEOAPIFY-SETUP.md
+@@ -69,6 +69,18 @@ exhausted. `429` = you hit the 5 requests/second limit.
+ 
+ ---
+ 
++## 3½. Two rules built into the suggestions
++
++**The platform's own Benin City locations always rank first.** Typing `ring` returns our
++surveyed Ring Road — not Ring Road *in Lagos*, which is what a plain OpenStreetMap search
++returns (the Lagos one is bigger and better mapped). Typing `sapele` returns Benin-Sapele
++Road, not the town of Sapele in Delta State. The provider fills in everything the saved
++list does not cover.
++
++**Suggestions are biased to the depot city.** `MAPS_SEARCH_BIAS=5.6222,6.3329` (Ring Road,
++Benin City — longitude first) is sent with every request so nearby results win ties. Change
++it if you ever operate from another city.
++
+ ## 4. What a booking costs you
+ 
+ The free plan gives **3,000 credits a day**, and:

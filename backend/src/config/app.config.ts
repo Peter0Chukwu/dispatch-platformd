@@ -41,6 +41,11 @@ export class AppConfig {
     const key = this.config.get('GEOAPIFY_API_KEY', { infer: true })?.trim();
     return key ? key : undefined;
   }
+  /** 'lon,lat' that suggestions are ranked around — the depot city. */
+  get mapsSearchBias(): string | undefined {
+    const bias = this.config.get('MAPS_SEARCH_BIAS', { infer: true })?.trim();
+    return bias ? bias : undefined;
+  }
   /** Number of proxy hops to trust when reading X-Forwarded-For. */
   get trustProxy(): number { return this.config.get('TRUST_PROXY', { infer: true }); }
   get storageDriver() { return this.config.get('STORAGE_DRIVER', { infer: true }); }

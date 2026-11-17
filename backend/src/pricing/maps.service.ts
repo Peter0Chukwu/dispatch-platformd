@@ -97,8 +97,8 @@ export class MapsService {
       const key = this.config.geoapifyApiKey;
       if (key) {
         try {
-          const results = await this.geoapifyPlaces('autocomplete', trimmed, key, limit);
-          if (results.length > 0) return results;
+          const remote = await this.geoapifyPlaces('autocomplete', trimmed, key, limit);
+          if (remote.length > 0) return this.mergeLocalFirst(trimmed, remote, limit);
         } catch (error) {
           this.logger.warn(`Geoapify suggestions failed, falling back to local places: ${(error as Error).message}`);
         }
@@ -108,14 +108,51 @@ export class MapsService {
       const key = this.config.googleMapsApiKey;
       if (key) {
         try {
-          const results = await this.googleAutocomplete(trimmed, key, limit);
-          if (results.length > 0) return results;
+          const remote = await this.googleAutocomplete(trimmed, key, limit);
+          if (remote.length > 0) return this.mergeLocalFirst(trimmed, remote, limit);
         } catch (error) {
           this.logger.warn(`Google autocomplete failed, falling back to local places: ${(error as Error).message}`);
         }
       }
     }
     return stubSearch(trimmed, limit);
+  }
+
+  /**
+   * The platform's own Benin City locations, ahead of the provider's answers.
+   *
+   * A geocoder orders by its own idea of relevance, and in Benin City that idea is
+   * often wrong: typing "ring" returns Ring Road, LAGOS (300 km away, a different
+   * state, a different business), because OpenStreetMap has many Ring Roads in
+   * Nigeria and the biggest one wins. Typing "sapele" returns the town of Sapele in
+   * Delta State before Benin-Sapele Road, where the riders actually drive.
+   *
+   * So: our twelve surveyed locations that match the text come first, and the
+   * provider fills the rest. They are real coordinates the platform already prices
+   * against, not a decoration — and a provider result that lands within 200 m of one
+   * of them is the same place said twice, so it is dropped.
+   *
+   * The local match is deliberately strict: every word the customer typed has to
+   * appear in the location's NAME. Matching against the address too would make
+   * "road" pull in half the table and bury a precise provider hit.
+   */
+  private mergeLocalFirst(query: string, remote: PlaceResult[], limit: number): PlaceResult[] {
+    const local = matchLocalByName(query);
+    if (local.length === 0) return remote.slice(0, limit);
+
+    const seen = new Set(local.map((place) => `${place.name.toLowerCase()}|${place.lat.toFixed(2)}|${place.lng.toFixed(2)}`));
+    const extras = remote.filter((place) => {
+      // Same spot as one of ours, whatever it calls itself.
+      if (local.some((own) => haversineKm({ lat: own.lat, lng: own.lng }, { lat: place.lat, lng: place.lng }) < 0.2)) {
+        return false;
+      }
+      const key = `${place.name.toLowerCase()}|${place.lat.toFixed(2)}|${place.lng.toFixed(2)}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+    return [...local, ...extras].slice(0, limit);
   }
 
   /** Turn a written address into coordinates. Used when a rider types a landmark. */
@@ -257,6 +294,10 @@ export class MapsService {
       limit: String(limit),
       apiKey: key,
     });
+    // Prefer places near the depot city. `bias` is longitude-first, like the rest of
+    // Geoapify's geo parameters.
+    const bias = this.config.mapsSearchBias;
+    if (bias) params.set('bias', `proximity:${bias}`);
     const response = await fetch(`https://api.geoapify.com/v1/geocode/${kind}?${params}`, {
       signal: AbortSignal.timeout(5000),
     });
@@ -538,6 +579,29 @@ function stubSearch(query: string, limit: number): PlaceResult[] {
     .sort((a, b) => b.score - a.score)
     .slice(0, limit)
     .map(({ place }) => ({
+      id: place.id,
+      name: place.name,
+      address: place.address,
+      landmark: place.landmark,
+      lat: place.lat,
+      lng: place.lng,
+      source: 'STUB' as const,
+    }));
+}
+
+/** Local places whose NAME contains every word of the query (3+ letters). */
+function matchLocalByName(query: string, limit = 3): PlaceResult[] {
+  const terms = normalise(query)
+    .split(' ')
+    .filter((term) => term.length >= 3);
+  if (terms.length === 0) return [];
+
+  return STUB_PLACES.filter((place) => {
+    const name = normalise(place.name);
+    return terms.every((term) => name.includes(term));
+  })
+    .slice(0, limit)
+    .map((place) => ({
       id: place.id,
       name: place.name,
       address: place.address,

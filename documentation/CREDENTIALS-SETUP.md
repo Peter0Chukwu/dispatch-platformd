@@ -116,10 +116,14 @@ project.
    VITE_GEOAPIFY_API_KEY=your-geoapify-key
    ```
 
-4. What a booking costs against the 3,000 daily credits: **1** for the route, **1** if the customer's
+4. Optional but recommended: `MAPS_SEARCH_BIAS` is the `lon,lat` that suggestions are ranked
+   around. It defaults to Ring Road, Benin City (`5.6222,6.3329`). Change it if you ever
+   operate from another city — it is what stops "ring" answering with Ring Road, Lagos.
+
+5. What a booking costs against the 3,000 daily credits: **1** for the route, **1** if the customer's
    typed address has to be geocoded, and **0.25 per map tile** (a typical map view is 20–30 tiles, so
    roughly 5–8 credits). That is several hundred map views plus thousands of bookings a day.
-5. The free plan requires the **"Powered by Geoapify"** attribution and OpenStreetMap credit — the
+6. The free plan requires the **"Powered by Geoapify"** attribution and OpenStreetMap credit — the
    map component renders both automatically; do not remove them.
 
 **Coverage, measured:** OpenStreetMap has Benin City's roads (Ring Road → Ugbowo routes as 10.6 km),
