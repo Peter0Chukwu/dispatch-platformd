@@ -26,7 +26,7 @@ interface PlaceSuggestion {
   landmark: string | null;
   lat: number;
   lng: number;
-  source: 'STUB' | 'GOOGLE' | 'MAPBOX';
+  source: 'STUB' | 'GOOGLE' | 'GEOAPIFY' | 'MAPBOX';
 }
 
 const toSavedLocation = (place: PlaceSuggestion): SavedLocation => ({
@@ -181,9 +181,9 @@ export function LocationPicker({
       <p className="text-[11px] text-ink-400">
         {suggestions.isFetching
           ? 'Searching…'
-          : provider === 'google'
-            ? 'Address suggestions by Google.'
-            : 'Popular Benin City locations.'}
+          : provider === 'stub'
+            ? 'Popular Benin City locations.'
+            : 'Address suggestions as you type.'}
       </p>
 
       <Field label="Street address" required error={errors.address} htmlFor={`${title}-address`}>

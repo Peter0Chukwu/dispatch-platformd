@@ -18,7 +18,7 @@ export interface Quote {
   chargeableKm: number;
   freeKmIncluded: number;
   durationMinutes: number;
-  routeSource: 'STUB' | 'GOOGLE';
+  routeSource: 'STUB' | 'GOOGLE' | 'GEOAPIFY' | 'MAPBOX';
   additionalStops: number;
   subtotalKobo: string;
   discountKobo: string;

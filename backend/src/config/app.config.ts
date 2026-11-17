@@ -2,6 +2,8 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { Env } from './env.config';
 
+export type MapsProviderKey = 'stub' | 'google' | 'geoapify' | 'mapbox';
+
 /**
  * Typed accessors over validated environment config.
  * No `process.env` reads anywhere else in the codebase.
@@ -31,9 +33,13 @@ export class AppConfig {
   /** Where a gateway returns the customer after paying. */
   get frontendUrl(): string { return this.config.get('FRONTEND_URL', { infer: true }); }
   get mapsProvider() { return this.config.get('MAPS_PROVIDER', { infer: true }); }
-  /** Lower-cased provider for comparisons: 'stub' | 'google' | 'mapbox'. */
-  get mapsProviderKey(): 'stub' | 'google' | 'mapbox' {
-    return this.config.get('MAPS_PROVIDER', { infer: true }).toLowerCase() as 'stub' | 'google' | 'mapbox';
+  /** Lower-cased provider for comparisons: 'stub' | 'google' | 'geoapify' | 'mapbox'. */
+  get mapsProviderKey(): MapsProviderKey {
+    return this.config.get('MAPS_PROVIDER', { infer: true }).toLowerCase() as MapsProviderKey;
+  }
+  get geoapifyApiKey(): string | undefined {
+    const key = this.config.get('GEOAPIFY_API_KEY', { infer: true })?.trim();
+    return key ? key : undefined;
   }
   /** Number of proxy hops to trust when reading X-Forwarded-For. */
   get trustProxy(): number { return this.config.get('TRUST_PROXY', { infer: true }); }

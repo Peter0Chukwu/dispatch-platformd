@@ -11,7 +11,7 @@ each one, sitting one environment variable away from going live:
 |---|---|---|
 | Paystack | `PAYMENTS_MODE=DEVELOPMENT` (simulator) | `PAYMENTS_MODE=SANDBOX` (or `LIVE`) + `PAYSTACK_*` keys |
 | Flutterwave | same | `FLUTTERWAVE_*` keys |
-| Google Maps | `MAPS_PROVIDER=STUB` (real Benin City coordinates, straight-line distances) | `MAPS_PROVIDER=GOOGLE` + `GOOGLE_MAPS_API_KEY` |
+| Maps | `MAPS_PROVIDER=STUB` (real Benin City coordinates, straight-line distances) | `MAPS_PROVIDER=GEOAPIFY` + `GEOAPIFY_API_KEY` + `VITE_GEOAPIFY_API_KEY` (recommended, no card) or `GOOGLE` + `GOOGLE_MAPS_API_KEY` |
 | SMS | `SMS_MODE=CONSOLE` (printed to the API log) | `SMS_MODE=TERMII` + `TERMII_API_KEY` + approved sender ID |
 | Email | `EMAIL_MODE=CONSOLE` | `EMAIL_MODE=RESEND` + `RESEND_API_KEY` + verified domain |
 
@@ -89,12 +89,45 @@ FLUTTERWAVE_WEBHOOK_HASH="the-hash-you-typed-in-the-dashboard"
 
 ---
 
-## 3. Google Maps — addresses, routes, distance, ETA, live map (Phase 8)
+## 3. Maps — addresses, routes, distance, ETA, live map (Phase 8)
 
 **What we use it for:** address autocomplete, geocoding of pickup/drop-off, road distance instead of
 straight-line, ETA, and the customer/admin map.
 
-**How to get the key**
+**Pick one provider.** `MAPS_PROVIDER` decides; the rest of the codebase does not care. The
+recommendation is **Geoapify**, because it needs no card and one key covers suggestions, geocoding,
+routing *and* the map tiles. Google is supported too if you already have a billing-enabled Cloud
+project.
+
+### 3a. Geoapify (recommended)
+
+1. Sign up at <https://myprojects.geoapify.com/register> — an email form, **no card, no billing
+   screen**.
+2. Create a project, then an **API key** (the free plan is 3,000 credits a day, up to 5 requests a
+   second, commercial use allowed with attribution).
+3. Put the same key in both places — it is a single key, not two:
+
+   ```dotenv
+   # backend
+   MAPS_PROVIDER=GEOAPIFY
+   GEOAPIFY_API_KEY=your-geoapify-key
+
+   # frontend (build-time: rebuild the web image after setting it)
+   VITE_GEOAPIFY_API_KEY=your-geoapify-key
+   ```
+
+4. What a booking costs against the 3,000 daily credits: **1** for the route, **1** if the customer's
+   typed address has to be geocoded, and **0.25 per map tile** (a typical map view is 20–30 tiles, so
+   roughly 5–8 credits). That is several hundred map views plus thousands of bookings a day.
+5. The free plan requires the **"Powered by Geoapify"** attribution and OpenStreetMap credit — the
+   map component renders both automatically; do not remove them.
+
+**Coverage, measured:** OpenStreetMap has Benin City's roads (Ring Road → Ugbowo routes as 10.6 km),
+but many Benin City streets are unnamed in it and informal landmarks are absent. That is why the
+booking form leads with the platform's own saved locations — keep that list maintained and the
+provider only has to handle the long tail.
+
+### 3b. Google Maps (if you already have a Cloud project)
 
 1. Sign in at <https://console.cloud.google.com> → create (or pick) a project.
 2. **APIs & Services → Library** → enable **exactly these four**, and nothing else:
@@ -121,7 +154,9 @@ straight-line, ETA, and the customer/admin map.
 5. Paste the server key into `GOOGLE_MAPS_API_KEY`, and give the browser key to the frontend
    (`VITE_GOOGLE_MAPS_API_KEY`, a **build-time** variable — the web image must be rebuilt after you set it).
 
-**If you enable the wrong set**, nothing breaks loudly: the API logs
+**If you enable the wrong set**, nothing breaks loudly: the API logs (this line, and the Geoapify
+equivalent, is the same signal — a key that is missing, restricted too tightly, or pointed at an API
+that is not enabled):
 `Routes API failed, falling back to the stub estimate: Routes responded 403` (or the same line for
 Places) and keeps pricing with the stub model. That warning in the logs is the signal that a key is
 missing, restricted too tightly, or pointed at an API that is not enabled.

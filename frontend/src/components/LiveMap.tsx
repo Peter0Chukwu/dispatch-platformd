@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import "leaflet/dist/leaflet.css";
 import { cn } from "../lib/cn";
 
 /**
@@ -6,12 +7,17 @@ import { cn } from "../lib/cn";
  * ─────────────────────────────────────────────────────────────────────────────
  * This component draws real coordinates and is honest about its basemap.
  *
- *   · With `VITE_GOOGLE_MAPS_API_KEY` set, it loads the Google Maps JavaScript API
- *     and draws street-level tiles with proper markers.
+ *   · With `VITE_GEOAPIFY_API_KEY` set, it draws a street map with Leaflet (a small
+ *     open library) over Geoapify's OpenStreetMap tiles — the "Powered by Geoapify"
+ *     attribution their free plan requires sits under the map.
  *   · Without a key it draws a **schematic**: every point is placed at its true
  *     latitude/longitude relative to the others, on a plain grid. Nothing is moved,
  *     interpolated or invented — the caption says exactly that, so nobody mistakes
  *     a schematic for a street map.
+ *
+ * Leaflet rather than Google's JavaScript API on purpose: it needs no vendor
+ * script tag, works with any tile source, and means the map keeps working if the
+ * routing provider is ever changed again.
  *
  * What this component will NOT do is invent a position. If a rider has not pinged,
  * `points` contains no rider and the map says "no position reported yet".
@@ -61,9 +67,9 @@ export function LiveMap({
 }: LiveMapProps) {
   const [myPosition, setMyPosition] = useState<{ lat: number; lng: number } | null>(null);
   const [geoError, setGeoError] = useState<string | null>(null);
-  const [googleReady, setGoogleReady] = useState(false);
-  const mapKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY as string | undefined;
-  const containerRef = useRef<HTMLDivElement | null>(null);
+  // One key draws the basemap. Absent, the schematic below draws the same
+  // coordinates on a grid and the caption says which one you are looking at.
+  const mapKey = (import.meta.env.VITE_GEOAPIFY_API_KEY as string | undefined)?.trim() || undefined;
 
   /**
    * The viewer's own position is strictly opt-in.
@@ -97,28 +103,6 @@ export function LiveMap({
     [points, myPosition],
   );
 
-  // Load the Google Maps JS API only when a key exists and the container is on screen.
-  useEffect(() => {
-    if (!mapKey || allPoints.length === 0) return;
-    const globalWindow = window as unknown as { google?: { maps?: unknown } };
-    if (globalWindow.google?.maps) {
-      setGoogleReady(true);
-      return;
-    }
-    const existing = document.querySelector<HTMLScriptElement>("script[data-google-maps]");
-    if (existing) {
-      existing.addEventListener("load", () => setGoogleReady(true));
-      return;
-    }
-    const script = document.createElement("script");
-    script.dataset.googleMaps = "true";
-    script.async = true;
-    script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(mapKey)}&v=weekly`;
-    script.addEventListener("load", () => setGoogleReady(true));
-    script.addEventListener("error", () => setGoogleReady(false));
-    document.head.appendChild(script);
-  }, [mapKey, allPoints.length]);
-
   if (allPoints.length === 0) {
     return (
       <div
@@ -135,16 +119,14 @@ export function LiveMap({
 
   return (
     <div className={cn("overflow-hidden rounded-xl border border-slate-200 bg-white", className)}>
-      {mapKey && googleReady ? (
-        <GoogleMapCanvas points={allPoints} connect={connect ?? null} height={height} containerRef={containerRef} />
+      {mapKey ? (
+        <StreetMap points={allPoints} connect={connect ?? null} height={height} apiKey={mapKey} />
       ) : (
         <SchematicMap points={allPoints} connect={connect ?? null} height={height} />
       )}
       <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 bg-slate-50 px-3 py-2">
         <p className="text-[11px] leading-snug text-slate-500">
-          {mapKey && googleReady
-            ? "Street map · positions reported by the rider app."
-            : "Schematic view — positions are exact, the basemap is not. Set GOOGLE_MAPS_API_KEY (and VITE_GOOGLE_MAPS_API_KEY) for street-level maps."}
+          {mapKey ? "Street map · positions reported by the rider app." : "Schematic view · positions are exact."}
         </p>
         <Legend />
       </div>
@@ -269,80 +251,139 @@ function SchematicMap({
   );
 }
 
-/* ─────────────────────────── google renderer ─────────────────────────── */
+/* ─────────────────────────── leaflet renderer ─────────────────────────── */
 
-function GoogleMapCanvas({
+/**
+ * The street map.
+ *
+ * Leaflet is imported dynamically so the library (and its CSS) only loads on a
+ * screen that actually shows a map — the login form and the dashboards do not pay
+ * for it. Tiles come from Geoapify; the attribution their free plan requires is
+ * attached to the layer, where Leaflet renders it in the corner of the map.
+ */
+function StreetMap({
   points,
   connect,
   height,
-  containerRef,
+  apiKey,
 }: {
   points: MapPoint[];
   connect: LiveMapProps["connect"];
   height: number;
-  containerRef: React.MutableRefObject<HTMLDivElement | null>;
+  apiKey: string;
 }) {
-  const mapRef = useRef<{ fitBounds?: (bounds: unknown) => void } | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const mapRef = useRef<unknown>(null);
+  const layersRef = useRef<unknown>(null);
+  const fittedForRef = useRef<string>("");
+  const [failed, setFailed] = useState(false);
+
+  // The set of ids, not the coordinates: a rider moving should redraw markers but
+  // must not keep yanking the viewport back while the viewer pans around.
+  const idSignature = points.map((point) => point.id).sort().join(",");
 
   useEffect(() => {
-    const google = (window as unknown as {
-      google?: {
-        maps: {
-          Map: new (el: HTMLElement, options: Record<string, unknown>) => unknown;
-          LatLngBounds: new () => { extend: (p: { lat: number; lng: number }) => void };
-          LatLng: new (lat: number, lng: number) => unknown;
-          Marker: new (options: Record<string, unknown>) => unknown;
-          Polyline: new (options: Record<string, unknown>) => unknown;
-        };
-      };
-    }).google;
-    if (!google || !containerRef.current) return;
+    let cancelled = false;
 
-    const bounds = new google.maps.LatLngBounds();
-    for (const point of points) bounds.extend({ lat: point.lat, lng: point.lng });
+    void (async () => {
+      try {
+        const L = (await import("leaflet")).default;
+        if (cancelled || !containerRef.current || mapRef.current) return;
 
-    const map = new google.maps.Map(containerRef.current, {
-      center: { lat: points[0]!.lat, lng: points[0]!.lng },
-      zoom: 14,
-      disableDefaultUI: true,
-      zoomControl: true,
-      gestureHandling: "cooperative",
-    }) as { fitBounds?: (value: unknown) => void };
-    mapRef.current = map;
-    map.fitBounds?.(bounds);
+        const map = L.map(containerRef.current, {
+          zoomControl: true,
+          attributionControl: true,
+          // Panning with one finger is how people actually use this on a phone;
+          // pinch still zooms.
+          dragging: true,
+        }).setView([points[0]!.lat, points[0]!.lng], 14);
 
-    for (const point of points) {
-      const style = KIND_STYLE[point.kind];
-      new google.maps.Marker({
-        map,
-        position: { lat: point.lat, lng: point.lng },
-        title: point.label,
-        opacity: point.stale ? 0.45 : 1,
-        icon: {
-          path: 0, // google.maps.SymbolPath.CIRCLE is 0
-          fillColor: style.fill,
-          fillOpacity: 1,
-          strokeColor: "#ffffff",
-          strokeWeight: 2,
-          scale: 8,
-        },
-      });
-    }
+        L.tileLayer(`https://maps.geoapify.com/v1/tile/osm-bright/{z}/{x}/{y}.png?apiKey=${encodeURIComponent(apiKey)}`, {
+          maxZoom: 19,
+          attribution:
+            'Powered by <a href="https://www.geoapify.com/" target="_blank" rel="noreferrer">Geoapify</a> · ' +
+            '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> contributors',
+        }).addTo(map);
 
-    if (connect) {
-      const from = points.find((point) => point.id === connect.from);
-      const to = points.find((point) => point.id === connect.to);
-      if (from && to) {
-        new google.maps.Polyline({
-          map,
-          path: [{ lat: from.lat, lng: from.lng }, { lat: to.lat, lng: to.lng }],
-          strokeColor: "#f97316",
-          strokeOpacity: 0.8,
-          strokeWeight: 3,
-        });
+        mapRef.current = map;
+        layersRef.current = L.layerGroup().addTo(map);
+        setFailed(false);
+      } catch {
+        setFailed(true);
       }
-    }
-  }, [points, connect, containerRef]);
+    })();
 
-  return <div ref={containerRef} style={{ height }} className="w-full bg-slate-100" />;
+    return () => {
+      cancelled = true;
+      const map = mapRef.current as { remove?: () => void } | null;
+      map?.remove?.();
+      mapRef.current = null;
+      layersRef.current = null;
+    };
+    // Deliberately created once per key: points are drawn by the effect below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [apiKey]);
+
+  useEffect(() => {
+    const map = mapRef.current as
+      | {
+          fitBounds: (bounds: unknown, options?: unknown) => void;
+          setView: (center: [number, number], zoom: number) => void;
+        }
+      | null;
+    const layers = layersRef.current as { clearLayers: () => void; addLayer: (layer: unknown) => void } | null;
+    if (!map || !layers) return;
+
+    void (async () => {
+      const L = (await import("leaflet")).default;
+      layers.clearLayers();
+
+      const latLngs: [number, number][] = [];
+      for (const point of points) {
+        const style = KIND_STYLE[point.kind];
+        latLngs.push([point.lat, point.lng]);
+
+        // A circle marker rather than an image pin: no icon assets to load, no
+        // broken-image box when a tile server is unreachable, and it keeps the
+        // platform's colour language (pickup / drop-off / rider).
+        L.circleMarker([point.lat, point.lng], {
+          radius: point.kind === "rider" ? 9 : 7,
+          color: "#ffffff",
+          weight: 2,
+          fillColor: style.fill,
+          fillOpacity: point.stale ? 0.4 : 1,
+          opacity: point.stale ? 0.4 : 1,
+        })
+          .bindTooltip(point.label, { direction: "top", offset: [0, -8] })
+          .addTo(layers as never);
+      }
+
+      if (connect) {
+        const from = points.find((point) => point.id === connect.from);
+        const to = points.find((point) => point.id === connect.to);
+        if (from && to) {
+          L.polyline(
+            [
+              [from.lat, from.lng],
+              [to.lat, to.lng],
+            ],
+            { color: "#f97316", weight: 3, opacity: 0.8, dashArray: "6 6" },
+          ).addTo(layers as never);
+        }
+      }
+
+      // Fit once per set of points; after that the viewer is in charge of the view.
+      if (latLngs.length > 0 && fittedForRef.current !== idSignature) {
+        fittedForRef.current = idSignature;
+        if (latLngs.length === 1) map.setView(latLngs[0]!, 15);
+        else map.fitBounds(L.latLngBounds(latLngs), { padding: [28, 28] });
+      }
+    })();
+  }, [points, connect, idSignature]);
+
+  if (failed) {
+    return <SchematicMap points={points} connect={connect} height={height} />;
+  }
+
+  return <div ref={containerRef} style={{ height }} className="z-0 w-full bg-slate-100" />;
 }

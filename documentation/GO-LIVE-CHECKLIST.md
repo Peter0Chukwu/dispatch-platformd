@@ -84,7 +84,7 @@ Copy this file to a ticket or a text note and fill in the date and initials as y
 - [ ] **A real signup OTP arrives on a real Nigerian number.** Record the number used: ______________
 - [ ] **Email is not in `CONSOLE` mode.** `EMAIL_MODE=RESEND`, `RESEND_API_KEY` set, `EMAIL_FROM` on a domain you have verified with the provider
 - [ ] **A verification email lands in an inbox** (and not in spam — check SPF/DKIM if it does)
-- [ ] **Maps:** either `MAPS_PROVIDER=STUB` **knowingly** accepted for launch, or `GOOGLE` with a billed key, and the web rebuilt with `VITE_GOOGLE_MAPS_API_KEY` (`docker compose build web`)
+- [ ] **Maps:** either `MAPS_PROVIDER=STUB` **knowingly** accepted for launch, or `GEOAPIFY` with a free key (recommended) / `GOOGLE` with a billed key, and the web rebuilt with the matching `VITE_` variable (`docker compose build web`)
 - [ ] **The Maps browser key is restricted** in Google Cloud to your domain and to the APIs you use — a browser key is public by nature, so restriction is the only control
 
 ## F. Data and pricing — the numbers customers will see
@@ -141,7 +141,7 @@ Copy this file to a ticket or a text note and fill in the date and initials as y
 
 * **Items marked ⚠️ VPS-ONLY have never been executed.** There is no Docker in the environment
   this platform was built in, so `docker-compose.yml`, `deploy/Dockerfile.api`,
-  `deploy/Dockerfile.web` and `deploy/nginx.conf` are authored and reviewed but unbuilt. Section
+  `deploy/Dockerfile.web` and `deploy/nginx-templates/default.conf.template` are authored and reviewed but unbuilt. Section
   C is therefore a genuine test, not a formality. If something is wrong there, it will be
   something small and boring — a missing `prisma` binary, a wrong build context — and it will be
   obvious in the logs.

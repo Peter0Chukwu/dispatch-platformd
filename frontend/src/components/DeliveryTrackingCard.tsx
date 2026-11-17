@@ -136,7 +136,7 @@ export function DeliveryTrackingCard({
                   {data.rider ? ` · rider ${data.rider.riderCode}` : ""}
                 </p>
                 <p className="ml-auto text-[11px] text-brand-700">
-                  {data.eta.source === "GOOGLE" ? "Road route" : "Estimated route"}
+                  {data.eta.source === "STUB" ? "Estimated route" : "Road route"}
                 </p>
               </div>
             )}

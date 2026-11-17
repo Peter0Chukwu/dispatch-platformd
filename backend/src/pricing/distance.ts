@@ -44,7 +44,7 @@ export interface RouteEstimate {
   distanceKm: number;
   durationMinutes: number;
   /** 'STUB' means haversine × road factor, not a real route. Shown in the UI. */
-  source: 'STUB' | 'GOOGLE';
+  source: 'STUB' | 'GOOGLE' | 'GEOAPIFY' | 'MAPBOX';
 }
 
 export function estimateRoute(from: Point, to: Point): RouteEstimate {

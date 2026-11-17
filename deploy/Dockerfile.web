@@ -17,9 +17,12 @@ COPY packages/shared ./packages/shared
 COPY frontend ./frontend
 # Vite compiles the shared package from source, so no shared build step is needed.
 # Anything the browser must know at build time is passed in here.
+ARG VITE_GEOAPIFY_API_KEY=""
 ARG VITE_GOOGLE_MAPS_API_KEY=""
 ARG VITE_APP_NAME="Dispatch"
-ENV VITE_GOOGLE_MAPS_API_KEY=$VITE_GOOGLE_MAPS_API_KEY VITE_APP_NAME=$VITE_APP_NAME
+ENV VITE_GEOAPIFY_API_KEY=$VITE_GEOAPIFY_API_KEY \
+    VITE_GOOGLE_MAPS_API_KEY=$VITE_GOOGLE_MAPS_API_KEY \
+    VITE_APP_NAME=$VITE_APP_NAME
 RUN cd frontend && npx vite build
 
 FROM nginx:1.27-alpine AS runtime

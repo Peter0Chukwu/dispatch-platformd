@@ -1,57 +1,54 @@
-TRADERS WELFARE — SIGN-IN FIX (CORS)
-====================================
+TRADERS WELFARE — MAPS NOW RUN ON GEOAPIFY
+==========================================
 
 WHAT THIS IS
-  The fix for "Could not sign you in / Something went wrong on our side.
-  Reference: unknown" on the staff page. Commit a3e2bfc, on top of 8f2bb0f.
+  Maps without a Google Cloud account. Commit 54b30cc, on top of a3e2bfc.
 
-WHY IT WAS BROKEN (in one paragraph)
-  A browser sends an Origin header on every non-GET request, even when it is
-  calling its own server. Our CORS allowlist did not contain the deployment's
-  own URL (it still said localhost:5173), so the login POST was treated as a
-  foreign site. The code threw an error at that point — and an error thrown that
-  early comes out as a 500 with no request id, which is why the reference said
-  "unknown" instead of a proper code. Nothing was wrong with the account, the
-  password, the database or the API. I proved it against the live server: the
-  same request with no Origin header returned 201; with Origin it returned 500.
+  Geoapify: no card, no billing screen, 3,000 free requests a day, commercial
+  use allowed with attribution, and ONE key covers address suggestions,
+  geocoding, road distance/ETA and the map tiles themselves.
 
-APPLY IT (VS Code Source Control tab first)
-  1. Unzip over C:\Users\USER\Documents\dispatch-platform.
-  2. Source Control: 6 changed files (cors.ts and cors.spec.ts are new).
-  3. Commit with COMMIT-MESSAGE.txt, then Push.
+WHAT YOU DO (about five minutes)
+  1. https://myprojects.geoapify.com/register  — email only, no card.
+  2. Create a project, then copy its API key (one long string).
+  3. Backend service environment:
+         MAPS_PROVIDER=GEOAPIFY
+         GEOAPIFY_API_KEY=your-key
+  4. Web service environment:
+         VITE_GEOAPIFY_API_KEY=your-key
+     Same key. Bare, no quotes.
+  5. REDEPLOY / REBUILD THE WEB SERVICE. Vite bakes VITE_ variables in at build
+     time; restarting alone will not show the map.
 
-TERMINAL
-  git apply --stat sign-in-fix.patch
-  git apply sign-in-fix.patch
-  git add -A && git commit -m "cors: the app's own origin can always sign in"
-  git push
+HOW TO TELL IT WORKED
+  · https://<your-api-host>/api/v1 now shows  maps: GEOAPIFY
+  · Booking form: type "sapele" — the caption changes from "Popular Benin City
+    locations." to "Address suggestions as you type."
+  · A fare shows a road distance, and the tracking card says "Road route".
+  · The tracking page shows a street map with "Powered by Geoapify".
 
-MEANWHILE — UNBLOCK IT WITHOUT WAITING FOR A REDEPLOY
-  In Northflank, on the API service (twl-frontend), add to the environment:
+IF IT DOES NOT WORK
+  The API log names the failing call, e.g.
+    Geoapify routing failed, falling back to the stub estimate:
+    Geoapify routing responded 401
+  401 = key wrong (often a stray quote). 403 = key deleted. 429 = too fast.
 
-    CORS_ORIGINS=https://p01--twl-frontend--glzb7542cqkx.code.run
+APPLY THE CODE (VS Code Source Control tab first)
+  Unzip over C:\Users\USER\Documents\dispatch-platform, stage the 21 changed
+  files plus the 2 new ones (test/maps.geoapify.spec.ts and
+  documentation/MAPS-GEOAPIFY-SETUP.md), commit with COMMIT-MESSAGE.txt, push.
+  Terminal instead:
+      git apply --stat geoapify.patch
+      git apply geoapify.patch
+      npm install          # leaflet is now a dependency
+      git add -A && git commit -F COMMIT-MESSAGE.txt && git push
 
-  and also set, if it is not already right:
+READ
+  documentation/MAPS-GEOAPIFY-SETUP.md  ← (in the repo at
+  documentation/MAPS-GEOAPIFY-SETUP.md) the full walkthrough, including what a
+  booking costs against the daily allowance.
 
-    FRONTEND_URL=https://p01--twl-frontend--glzb7542cqkx.code.run
-
-  Save, let it restart, then sign in. Type the value bare — no quotes.
-  Once this patch is deployed, you will not need CORS_ORIGINS for your own
-  host any more, only if the web app and the API ever live on different hosts.
-
-CHECK IT
-  curl -s -o /dev/null -w '%{http_code}\n' -X POST \
-    https://p01--twl-frontend--glzb7542cqkx.code.run/api/v1/auth/login \
-    -H 'Content-Type: application/json' \
-    -H 'Origin: https://p01--twl-frontend--glzb7542cqkx.code.run' \
-    -d '{"identifier":"admin@dispatch.test","password":"wrong-password","audience":"ADMIN"}'
-
-  Expect 401 (that is "wrong password", which is correct and proves the request
-  got through). 500 means the old build or the old environment value is still
-  in place.
-
-AFTER THAT
-  GOOGLE-MAPS-SETUP.md (in the previous zip) answers the VITE_GOOGLE_MAPS_API_KEY
-  question. Short version: it is the BROWSER key from Google Cloud, it must be
-  added as a build-time variable on the WEB service and the web service rebuilt,
-  because Vite bakes it into the JavaScript.
+NOTHING IS LOST BY WAITING
+  With no key the app still works: real Benin City coordinates, a straight-line
+  distance model, and screens that say "estimated". Google stays supported
+  (MAPS_PROVIDER=GOOGLE) if you ever sort that account out.

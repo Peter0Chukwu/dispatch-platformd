@@ -36,8 +36,10 @@ export const envSchema = z.object({
   FLUTTERWAVE_PUBLIC_KEY: z.string().optional().default(''),
   FLUTTERWAVE_WEBHOOK_HASH: z.string().optional().default(''),
 
-  MAPS_PROVIDER: z.enum(['STUB', 'GOOGLE', 'MAPBOX']).default('STUB'),
+  MAPS_PROVIDER: z.enum(['STUB', 'GOOGLE', 'GEOAPIFY', 'MAPBOX']).default('STUB'),
   GOOGLE_MAPS_API_KEY: z.string().optional().default(''),
+  /** Geoapify: tiles, address suggestions, geocoding and routing from one key. */
+  GEOAPIFY_API_KEY: z.string().optional().default(''),
 
   SMS_MODE: z.enum(['CONSOLE', 'TERMII']).default('CONSOLE'),
   /** Masked voice calling. CONSOLE = not connected yet; TERMII = number masking live. */

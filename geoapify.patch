@@ -1,0 +1,1403 @@
+diff --git a/.env.example b/.env.example
+index cd4f3cd..3ebd4c7 100644
+--- a/.env.example
++++ b/.env.example
+@@ -38,7 +38,10 @@ FLUTTERWAVE_SECRET_KEY=
+ FLUTTERWAVE_PUBLIC_KEY=
+ FLUTTERWAVE_WEBHOOK_HASH=
+ 
+-MAPS_PROVIDER=STUB            # STUB | GOOGLE | MAPBOX
++MAPS_PROVIDER=STUB            # STUB | GEOAPIFY | GOOGLE   (MAPBOX is reserved)
++# Geoapify: suggestions, geocoding, routing and map tiles from one free key.
++GEOAPIFY_API_KEY=
++# Only when MAPS_PROVIDER=GOOGLE
+ GOOGLE_MAPS_API_KEY=
+ 
+ SMS_MODE=CONSOLE              # CONSOLE | TERMII
+diff --git a/backend/src/config/app.config.ts b/backend/src/config/app.config.ts
+index f7b365b..0d05ceb 100644
+--- a/backend/src/config/app.config.ts
++++ b/backend/src/config/app.config.ts
+@@ -2,6 +2,8 @@ import { Injectable } from '@nestjs/common';
+ import { ConfigService } from '@nestjs/config';
+ import type { Env } from './env.config';
+ 
++export type MapsProviderKey = 'stub' | 'google' | 'geoapify' | 'mapbox';
++
+ /**
+  * Typed accessors over validated environment config.
+  * No `process.env` reads anywhere else in the codebase.
+@@ -31,9 +33,13 @@ export class AppConfig {
+   /** Where a gateway returns the customer after paying. */
+   get frontendUrl(): string { return this.config.get('FRONTEND_URL', { infer: true }); }
+   get mapsProvider() { return this.config.get('MAPS_PROVIDER', { infer: true }); }
+-  /** Lower-cased provider for comparisons: 'stub' | 'google' | 'mapbox'. */
+-  get mapsProviderKey(): 'stub' | 'google' | 'mapbox' {
+-    return this.config.get('MAPS_PROVIDER', { infer: true }).toLowerCase() as 'stub' | 'google' | 'mapbox';
++  /** Lower-cased provider for comparisons: 'stub' | 'google' | 'geoapify' | 'mapbox'. */
++  get mapsProviderKey(): MapsProviderKey {
++    return this.config.get('MAPS_PROVIDER', { infer: true }).toLowerCase() as MapsProviderKey;
++  }
++  get geoapifyApiKey(): string | undefined {
++    const key = this.config.get('GEOAPIFY_API_KEY', { infer: true })?.trim();
++    return key ? key : undefined;
+   }
+   /** Number of proxy hops to trust when reading X-Forwarded-For. */
+   get trustProxy(): number { return this.config.get('TRUST_PROXY', { infer: true }); }
+diff --git a/backend/src/config/env.config.ts b/backend/src/config/env.config.ts
+index 57c714d..fa4e1a6 100644
+--- a/backend/src/config/env.config.ts
++++ b/backend/src/config/env.config.ts
+@@ -36,8 +36,10 @@ export const envSchema = z.object({
+   FLUTTERWAVE_PUBLIC_KEY: z.string().optional().default(''),
+   FLUTTERWAVE_WEBHOOK_HASH: z.string().optional().default(''),
+ 
+-  MAPS_PROVIDER: z.enum(['STUB', 'GOOGLE', 'MAPBOX']).default('STUB'),
++  MAPS_PROVIDER: z.enum(['STUB', 'GOOGLE', 'GEOAPIFY', 'MAPBOX']).default('STUB'),
+   GOOGLE_MAPS_API_KEY: z.string().optional().default(''),
++  /** Geoapify: tiles, address suggestions, geocoding and routing from one key. */
++  GEOAPIFY_API_KEY: z.string().optional().default(''),
+ 
+   SMS_MODE: z.enum(['CONSOLE', 'TERMII']).default('CONSOLE'),
+   /** Masked voice calling. CONSOLE = not connected yet; TERMII = number masking live. */
+diff --git a/backend/src/pricing/distance.ts b/backend/src/pricing/distance.ts
+index de2f2aa..bd3f41d 100644
+--- a/backend/src/pricing/distance.ts
++++ b/backend/src/pricing/distance.ts
+@@ -44,7 +44,7 @@ export interface RouteEstimate {
+   distanceKm: number;
+   durationMinutes: number;
+   /** 'STUB' means haversine × road factor, not a real route. Shown in the UI. */
+-  source: 'STUB' | 'GOOGLE';
++  source: 'STUB' | 'GOOGLE' | 'GEOAPIFY' | 'MAPBOX';
+ }
+ 
+ export function estimateRoute(from: Point, to: Point): RouteEstimate {
+diff --git a/backend/src/pricing/maps-types.ts b/backend/src/pricing/maps-types.ts
+index 9c3f8bc..bd58d88 100644
+--- a/backend/src/pricing/maps-types.ts
++++ b/backend/src/pricing/maps-types.ts
+@@ -1,13 +1,13 @@
+ /**
+  * The shape every map lookup returns, whatever the provider.
+  *
+- * Google, Mapbox or the built-in stub all answer with these objects, so nothing
++ * Geoapify, Google or the built-in stub all answer with these objects, so nothing
+  * downstream — the booking form, tracking, the admin map — needs to know which one
+  * is configured. It also means the UI can label results honestly: `source: 'STUB'`
+  * says "these are real coordinates from our own Benin City table, not a geocoder".
+  */
+ export interface PlaceResult {
+-  /** Stable id ('vi-adeola' for the stub, `place_id` for Google). */
++  /** Stable id ('ring-road' for the stub, `place_id` for a provider). */
+   id: string;
+   /** Short label for a dropdown. */
+   name: string;
+@@ -17,14 +17,14 @@ export interface PlaceResult {
+   lat: number;
+   lng: number;
+   /** Which service produced this row. */
+-  source: 'STUB' | 'GOOGLE' | 'MAPBOX';
++  source: 'STUB' | 'GOOGLE' | 'GEOAPIFY' | 'MAPBOX';
+ }
+ 
+ export interface GeocodeResult {
+   address: string;
+   lat: number;
+   lng: number;
+-  source: 'STUB' | 'GOOGLE' | 'MAPBOX';
++  source: 'STUB' | 'GOOGLE' | 'GEOAPIFY' | 'MAPBOX';
+   /** True when the coordinates are approximate (stub) rather than surveyed. */
+   approximate: boolean;
+ }
+diff --git a/backend/src/pricing/maps.service.ts b/backend/src/pricing/maps.service.ts
+index 98d9705..9fe26fe 100644
+--- a/backend/src/pricing/maps.service.ts
++++ b/backend/src/pricing/maps.service.ts
+@@ -1,28 +1,45 @@
+ import { Injectable, Logger } from '@nestjs/common';
+-import { AppConfig } from '../config/app.config';
++import { AppConfig, type MapsProviderKey } from '../config/app.config';
+ import { estimateRoute, haversineKm, type Point, type RouteEstimate } from './distance';
+ import type { GeocodeResult, PlaceResult } from './maps-types';
+ 
+ /**
+  * MapsService — the only place that knows how routes are measured.
+  *
+- * Today `MAPS_PROVIDER=stub` (haversine × road factor). When the Google Maps key
+- * is configured, `MAPS_PROVIDER=google` switches this to Google's current
+- * services and NOTHING ELSE in the codebase has to change: PricingService only
+- * ever calls `estimateRoute()` and receives the same shape back.
++ * `MAPS_PROVIDER` picks the provider; NOTHING ELSE in the codebase has to change,
++ * because PricingService only ever calls `estimateRoute()` and receives the same
++ * shape back:
+  *
+- * WHICH GOOGLE SERVICES, AND WHY THESE ONES
++ *   stub (default)  haversine × road factor, no key, no account
++ *   geoapify        OpenStreetMap data, one key for suggestions + routes + tiles
++ *   google          Places API (New) + Routes API + Geocoding
++ *   mapbox          not implemented — the enum value is reserved
++ *
++ * WHY GEOAPIFY IS THE DEFAULT CHOICE FOR A NEW DEPLOYMENT
++ * Its free plan needs no card, allows commercial use with attribution, and one
++ * key covers every call this file makes. Google's equivalent needs a billing
++ * account before it answers a single request.
++ *
++ * A note on coverage, measured rather than assumed: OpenStreetMap (what Geoapify
++ * serves) has Benin City's roads — a Ring Road → Ugbowo drive measures 10.6 km
++ * and returns in about 10 minutes — but many Benin City streets have no name in
++ * the data, and informal landmarks are absent from every provider. That is why
++ * the booking form leads with the platform's own saved locations and treats a
++ * typed address as the fallback.
++ *
++ * WHICH GOOGLE SERVICES, IF YOU CHOOSE GOOGLE
+  * Google retired the legacy Places, Directions and Distance Matrix endpoints on
+- * 5 October 2026: a Google Cloud project created after that date cannot enable
+- * them at all. Since every deployment of this platform starts as a new project,
+- * this file speaks only to what a new project can actually use —
++ * 5 October 2026: a Cloud project created after that date cannot enable them.
++ * This file therefore speaks only to what a new project can use —
+  *   · Places API (New)     places.googleapis.com  — address suggestions + details
+  *   · Routes API           routes.googleapis.com  — driving distance and duration
+  *   · Geocoding API        maps.googleapis.com    — written address ↔ coordinates
+- *                                           (Geocoding was not retired.)
+- * A key that only has the legacy APIs enabled will fail here, and the service
+- * falls back to the stub with a warning in the log rather than blocking a
+- * booking.
++ * A key that only has the legacy APIs enabled fails here, and the service falls
++ * back to the stub with a warning rather than blocking a booking.
++ *
++ * The stub is always the floor. Any provider error — bad key, quota, outage —
++ * logs one warning and prices the booking from the stub table, because a
++ * customer must never be unable to book a parcel because a map vendor is down.
+  */
+ @Injectable()
+ export class MapsService {
+@@ -30,7 +47,7 @@ export class MapsService {
+ 
+   constructor(private readonly config: AppConfig) {}
+ 
+-  get provider(): 'stub' | 'google' | 'mapbox' {
++  get provider(): MapsProviderKey {
+     return this.config.mapsProviderKey;
+   }
+ 
+@@ -40,6 +57,15 @@ export class MapsService {
+    * stub so a booking is never blocked by a third-party outage.
+    */
+   async estimateRoute(from: Point, to: Point): Promise<RouteEstimate> {
++    if (this.provider === 'geoapify' && this.config.geoapifyApiKey) {
++      try {
++        return await this.geoapifyRoute(from, to, this.config.geoapifyApiKey);
++      } catch (error) {
++        this.logger.warn(
++          `Geoapify routing failed, falling back to the stub estimate: ${(error as Error).message}`,
++        );
++      }
++    }
+     if (this.provider === 'google') {
+       try {
+         return await this.googleRoute(from, to);
+@@ -67,6 +93,17 @@ export class MapsService {
+     const trimmed = query.trim();
+     if (trimmed.length < 2) return [];
+ 
++    if (this.provider === 'geoapify') {
++      const key = this.config.geoapifyApiKey;
++      if (key) {
++        try {
++          const results = await this.geoapifyPlaces('autocomplete', trimmed, key, limit);
++          if (results.length > 0) return results;
++        } catch (error) {
++          this.logger.warn(`Geoapify suggestions failed, falling back to local places: ${(error as Error).message}`);
++        }
++      }
++    }
+     if (this.provider === 'google') {
+       const key = this.config.googleMapsApiKey;
+       if (key) {
+@@ -86,6 +123,19 @@ export class MapsService {
+     const trimmed = address.trim();
+     if (trimmed.length < 3) return null;
+ 
++    if (this.provider === 'geoapify') {
++      const key = this.config.geoapifyApiKey;
++      if (key) {
++        try {
++          const [match] = await this.geoapifyPlaces('search', trimmed, key, 1);
++          if (match) {
++            return { address: match.address, lat: match.lat, lng: match.lng, source: 'GEOAPIFY', approximate: false };
++          }
++        } catch (error) {
++          this.logger.warn(`Geoapify geocode failed, falling back to local places: ${(error as Error).message}`);
++        }
++      }
++    }
+     if (this.provider === 'google') {
+       const key = this.config.googleMapsApiKey;
+       if (key) {
+@@ -127,6 +177,17 @@ export class MapsService {
+ 
+   /** Coordinates → an address the rider can read. */
+   async reverseGeocode(point: Point): Promise<GeocodeResult | null> {
++    if (this.provider === 'geoapify') {
++      const key = this.config.geoapifyApiKey;
++      if (key) {
++        try {
++          const address = await this.geoapifyReverse(point, key);
++          if (address) return { address, lat: point.lat, lng: point.lng, source: 'GEOAPIFY', approximate: false };
++        } catch (error) {
++          this.logger.warn(`Geoapify reverse geocode failed, falling back to local places: ${(error as Error).message}`);
++        }
++      }
++    }
+     if (this.provider === 'google') {
+       const key = this.config.googleMapsApiKey;
+       if (key) {
+@@ -167,6 +228,100 @@ export class MapsService {
+     };
+   }
+ 
++  /* ─────────────────────────────── Geoapify ───────────────────────────────
++   * OpenStreetMap data. One key covers suggestions, geocoding, reverse geocoding
++   * and routing, and the free plan needs no card.
++   *
++   * Every call is a GET with `apiKey` in the query string — Geoapify's documented
++   * scheme — so, unlike Google, there is no field mask and no header auth to get
++   * wrong. Autocomplete and search answer with already-geocoded rows, which means
++   * choosing a suggestion costs ONE request here instead of Google's one-plus-one.
++   */
++
++  /**
++   * Address suggestions ('autocomplete') or a single best match ('search').
++   * Both endpoints share a response shape: a GeoJSON FeatureCollection.
++   */
++  private async geoapifyPlaces(
++    kind: 'autocomplete' | 'search',
++    query: string,
++    key: string,
++    limit: number,
++  ): Promise<PlaceResult[]> {
++    const params = new URLSearchParams({
++      text: query,
++      // Nigeria only: a suggestion in Ghana or Cameroon is noise for a Benin City
++      // courier, and it also keeps the result list short and cheap.
++      filter: 'countrycode:ng',
++      lang: 'en',
++      limit: String(limit),
++      apiKey: key,
++    });
++    const response = await fetch(`https://api.geoapify.com/v1/geocode/${kind}?${params}`, {
++      signal: AbortSignal.timeout(5000),
++    });
++    if (!response.ok) throw new Error(`Geoapify ${kind} responded ${response.status}`);
++
++    const body = (await response.json()) as GeoapifyFeatureCollection;
++    return (body.features ?? [])
++      .map(toPlaceResult)
++      .filter((place): place is PlaceResult => place !== null)
++      .slice(0, limit);
++  }
++
++  /** Coordinates → the most readable address Geoapify can offer. */
++  private async geoapifyReverse(point: Point, key: string): Promise<string | null> {
++    const params = new URLSearchParams({
++      lat: String(point.lat),
++      lon: String(point.lng),
++      lang: 'en',
++      limit: '1',
++      apiKey: key,
++    });
++    const response = await fetch(`https://api.geoapify.com/v1/geocode/reverse?${params}`, {
++      signal: AbortSignal.timeout(5000),
++    });
++    if (!response.ok) throw new Error(`Geoapify reverse responded ${response.status}`);
++
++    const body = (await response.json()) as GeoapifyFeatureCollection;
++    const first = body.features?.[0]?.properties;
++    return first?.formatted ?? first?.address_line1 ?? null;
++  }
++
++  /**
++   * Driving distance and duration.
++   *
++   * Geoapify answers with `distance` and `time` on the route feature, in metres
++   * and seconds. It can return `units: 'miles'` if an account is configured that
++   * way, so the conversion is explicit rather than assumed.
++   */
++  private async geoapifyRoute(from: Point, to: Point, key: string): Promise<RouteEstimate> {
++    const params = new URLSearchParams({
++      waypoints: `${from.lat},${from.lng}|${to.lat},${to.lng}`,
++      mode: 'drive',
++      apiKey: key,
++    });
++    const response = await fetch(`https://api.geoapify.com/v1/routing?${params}`, {
++      signal: AbortSignal.timeout(5000),
++    });
++    if (!response.ok) throw new Error(`Geoapify routing responded ${response.status}`);
++
++    const body = (await response.json()) as {
++      features?: Array<{ properties?: { distance?: number; time?: number; units?: string } }>;
++    };
++    const route = body.features?.[0]?.properties;
++    if (!route?.distance) throw new Error('Geoapify returned no route');
++
++    const metres = route.units === 'miles' ? route.distance * 1609.344 : route.distance;
++    const seconds = route.time ?? 0;
++
++    return {
++      distanceKm: Math.round((metres / 1000) * 100) / 100,
++      durationMinutes: Math.max(1, Math.round(seconds / 60)),
++      source: 'GEOAPIFY',
++    };
++  }
++
+   /**
+    * Address suggestions from Places API (New).
+    *
+@@ -295,6 +450,56 @@ export class MapsService {
+   }
+ }
+ 
++/* ──────────────────────── Geoapify's response shape ─────────────────────── */
++
++/**
++ * Geoapify answers with GeoJSON, not a bespoke object. Only the fields used here
++ * are declared — anything else in the payload is ignored, so a new field on
++ * their side cannot break a booking.
++ */
++interface GeoapifyFeatureCollection {
++  features?: Array<{
++    properties?: {
++      place_id?: string;
++      name?: string;
++      formatted?: string;
++      address_line1?: string;
++      address_line2?: string;
++      city?: string;
++      suburb?: string;
++      district?: string;
++      street?: string;
++      lat?: number;
++      lon?: number;
++    };
++    geometry?: { coordinates?: [number, number] };
++  }>;
++}
++
++/** One GeoJSON feature → the platform's PlaceResult, or null if it has no position. */
++function toPlaceResult(feature: NonNullable<GeoapifyFeatureCollection['features']>[number]): PlaceResult | null {
++  const props = feature.properties ?? {};
++  // Longitude first: GeoJSON, and the single easiest thing to get wrong here.
++  const lng = props.lon ?? feature.geometry?.coordinates?.[0];
++  const lat = props.lat ?? feature.geometry?.coordinates?.[1];
++  if (typeof lat !== 'number' || typeof lng !== 'number') return null;
++
++  const name = props.name ?? props.address_line1 ?? props.street ?? props.formatted ?? 'Unknown place';
++  const address = props.formatted ?? [props.address_line1, props.address_line2].filter(Boolean).join(', ') ?? name;
++
++  return {
++    id: props.place_id ?? `${lat},${lng}`,
++    name,
++    address: address || name,
++    // The neighbourhood is genuinely useful in Benin City, where "off Sapele Road"
++    // locates a parcel better than a house number nobody uses.
++    landmark: props.suburb ?? props.district ?? props.city ?? null,
++    lat,
++    lng,
++    source: 'GEOAPIFY',
++  };
++}
++
+ /* ────────────────────────── the stub place table ────────────────────────── */
+ 
+ /**
+diff --git a/backend/src/pricing/pricing.service.ts b/backend/src/pricing/pricing.service.ts
+index 7d6f2e3..19618e8 100644
+--- a/backend/src/pricing/pricing.service.ts
++++ b/backend/src/pricing/pricing.service.ts
+@@ -43,7 +43,7 @@ export interface Quote {
+   chargeableKm: number;
+   freeKmIncluded: number;
+   durationMinutes: number;
+-  routeSource: 'STUB' | 'GOOGLE';
++  routeSource: 'STUB' | 'GOOGLE' | 'GEOAPIFY' | 'MAPBOX';
+   additionalStops: number;
+   subtotalKobo: string;
+   discountKobo: string;
+diff --git a/backend/test/maps.geoapify.spec.ts b/backend/test/maps.geoapify.spec.ts
+new file mode 100644
+index 0000000..218a504
+--- /dev/null
++++ b/backend/test/maps.geoapify.spec.ts
+@@ -0,0 +1,209 @@
++import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
++import { MapsService } from '../src/pricing/maps.service';
++import type { AppConfig } from '../src/config/app.config';
++
++/**
++ * The Geoapify adapter, tested against the wire format — no network, no key.
++ *
++ * Geoapify answers with GeoJSON, where coordinates arrive as
++ * `geometry.coordinates: [longitude, latitude]` — longitude first. Getting that
++ * backwards would put every Benin City pickup in the Atlantic off Ghana and would
++ * still "work", so the order is asserted explicitly here.
++ */
++
++const config = {
++  mapsProviderKey: 'geoapify',
++  geoapifyApiKey: 'test-key',
++} as unknown as AppConfig;
++
++/** A suggestion for Ring Road, exactly as Geoapify shapes it. */
++const autocompleteBody = {
++  type: 'FeatureCollection',
++  features: [
++    {
++      type: 'Feature',
++      properties: {
++        place_id: '51f2c3a4d5e6f7',
++        name: 'Ring Road',
++        formatted: 'Ring Road, Benin City, 300102, Nigeria',
++        address_line1: 'Ring Road',
++        address_line2: 'Benin City, 300102, Nigeria',
++        suburb: 'Oredo',
++        city: 'Benin City',
++        lat: 6.3329,
++        lon: 5.6222,
++        country_code: 'ng',
++      },
++      // Longitude first, deliberately: this is what the API really sends.
++      geometry: { type: 'Point', coordinates: [5.6222, 6.3329] },
++    },
++    {
++      type: 'Feature',
++      properties: {
++        place_id: 'no-position',
++        formatted: 'Somewhere without coordinates',
++      },
++    },
++  ],
++};
++
++const routeBody = {
++  type: 'FeatureCollection',
++  features: [
++    {
++      type: 'Feature',
++      properties: {
++        mode: 'drive',
++        units: 'metric',
++        distance: 10631.4,
++        time: 604,
++      },
++      geometry: { type: 'LineString', coordinates: [] },
++    },
++  ],
++};
++
++describe('phase 8 — the Geoapify adapter', () => {
++  let fetchMock: ReturnType<typeof vi.fn>;
++
++  beforeEach(() => {
++    fetchMock = vi.fn();
++    vi.stubGlobal('fetch', fetchMock);
++  });
++
++  afterEach(() => {
++    vi.unstubAllGlobals();
++    vi.restoreAllMocks();
++  });
++
++  describe('address suggestions', () => {
++    it('asks the autocomplete endpoint, restricted to Nigeria, with the key', async () => {
++      fetchMock.mockResolvedValueOnce({ ok: true, json: async () => autocompleteBody });
++
++      const results = await new MapsService(config).autocomplete('ring road', 6);
++
++      const url = new URL(fetchMock.mock.calls[0]![0] as string);
++      expect(url.origin + url.pathname).toBe('https://api.geoapify.com/v1/geocode/autocomplete');
++      expect(url.searchParams.get('text')).toBe('ring road');
++      expect(url.searchParams.get('filter')).toBe('countrycode:ng');
++      expect(url.searchParams.get('apiKey')).toBe('test-key');
++      expect(url.searchParams.get('limit')).toBe('6');
++
++      expect(results).toHaveLength(1);
++      expect(results[0]).toMatchObject({
++        id: '51f2c3a4d5e6f7',
++        name: 'Ring Road',
++        address: 'Ring Road, Benin City, 300102, Nigeria',
++        landmark: 'Oredo',
++        lat: 6.3329,
++        lng: 5.6222,
++        source: 'GEOAPIFY',
++      });
++    });
++
++    it('reads longitude before latitude, and drops a feature with no position', async () => {
++      fetchMock.mockResolvedValueOnce({ ok: true, json: async () => autocompleteBody });
++
++      const [place] = await new MapsService(config).autocomplete('ring road');
++      // The two are far apart on the globe: a swap would put this at 5.62N 6.33E,
++      // in the Gulf of Guinea, and nothing else in the system would notice.
++      expect(place!.lat).toBe(6.3329);
++      expect(place!.lng).toBe(5.6222);
++
++      const all = await new MapsService(config).autocomplete('ring road');
++      expect(all.some((row) => row.id === 'no-position')).toBe(false);
++    });
++
++    it('falls back to the platform table when Geoapify answers with an error', async () => {
++      fetchMock.mockResolvedValue({ ok: false, status: 429, json: async () => ({}) });
++
++      const results = await new MapsService(config).autocomplete('ring road');
++      expect(results.length).toBeGreaterThan(0);
++      expect(results.every((place) => place.source === 'STUB')).toBe(true);
++    });
++  });
++
++  describe('geocoding', () => {
++    it('turns a written address into coordinates with one search call', async () => {
++      fetchMock.mockResolvedValueOnce({ ok: true, json: async () => autocompleteBody });
++
++      const result = await new MapsService(config).geocode('Ring Road, Benin City');
++
++      const url = new URL(fetchMock.mock.calls[0]![0] as string);
++      expect(url.pathname).toBe('/v1/geocode/search');
++      expect(result).toMatchObject({ lat: 6.3329, lng: 5.6222, source: 'GEOAPIFY', approximate: false });
++    });
++
++    it('names the nearest place when reverse geocoding', async () => {
++      fetchMock.mockResolvedValueOnce({ ok: true, json: async () => autocompleteBody });
++
++      const result = await new MapsService(config).reverseGeocode({ lat: 6.3329, lng: 5.6222 });
++
++      const url = new URL(fetchMock.mock.calls[0]![0] as string);
++      expect(url.pathname).toBe('/v1/geocode/reverse');
++      expect(url.searchParams.get('lat')).toBe('6.3329');
++      expect(url.searchParams.get('lon')).toBe('5.6222');
++      expect(result).toMatchObject({
++        address: 'Ring Road, Benin City, 300102, Nigeria',
++        source: 'GEOAPIFY',
++      });
++    });
++  });
++
++  describe('route estimates', () => {
++    it('posts the two waypoints to the routing API and converts metres and seconds', async () => {
++      fetchMock.mockResolvedValueOnce({ ok: true, json: async () => routeBody });
++
++      const estimate = await new MapsService(config).estimateRoute(
++        { lat: 6.3329, lng: 5.6222 },
++        { lat: 6.396, lng: 5.611 },
++      );
++
++      const url = new URL(fetchMock.mock.calls[0]![0] as string);
++      expect(url.origin + url.pathname).toBe('https://api.geoapify.com/v1/routing');
++      expect(url.searchParams.get('waypoints')).toBe('6.3329,5.6222|6.396,5.611');
++      expect(url.searchParams.get('mode')).toBe('drive');
++
++      expect(estimate.source).toBe('GEOAPIFY');
++      expect(estimate.distanceKm).toBeCloseTo(10.63, 2);
++      expect(estimate.durationMinutes).toBe(10);
++    });
++
++    it('honours an account configured in miles', async () => {
++      fetchMock.mockResolvedValueOnce({
++        ok: true,
++        json: async () => ({
++          features: [{ properties: { distance: 1, time: 120, units: 'miles' } }],
++        }),
++      });
++
++      const estimate = await new MapsService(config).estimateRoute(
++        { lat: 6.33, lng: 5.62 },
++        { lat: 6.4, lng: 5.61 },
++      );
++      expect(estimate.distanceKm).toBeCloseTo(1.61, 2);
++    });
++
++    it('falls back to the stub estimate rather than blocking a booking', async () => {
++      fetchMock.mockResolvedValue({ ok: false, status: 500, json: async () => ({}) });
++
++      const estimate = await new MapsService(config).estimateRoute(
++        { lat: 6.3329, lng: 5.6222 },
++        { lat: 6.396, lng: 5.611 },
++      );
++      expect(estimate.source).toBe('STUB');
++      expect(estimate.distanceKm).toBeGreaterThan(0);
++    });
++  });
++
++  it('uses the stub whenever no key is configured, and never calls out', async () => {
++    const noKey = { mapsProviderKey: 'geoapify', geoapifyApiKey: undefined } as unknown as AppConfig;
++
++    const places = await new MapsService(noKey).autocomplete('ring road');
++    const estimate = await new MapsService(noKey).estimateRoute({ lat: 6.33, lng: 5.62 }, { lat: 6.4, lng: 5.61 });
++
++    expect(fetchMock).not.toHaveBeenCalled();
++    expect(places.every((place) => place.source === 'STUB')).toBe(true);
++    expect(estimate.source).toBe('STUB');
++  });
++});
+diff --git a/deploy/.env.example b/deploy/.env.example
+index c3a9c5f..082f226 100644
+--- a/deploy/.env.example
++++ b/deploy/.env.example
+@@ -70,7 +70,13 @@ FLUTTERWAVE_WEBHOOK_HASH=CHANGE_ME_from_flutterwave_dashboard
+ # ── maps ─────────────────────────────────────────────────────────────────────
+ # STUB works with no key and says so in the UI. Set GOOGLE + the web build arg
+ # (VITE_GOOGLE_MAPS_API_KEY) to switch to real maps.
++# stub | geoapify | google
++# geoapify is the default recommendation: no card, one key for suggestions,
++# routes and map tiles.
+ MAPS_PROVIDER=STUB
++GEOAPIFY_API_KEY=
++VITE_GEOAPIFY_API_KEY=
++# Only if you chose MAPS_PROVIDER=google
+ GOOGLE_MAPS_API_KEY=
+ VITE_GOOGLE_MAPS_API_KEY=
+ 
+diff --git a/deploy/Dockerfile.web b/deploy/Dockerfile.web
+index b3d8af9..53928b6 100644
+--- a/deploy/Dockerfile.web
++++ b/deploy/Dockerfile.web
+@@ -17,9 +17,12 @@ COPY packages/shared ./packages/shared
+ COPY frontend ./frontend
+ # Vite compiles the shared package from source, so no shared build step is needed.
+ # Anything the browser must know at build time is passed in here.
++ARG VITE_GEOAPIFY_API_KEY=""
+ ARG VITE_GOOGLE_MAPS_API_KEY=""
+ ARG VITE_APP_NAME="Dispatch"
+-ENV VITE_GOOGLE_MAPS_API_KEY=$VITE_GOOGLE_MAPS_API_KEY VITE_APP_NAME=$VITE_APP_NAME
++ENV VITE_GEOAPIFY_API_KEY=$VITE_GEOAPIFY_API_KEY \
++    VITE_GOOGLE_MAPS_API_KEY=$VITE_GOOGLE_MAPS_API_KEY \
++    VITE_APP_NAME=$VITE_APP_NAME
+ RUN cd frontend && npx vite build
+ 
+ FROM nginx:1.27-alpine AS runtime
+diff --git a/docker-compose.yml b/docker-compose.yml
+index d8806d6..549c3cd 100644
+--- a/docker-compose.yml
++++ b/docker-compose.yml
+@@ -121,6 +121,7 @@ services:
+       context: .
+       dockerfile: deploy/Dockerfile.web
+       args:
++        VITE_GEOAPIFY_API_KEY: ${VITE_GEOAPIFY_API_KEY:-}
+         VITE_GOOGLE_MAPS_API_KEY: ${VITE_GOOGLE_MAPS_API_KEY:-}
+     restart: unless-stopped
+     depends_on:
+diff --git a/documentation/CREDENTIALS-SETUP.md b/documentation/CREDENTIALS-SETUP.md
+index 78dd5ba..0ebfad4 100644
+--- a/documentation/CREDENTIALS-SETUP.md
++++ b/documentation/CREDENTIALS-SETUP.md
+@@ -11,7 +11,7 @@ each one, sitting one environment variable away from going live:
+ |---|---|---|
+ | Paystack | `PAYMENTS_MODE=DEVELOPMENT` (simulator) | `PAYMENTS_MODE=SANDBOX` (or `LIVE`) + `PAYSTACK_*` keys |
+ | Flutterwave | same | `FLUTTERWAVE_*` keys |
+-| Google Maps | `MAPS_PROVIDER=STUB` (real Benin City coordinates, straight-line distances) | `MAPS_PROVIDER=GOOGLE` + `GOOGLE_MAPS_API_KEY` |
++| Maps | `MAPS_PROVIDER=STUB` (real Benin City coordinates, straight-line distances) | `MAPS_PROVIDER=GEOAPIFY` + `GEOAPIFY_API_KEY` + `VITE_GEOAPIFY_API_KEY` (recommended, no card) or `GOOGLE` + `GOOGLE_MAPS_API_KEY` |
+ | SMS | `SMS_MODE=CONSOLE` (printed to the API log) | `SMS_MODE=TERMII` + `TERMII_API_KEY` + approved sender ID |
+ | Email | `EMAIL_MODE=CONSOLE` | `EMAIL_MODE=RESEND` + `RESEND_API_KEY` + verified domain |
+ 
+@@ -89,12 +89,45 @@ FLUTTERWAVE_WEBHOOK_HASH="the-hash-you-typed-in-the-dashboard"
+ 
+ ---
+ 
+-## 3. Google Maps — addresses, routes, distance, ETA, live map (Phase 8)
++## 3. Maps — addresses, routes, distance, ETA, live map (Phase 8)
+ 
+ **What we use it for:** address autocomplete, geocoding of pickup/drop-off, road distance instead of
+ straight-line, ETA, and the customer/admin map.
+ 
+-**How to get the key**
++**Pick one provider.** `MAPS_PROVIDER` decides; the rest of the codebase does not care. The
++recommendation is **Geoapify**, because it needs no card and one key covers suggestions, geocoding,
++routing *and* the map tiles. Google is supported too if you already have a billing-enabled Cloud
++project.
++
++### 3a. Geoapify (recommended)
++
++1. Sign up at <https://myprojects.geoapify.com/register> — an email form, **no card, no billing
++   screen**.
++2. Create a project, then an **API key** (the free plan is 3,000 credits a day, up to 5 requests a
++   second, commercial use allowed with attribution).
++3. Put the same key in both places — it is a single key, not two:
++
++   ```dotenv
++   # backend
++   MAPS_PROVIDER=GEOAPIFY
++   GEOAPIFY_API_KEY=your-geoapify-key
++
++   # frontend (build-time: rebuild the web image after setting it)
++   VITE_GEOAPIFY_API_KEY=your-geoapify-key
++   ```
++
++4. What a booking costs against the 3,000 daily credits: **1** for the route, **1** if the customer's
++   typed address has to be geocoded, and **0.25 per map tile** (a typical map view is 20–30 tiles, so
++   roughly 5–8 credits). That is several hundred map views plus thousands of bookings a day.
++5. The free plan requires the **"Powered by Geoapify"** attribution and OpenStreetMap credit — the
++   map component renders both automatically; do not remove them.
++
++**Coverage, measured:** OpenStreetMap has Benin City's roads (Ring Road → Ugbowo routes as 10.6 km),
++but many Benin City streets are unnamed in it and informal landmarks are absent. That is why the
++booking form leads with the platform's own saved locations — keep that list maintained and the
++provider only has to handle the long tail.
++
++### 3b. Google Maps (if you already have a Cloud project)
+ 
+ 1. Sign in at <https://console.cloud.google.com> → create (or pick) a project.
+ 2. **APIs & Services → Library** → enable **exactly these four**, and nothing else:
+@@ -121,7 +154,9 @@ straight-line, ETA, and the customer/admin map.
+ 5. Paste the server key into `GOOGLE_MAPS_API_KEY`, and give the browser key to the frontend
+    (`VITE_GOOGLE_MAPS_API_KEY`, a **build-time** variable — the web image must be rebuilt after you set it).
+ 
+-**If you enable the wrong set**, nothing breaks loudly: the API logs
++**If you enable the wrong set**, nothing breaks loudly: the API logs (this line, and the Geoapify
++equivalent, is the same signal — a key that is missing, restricted too tightly, or pointed at an API
++that is not enabled):
+ `Routes API failed, falling back to the stub estimate: Routes responded 403` (or the same line for
+ Places) and keeps pricing with the stub model. That warning in the logs is the signal that a key is
+ missing, restricted too tightly, or pointed at an API that is not enabled.
+diff --git a/documentation/DEPLOYMENT-ROADMAP.md b/documentation/DEPLOYMENT-ROADMAP.md
+index 7d4f377..8a42ba9 100644
+--- a/documentation/DEPLOYMENT-ROADMAP.md
++++ b/documentation/DEPLOYMENT-ROADMAP.md
+@@ -366,7 +366,7 @@ Blocked on Termii's sender-ID approval (§3), which is why it is started on day
+ nano deploy/.env
+ #   SMS_MODE=TERMII      TERMII_API_KEY=…   TERMII_SENDER_ID=…
+ #   EMAIL_MODE=RESEND    RESEND_API_KEY=…   EMAIL_FROM="Dispatch <no-reply@yourdomain.com>"
+-#   MAPS_PROVIDER=GOOGLE GOOGLE_MAPS_API_KEY=…   VITE_GOOGLE_MAPS_API_KEY=…
++#   MAPS_PROVIDER=GEOAPIFY GEOAPIFY_API_KEY=…   VITE_GEOAPIFY_API_KEY=…
+ docker compose up -d api
+ docker compose build web && docker compose up -d web   # VITE_ vars are baked in at BUILD time
+ ```
+diff --git a/documentation/GO-LIVE-CHECKLIST.md b/documentation/GO-LIVE-CHECKLIST.md
+index e3e912d..8674a9e 100644
+--- a/documentation/GO-LIVE-CHECKLIST.md
++++ b/documentation/GO-LIVE-CHECKLIST.md
+@@ -84,7 +84,7 @@ Copy this file to a ticket or a text note and fill in the date and initials as y
+ - [ ] **A real signup OTP arrives on a real Nigerian number.** Record the number used: ______________
+ - [ ] **Email is not in `CONSOLE` mode.** `EMAIL_MODE=RESEND`, `RESEND_API_KEY` set, `EMAIL_FROM` on a domain you have verified with the provider
+ - [ ] **A verification email lands in an inbox** (and not in spam — check SPF/DKIM if it does)
+-- [ ] **Maps:** either `MAPS_PROVIDER=STUB` **knowingly** accepted for launch, or `GOOGLE` with a billed key, and the web rebuilt with `VITE_GOOGLE_MAPS_API_KEY` (`docker compose build web`)
++- [ ] **Maps:** either `MAPS_PROVIDER=STUB` **knowingly** accepted for launch, or `GEOAPIFY` with a free key (recommended) / `GOOGLE` with a billed key, and the web rebuilt with the matching `VITE_` variable (`docker compose build web`)
+ - [ ] **The Maps browser key is restricted** in Google Cloud to your domain and to the APIs you use — a browser key is public by nature, so restriction is the only control
+ 
+ ## F. Data and pricing — the numbers customers will see
+diff --git a/documentation/MAPS-GEOAPIFY-SETUP.md b/documentation/MAPS-GEOAPIFY-SETUP.md
+new file mode 100644
+index 0000000..e02202d
+--- /dev/null
++++ b/documentation/MAPS-GEOAPIFY-SETUP.md
+@@ -0,0 +1,112 @@
++# Maps — set up Geoapify (no card, no billing account)
++
++You have two decisions to make and one thing to type. This is the whole job.
++
++---
++
++## 1. Sign up (2 minutes, no card)
++
++1. Go to <https://myprojects.geoapify.com/register> and register with your email.
++2. It drops you in **MyProjects**. Create a project — call it `traders-welfare`.
++3. Click **API keys** → **Create a new key**, or just copy the key already generated for you.
++4. Copy it. It is one long string. **This is the only secret you need for maps.**
++
++There is no billing screen, no card, and no way to be charged on the free plan: 3,000 credits a day,
++up to 5 requests a second, commercial use allowed.
++
++---
++
++## 2. Put the key in two places
++
++It is the **same** key in both — unlike Google, Geoapify does not split browser and server keys.
++
++**Backend** (Northflank → the API service → Environment, or `backend/.env` locally):
++
++```dotenv
++MAPS_PROVIDER=GEOAPIFY
++GEOAPIFY_API_KEY=paste-your-key-here
++```
++
++**Frontend** (Northflank → the web service → Environment, or `frontend/.env` locally):
++
++```dotenv
++VITE_GEOAPIFY_API_KEY=paste-your-key-here
++```
++
++Type or paste it **bare** — no quotes, no trailing space. A quote pasted from Notepad becomes part of
++the key and the call fails with a 401 that looks like a bad key.
++
++> **The frontend one is a build-time variable.** Vite bakes `VITE_` values into the JavaScript when
++> the web image is built, so adding it and restarting is not enough — the web service must be
++> **rebuilt/redeployed**. This is the single most common reason a map "doesn't turn on".
++
++---
++
++## 3. Check it worked
++
++**a. The API reports the provider.** Open `https://<your-api-host>/api/v1` — the status block shows
++`maps: GEOAPIFY` instead of `STUB`.
++
++**b. Suggestions are live.** On the booking form, type `sapele`. The line under the results changes
++from *"Popular Benin City locations."* to *"Address suggestions as you type."*
++
++**c. The distance is a road distance.** Price a trip and compare the km against a Geoapify route for
++the same two points. Straight-line-plus-35% becomes a real road measurement, and the tracking card
++labels the ETA **"Road route"** rather than "Estimated route".
++
++**d. The map has streets.** Open a delivery's tracking page (or the admin city view). You should see
++a street map with the "Powered by Geoapify · © OpenStreetMap contributors" line in the corner.
++
++**e. Logs.** If nothing changes, the API log says why:
++
++```
++[MapsService] Geoapify routing failed, falling back to the stub estimate: Geoapify routing responded 401
++[MapsService] Geoapify suggestions failed, falling back to local places: Geoapify autocomplete responded 403
++```
++
++`401` = the key is wrong (or has a stray quote). `403` = the key was deleted or the plan is
++exhausted. `429` = you hit the 5 requests/second limit.
++
++---
++
++## 4. What a booking costs you
++
++The free plan gives **3,000 credits a day**, and:
++
++| Call | Credits |
++| --- | --- |
++| One route (distance + ETA) | 1 |
++| One address suggestion, already geocoded | 1 |
++| One geocode of a typed address | 1 |
++| One map tile | 0.25 (a full map view is ~20–30 tiles → ~5–8) |
++
++A hundred deliveries in a day, each looked at on the map a couple of times, is a few hundred credits
++— comfortably inside the free allowance. The first paid plan is $59/month for 10,000 credits/day if
++you ever outgrow it.
++
++---
++
++## 5. Where the code is, if you want to look
++
++- `backend/src/pricing/maps.service.ts` — the adapter. `geoapifyPlaces()` (suggestions + geocode),
++  `geoapifyReverse()`, `geoapifyRoute()`.
++- `backend/test/maps.geoapify.spec.ts` — the tests that pin the URLs, the Nigeria filter, the
++  longitude-before-latitude ordering, and the fallbacks.
++- `frontend/src/components/LiveMap.tsx` — Leaflet over Geoapify tiles.
++- `documentation/CREDENTIALS-SETUP.md` §3 — the same instructions in the repo.
++
++---
++
++## 6. Honest limits
++
++- **OpenStreetMap data, not Google's.** Benin City's roads route correctly, but many streets there
++  are unnamed in the data and informal landmarks are missing. This is why the booking form leads
++  with the platform's saved Benin City locations — keep that list current and let the provider
++  handle the rest.
++- **No uptime guarantee on the free plan.** If Geoapify is slow or down, the API logs a warning and
++  prices from the stub model. A booking is never blocked by a map outage — the fare is just less
++  precise for that one trip, and `routeSource` on the delivery says so.
++- **Attribution is a condition of the free plan.** The map must keep the Geoapify and OpenStreetMap
++  credit. It is already there; do not remove it.
++- **Google is still supported** (`MAPS_PROVIDER=GOOGLE`) if you ever get your Cloud account sorted.
++  Nothing needs to change but the environment variables.
+diff --git a/documentation/RUNBOOK.md b/documentation/RUNBOOK.md
+index 158c06a..c020536 100644
+--- a/documentation/RUNBOOK.md
++++ b/documentation/RUNBOOK.md
+@@ -158,10 +158,11 @@ docker compose up -d api        # recreates only what changed
+ | `TRACKING_LINK_SECRET` | rotating invalidates every outstanding tracking and report-download link. |
+ | `CORS_ORIGINS` | extra browser origins allowed to call the API. The deployment's **own** origin is always allowed (see §7 below), so this only matters when the web app and the API are on different hosts. |
+ | `SMS_MODE=CONSOLE` / `EMAIL_MODE=CONSOLE` | messages are **logged, not sent**. Never leave this on for real riders. |
+-| `MAPS_PROVIDER=STUB` | fares use the stub distance model; the UI says so. Set `GOOGLE` plus the web build arg for real maps. |
++| `MAPS_PROVIDER=STUB` | fares use the stub distance model; the UI says so. Set `GEOAPIFY` (recommended) or `GOOGLE`, plus the matching `VITE_` build arg, for real maps. |
+ 
+-> The web build takes `VITE_GOOGLE_MAPS_API_KEY` as a **build arg**, not a runtime variable —
+-> it is compiled into the JavaScript. Changing it requires `docker compose build web`.
++> The web build takes `VITE_GEOAPIFY_API_KEY` (or `VITE_GOOGLE_MAPS_API_KEY`) as a **build arg**,
++> not a runtime variable — it is compiled into the JavaScript. Changing it requires
++> `docker compose build web`, and on a hosted platform a rebuild of the web service.
+ 
+ ---
+ 
+@@ -369,7 +370,7 @@ That is the rollback strategy for money: not restoration, *explanation*.
+ 
+ ### "The map is empty / fares look wrong"
+ 
+-* `MAPS_PROVIDER=STUB` means distances come from the stub model, not Google. The UI says so.
++* `MAPS_PROVIDER=STUB` means distances come from the stub model, not a routing provider. The UI says so.
+ * With `GOOGLE`, a missing or unbilled key degrades to the stub **and logs a warning**. Check
+   `docker compose logs api | grep -i maps`.
+ * Fares themselves come from pricing rules in the database, not code. Fix them in admin →
+diff --git a/frontend/package.json b/frontend/package.json
+index 6f4739e..39cea46 100644
+--- a/frontend/package.json
++++ b/frontend/package.json
+@@ -14,6 +14,7 @@
+     "@dispatch/shared": "*",
+     "@hookform/resolvers": "^7.0.3",
+     "@tanstack/react-query": "5.105.3",
++    "leaflet": "^1.9.4",
+     "react": "19.1.10",
+     "react-dom": "19.1.10",
+     "react-hook-form": "7.91.0",
+@@ -23,6 +24,7 @@
+     "zod": "^4.6.7"
+   },
+   "devDependencies": {
++    "@types/leaflet": "^1.9.22",
+     "@types/react": "19.3.0",
+     "@types/react-dom": "19.3.0",
+     "@vitejs/plugin-react": "5.2.0",
+diff --git a/frontend/src/components/DeliveryTrackingCard.tsx b/frontend/src/components/DeliveryTrackingCard.tsx
+index f32ddb0..b9153a0 100644
+--- a/frontend/src/components/DeliveryTrackingCard.tsx
++++ b/frontend/src/components/DeliveryTrackingCard.tsx
+@@ -136,7 +136,7 @@ export function DeliveryTrackingCard({
+                   {data.rider ? ` · rider ${data.rider.riderCode}` : ""}
+                 </p>
+                 <p className="ml-auto text-[11px] text-brand-700">
+-                  {data.eta.source === "GOOGLE" ? "Road route" : "Estimated route"}
++                  {data.eta.source === "STUB" ? "Estimated route" : "Road route"}
+                 </p>
+               </div>
+             )}
+diff --git a/frontend/src/components/LiveMap.tsx b/frontend/src/components/LiveMap.tsx
+index 0eb8e51..cd55bf4 100644
+--- a/frontend/src/components/LiveMap.tsx
++++ b/frontend/src/components/LiveMap.tsx
+@@ -1,4 +1,5 @@
+ import { useEffect, useMemo, useRef, useState } from "react";
++import "leaflet/dist/leaflet.css";
+ import { cn } from "../lib/cn";
+ 
+ /**
+@@ -6,13 +7,18 @@ import { cn } from "../lib/cn";
+  * ─────────────────────────────────────────────────────────────────────────────
+  * This component draws real coordinates and is honest about its basemap.
+  *
+- *   · With `VITE_GOOGLE_MAPS_API_KEY` set, it loads the Google Maps JavaScript API
+- *     and draws street-level tiles with proper markers.
++ *   · With `VITE_GEOAPIFY_API_KEY` set, it draws a street map with Leaflet (a small
++ *     open library) over Geoapify's OpenStreetMap tiles — the "Powered by Geoapify"
++ *     attribution their free plan requires sits under the map.
+  *   · Without a key it draws a **schematic**: every point is placed at its true
+  *     latitude/longitude relative to the others, on a plain grid. Nothing is moved,
+  *     interpolated or invented — the caption says exactly that, so nobody mistakes
+  *     a schematic for a street map.
+  *
++ * Leaflet rather than Google's JavaScript API on purpose: it needs no vendor
++ * script tag, works with any tile source, and means the map keeps working if the
++ * routing provider is ever changed again.
++ *
+  * What this component will NOT do is invent a position. If a rider has not pinged,
+  * `points` contains no rider and the map says "no position reported yet".
+  */
+@@ -61,9 +67,9 @@ export function LiveMap({
+ }: LiveMapProps) {
+   const [myPosition, setMyPosition] = useState<{ lat: number; lng: number } | null>(null);
+   const [geoError, setGeoError] = useState<string | null>(null);
+-  const [googleReady, setGoogleReady] = useState(false);
+-  const mapKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY as string | undefined;
+-  const containerRef = useRef<HTMLDivElement | null>(null);
++  // One key draws the basemap. Absent, the schematic below draws the same
++  // coordinates on a grid and the caption says which one you are looking at.
++  const mapKey = (import.meta.env.VITE_GEOAPIFY_API_KEY as string | undefined)?.trim() || undefined;
+ 
+   /**
+    * The viewer's own position is strictly opt-in.
+@@ -97,28 +103,6 @@ export function LiveMap({
+     [points, myPosition],
+   );
+ 
+-  // Load the Google Maps JS API only when a key exists and the container is on screen.
+-  useEffect(() => {
+-    if (!mapKey || allPoints.length === 0) return;
+-    const globalWindow = window as unknown as { google?: { maps?: unknown } };
+-    if (globalWindow.google?.maps) {
+-      setGoogleReady(true);
+-      return;
+-    }
+-    const existing = document.querySelector<HTMLScriptElement>("script[data-google-maps]");
+-    if (existing) {
+-      existing.addEventListener("load", () => setGoogleReady(true));
+-      return;
+-    }
+-    const script = document.createElement("script");
+-    script.dataset.googleMaps = "true";
+-    script.async = true;
+-    script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(mapKey)}&v=weekly`;
+-    script.addEventListener("load", () => setGoogleReady(true));
+-    script.addEventListener("error", () => setGoogleReady(false));
+-    document.head.appendChild(script);
+-  }, [mapKey, allPoints.length]);
+-
+   if (allPoints.length === 0) {
+     return (
+       <div
+@@ -135,16 +119,14 @@ export function LiveMap({
+ 
+   return (
+     <div className={cn("overflow-hidden rounded-xl border border-slate-200 bg-white", className)}>
+-      {mapKey && googleReady ? (
+-        <GoogleMapCanvas points={allPoints} connect={connect ?? null} height={height} containerRef={containerRef} />
++      {mapKey ? (
++        <StreetMap points={allPoints} connect={connect ?? null} height={height} apiKey={mapKey} />
+       ) : (
+         <SchematicMap points={allPoints} connect={connect ?? null} height={height} />
+       )}
+       <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 bg-slate-50 px-3 py-2">
+         <p className="text-[11px] leading-snug text-slate-500">
+-          {mapKey && googleReady
+-            ? "Street map · positions reported by the rider app."
+-            : "Schematic view — positions are exact, the basemap is not. Set GOOGLE_MAPS_API_KEY (and VITE_GOOGLE_MAPS_API_KEY) for street-level maps."}
++          {mapKey ? "Street map · positions reported by the rider app." : "Schematic view · positions are exact."}
+         </p>
+         <Legend />
+       </div>
+@@ -269,80 +251,139 @@ function SchematicMap({
+   );
+ }
+ 
+-/* ─────────────────────────── google renderer ─────────────────────────── */
++/* ─────────────────────────── leaflet renderer ─────────────────────────── */
+ 
+-function GoogleMapCanvas({
++/**
++ * The street map.
++ *
++ * Leaflet is imported dynamically so the library (and its CSS) only loads on a
++ * screen that actually shows a map — the login form and the dashboards do not pay
++ * for it. Tiles come from Geoapify; the attribution their free plan requires is
++ * attached to the layer, where Leaflet renders it in the corner of the map.
++ */
++function StreetMap({
+   points,
+   connect,
+   height,
+-  containerRef,
++  apiKey,
+ }: {
+   points: MapPoint[];
+   connect: LiveMapProps["connect"];
+   height: number;
+-  containerRef: React.MutableRefObject<HTMLDivElement | null>;
++  apiKey: string;
+ }) {
+-  const mapRef = useRef<{ fitBounds?: (bounds: unknown) => void } | null>(null);
++  const containerRef = useRef<HTMLDivElement | null>(null);
++  const mapRef = useRef<unknown>(null);
++  const layersRef = useRef<unknown>(null);
++  const fittedForRef = useRef<string>("");
++  const [failed, setFailed] = useState(false);
++
++  // The set of ids, not the coordinates: a rider moving should redraw markers but
++  // must not keep yanking the viewport back while the viewer pans around.
++  const idSignature = points.map((point) => point.id).sort().join(",");
++
++  useEffect(() => {
++    let cancelled = false;
++
++    void (async () => {
++      try {
++        const L = (await import("leaflet")).default;
++        if (cancelled || !containerRef.current || mapRef.current) return;
++
++        const map = L.map(containerRef.current, {
++          zoomControl: true,
++          attributionControl: true,
++          // Panning with one finger is how people actually use this on a phone;
++          // pinch still zooms.
++          dragging: true,
++        }).setView([points[0]!.lat, points[0]!.lng], 14);
++
++        L.tileLayer(`https://maps.geoapify.com/v1/tile/osm-bright/{z}/{x}/{y}.png?apiKey=${encodeURIComponent(apiKey)}`, {
++          maxZoom: 19,
++          attribution:
++            'Powered by <a href="https://www.geoapify.com/" target="_blank" rel="noreferrer">Geoapify</a> · ' +
++            '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> contributors',
++        }).addTo(map);
++
++        mapRef.current = map;
++        layersRef.current = L.layerGroup().addTo(map);
++        setFailed(false);
++      } catch {
++        setFailed(true);
++      }
++    })();
++
++    return () => {
++      cancelled = true;
++      const map = mapRef.current as { remove?: () => void } | null;
++      map?.remove?.();
++      mapRef.current = null;
++      layersRef.current = null;
++    };
++    // Deliberately created once per key: points are drawn by the effect below.
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, [apiKey]);
+ 
+   useEffect(() => {
+-    const google = (window as unknown as {
+-      google?: {
+-        maps: {
+-          Map: new (el: HTMLElement, options: Record<string, unknown>) => unknown;
+-          LatLngBounds: new () => { extend: (p: { lat: number; lng: number }) => void };
+-          LatLng: new (lat: number, lng: number) => unknown;
+-          Marker: new (options: Record<string, unknown>) => unknown;
+-          Polyline: new (options: Record<string, unknown>) => unknown;
+-        };
+-      };
+-    }).google;
+-    if (!google || !containerRef.current) return;
+-
+-    const bounds = new google.maps.LatLngBounds();
+-    for (const point of points) bounds.extend({ lat: point.lat, lng: point.lng });
+-
+-    const map = new google.maps.Map(containerRef.current, {
+-      center: { lat: points[0]!.lat, lng: points[0]!.lng },
+-      zoom: 14,
+-      disableDefaultUI: true,
+-      zoomControl: true,
+-      gestureHandling: "cooperative",
+-    }) as { fitBounds?: (value: unknown) => void };
+-    mapRef.current = map;
+-    map.fitBounds?.(bounds);
+-
+-    for (const point of points) {
+-      const style = KIND_STYLE[point.kind];
+-      new google.maps.Marker({
+-        map,
+-        position: { lat: point.lat, lng: point.lng },
+-        title: point.label,
+-        opacity: point.stale ? 0.45 : 1,
+-        icon: {
+-          path: 0, // google.maps.SymbolPath.CIRCLE is 0
++    const map = mapRef.current as
++      | {
++          fitBounds: (bounds: unknown, options?: unknown) => void;
++          setView: (center: [number, number], zoom: number) => void;
++        }
++      | null;
++    const layers = layersRef.current as { clearLayers: () => void; addLayer: (layer: unknown) => void } | null;
++    if (!map || !layers) return;
++
++    void (async () => {
++      const L = (await import("leaflet")).default;
++      layers.clearLayers();
++
++      const latLngs: [number, number][] = [];
++      for (const point of points) {
++        const style = KIND_STYLE[point.kind];
++        latLngs.push([point.lat, point.lng]);
++
++        // A circle marker rather than an image pin: no icon assets to load, no
++        // broken-image box when a tile server is unreachable, and it keeps the
++        // platform's colour language (pickup / drop-off / rider).
++        L.circleMarker([point.lat, point.lng], {
++          radius: point.kind === "rider" ? 9 : 7,
++          color: "#ffffff",
++          weight: 2,
+           fillColor: style.fill,
+-          fillOpacity: 1,
+-          strokeColor: "#ffffff",
+-          strokeWeight: 2,
+-          scale: 8,
+-        },
+-      });
+-    }
++          fillOpacity: point.stale ? 0.4 : 1,
++          opacity: point.stale ? 0.4 : 1,
++        })
++          .bindTooltip(point.label, { direction: "top", offset: [0, -8] })
++          .addTo(layers as never);
++      }
+ 
+-    if (connect) {
+-      const from = points.find((point) => point.id === connect.from);
+-      const to = points.find((point) => point.id === connect.to);
+-      if (from && to) {
+-        new google.maps.Polyline({
+-          map,
+-          path: [{ lat: from.lat, lng: from.lng }, { lat: to.lat, lng: to.lng }],
+-          strokeColor: "#f97316",
+-          strokeOpacity: 0.8,
+-          strokeWeight: 3,
+-        });
++      if (connect) {
++        const from = points.find((point) => point.id === connect.from);
++        const to = points.find((point) => point.id === connect.to);
++        if (from && to) {
++          L.polyline(
++            [
++              [from.lat, from.lng],
++              [to.lat, to.lng],
++            ],
++            { color: "#f97316", weight: 3, opacity: 0.8, dashArray: "6 6" },
++          ).addTo(layers as never);
++        }
+       }
+-    }
+-  }, [points, connect, containerRef]);
+ 
+-  return <div ref={containerRef} style={{ height }} className="w-full bg-slate-100" />;
++      // Fit once per set of points; after that the viewer is in charge of the view.
++      if (latLngs.length > 0 && fittedForRef.current !== idSignature) {
++        fittedForRef.current = idSignature;
++        if (latLngs.length === 1) map.setView(latLngs[0]!, 15);
++        else map.fitBounds(L.latLngBounds(latLngs), { padding: [28, 28] });
++      }
++    })();
++  }, [points, connect, idSignature]);
++
++  if (failed) {
++    return <SchematicMap points={points} connect={connect} height={height} />;
++  }
++
++  return <div ref={containerRef} style={{ height }} className="z-0 w-full bg-slate-100" />;
+ }
+diff --git a/frontend/src/components/LocationPicker.tsx b/frontend/src/components/LocationPicker.tsx
+index 030bf5d..8d85fb0 100644
+--- a/frontend/src/components/LocationPicker.tsx
++++ b/frontend/src/components/LocationPicker.tsx
+@@ -26,7 +26,7 @@ interface PlaceSuggestion {
+   landmark: string | null;
+   lat: number;
+   lng: number;
+-  source: 'STUB' | 'GOOGLE' | 'MAPBOX';
++  source: 'STUB' | 'GOOGLE' | 'GEOAPIFY' | 'MAPBOX';
+ }
+ 
+ const toSavedLocation = (place: PlaceSuggestion): SavedLocation => ({
+@@ -181,9 +181,9 @@ export function LocationPicker({
+       <p className="text-[11px] text-ink-400">
+         {suggestions.isFetching
+           ? 'Searching…'
+-          : provider === 'google'
+-            ? 'Address suggestions by Google.'
+-            : 'Popular Benin City locations.'}
++          : provider === 'stub'
++            ? 'Popular Benin City locations.'
++            : 'Address suggestions as you type.'}
+       </p>
+ 
+       <Field label="Street address" required error={errors.address} htmlFor={`${title}-address`}>
+diff --git a/frontend/src/hooks/useDeliveries.ts b/frontend/src/hooks/useDeliveries.ts
+index b66ddc6..068e682 100644
+--- a/frontend/src/hooks/useDeliveries.ts
++++ b/frontend/src/hooks/useDeliveries.ts
+@@ -18,7 +18,7 @@ export interface Quote {
+   chargeableKm: number;
+   freeKmIncluded: number;
+   durationMinutes: number;
+-  routeSource: 'STUB' | 'GOOGLE';
++  routeSource: 'STUB' | 'GOOGLE' | 'GEOAPIFY' | 'MAPBOX';
+   additionalStops: number;
+   subtotalKobo: string;
+   discountKobo: string;
+diff --git a/frontend/src/hooks/useTracking.ts b/frontend/src/hooks/useTracking.ts
+index 8acf4e0..bdfc78d 100644
+--- a/frontend/src/hooks/useTracking.ts
++++ b/frontend/src/hooks/useTracking.ts
+@@ -42,7 +42,7 @@ export interface Tracking {
+   stale: boolean;
+   eta: { minutes: number; distanceRemainingKm: number | null; source: string | null; headingTo: 'pickup' | 'destination' } | null;
+   timeline: Array<{ status: string; label: string; at: string; reason: string | null }>;
+-  mapProvider: 'stub' | 'google' | 'mapbox';
++  mapProvider: 'stub' | 'google' | 'geoapify' | 'mapbox';
+   shareExpiresAt?: string | null;
+ }
+ 
+@@ -85,7 +85,7 @@ export interface LiveMap {
+   };
+   riders: LiveMapRider[];
+   deliveries: LiveMapDelivery[];
+-  mapProvider: 'stub' | 'google' | 'mapbox';
++  mapProvider: 'stub' | 'google' | 'geoapify' | 'mapbox';
+ }
+ 
+ export function useTracking(deliveryId: string | undefined) {
+diff --git a/frontend/src/pages/admin/LiveMapPage.tsx b/frontend/src/pages/admin/LiveMapPage.tsx
+index 7715cd3..2a8461e 100644
+--- a/frontend/src/pages/admin/LiveMapPage.tsx
++++ b/frontend/src/pages/admin/LiveMapPage.tsx
+@@ -150,7 +150,11 @@ export default function LiveMapPage() {
+                   subtitle={`${data.summary.positioned} of ${data.riders.length} online riders have a position · window ${Math.round(
+                     data.freshnessWindowSeconds / 60,
+                   )} min`}
+-                  action={<Badge tone={data.mapProvider === "google" ? "success" : "warning"}>{data.mapProvider.toUpperCase()}</Badge>}
++                  action={
++                    <Badge tone={data.mapProvider === "stub" ? "warning" : "success"}>
++                      {data.mapProvider === "stub" ? "OUTLINE" : "STREET MAP"}
++                    </Badge>
++                  }
+                 />
+                 <CardBody>
+                   {mapPoints.length === 0 ? (
+diff --git a/package-lock.json b/package-lock.json
+index 059db63..ba95fa7 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -79,6 +79,7 @@
+         "@dispatch/shared": "*",
+         "@hookform/resolvers": "^7.0.3",
+         "@tanstack/react-query": "5.105.3",
++        "leaflet": "^1.9.4",
+         "react": "19.1.10",
+         "react-dom": "19.1.10",
+         "react-hook-form": "7.91.0",
+@@ -88,6 +89,7 @@
+         "zod": "^4.6.7"
+       },
+       "devDependencies": {
++        "@types/leaflet": "^1.9.22",
+         "@types/react": "19.3.0",
+         "@types/react-dom": "19.3.0",
+         "@vitejs/plugin-react": "5.2.0",
+@@ -3286,6 +3288,13 @@
+         "@types/send": "*"
+       }
+     },
++    "node_modules/@types/geojson": {
++      "version": "7946.0.16",
++      "resolved": "https://registry.npmjs.org/@types/geojson/-/geojson-7946.0.16.tgz",
++      "integrity": "sha512-6C8nqWur3j98U6+lXDfTUWIfgvZU+EumvpHKcYjujKH7woYyLj2sUmff0tRhrqM7BohUw7Pz3ZB1jj2gW9Fvmg==",
++      "dev": true,
++      "license": "MIT"
++    },
+     "node_modules/@types/http-errors": {
+       "version": "2.0.5",
+       "resolved": "https://registry.npmjs.org/@types/http-errors/-/http-errors-2.0.5.tgz",
+@@ -3310,6 +3319,16 @@
+         "@types/node": "*"
+       }
+     },
++    "node_modules/@types/leaflet": {
++      "version": "1.9.22",
++      "resolved": "https://registry.npmjs.org/@types/leaflet/-/leaflet-1.9.22.tgz",
++      "integrity": "sha512-h3lhECYEKDasG7LFHu+GiHqAvsgLuQvlJvVZzJDGONo3sEL+wUOqSFLnwkZlK0qVxnxbuGFW8iBlJNYs5wgndA==",
++      "dev": true,
++      "license": "MIT",
++      "dependencies": {
++        "@types/geojson": "*"
++      }
++    },
+     "node_modules/@types/methods": {
+       "version": "1.1.4",
+       "resolved": "https://registry.npmjs.org/@types/methods/-/methods-1.1.4.tgz",
+@@ -6639,6 +6658,12 @@
+         "safe-buffer": "^5.0.1"
+       }
+     },
++    "node_modules/leaflet": {
++      "version": "1.9.4",
++      "resolved": "https://registry.npmjs.org/leaflet/-/leaflet-1.9.4.tgz",
++      "integrity": "sha512-nxS1ynzJOmOlHp+iL3FyWqK89GtNL8U8rvlMOsQdTTssxZwCXh8N2NB3GDQOL+YR3XnWyZAxwQixURb+FA74PA==",
++      "license": "BSD-2-Clause"
++    },
+     "node_modules/lilconfig": {
+       "version": "3.1.4",
+       "resolved": "https://registry.npmjs.org/lilconfig/-/lilconfig-3.1.4.tgz",

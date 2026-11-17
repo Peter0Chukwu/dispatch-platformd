@@ -1,31 +1,39 @@
-cors: the app's own origin can always sign in, and a refusal is not a 500
+maps: Geoapify, so maps work without a Google Cloud account
 
-Staff sign-in returned "Could not sign you in — Something went wrong on our side.
-Reference: unknown". The reference being `unknown` instead of a UUID was the clue:
-the failure happened before the request-id middleware, i.e. in the CORS layer.
+Google wants a billing account before it answers a single request, and that
+account was a dead end. Geoapify does not: no card, commercial use allowed with
+attribution, 3,000 credits a day, and ONE key for suggestions, geocoding,
+reverse geocoding, routing and the map tiles.
 
-The origin callback threw when the caller's origin was not in CORS_ORIGINS, and
-`cors` hands that error to Express, which turns it into a 500. A browser sends
-`Origin` on every non-GET request INCLUDING same-origin ones, so any deployment
-whose own URL was missing from CORS_ORIGINS (a preview URL that changed when the
-service was recreated, for instance) had a login button that never worked — and
-said so in the most misleading way possible. Reproduced against the live API:
-same request + `Origin: <the same host>` → 500; without the header → 201.
+MAPS_PROVIDER=GEOAPIFY is now the recommended setting. The adapter follows the
+same shape as the Google one, so pricing, dispatch radii, ETAs and the booking
+form are untouched:
 
-Two changes in common/cors.ts:
+  · suggestions  GET /v1/geocode/autocomplete   (filter=countrycode:ng)
+  · typed address GET /v1/geocode/search
+  · a pin       GET /v1/geocode/reverse
+  · a route     GET /v1/routing?mode=drive     → metres and seconds
 
-  · The request's own origin is always allowed. If the Origin host matches Host
-    or X-Forwarded-Host, the call is same-origin by definition and no allowlist
-    can break it, so a fresh deployment works with no configuration at all.
-  · A refused origin is refused quietly: no CORS headers, the browser blocks it,
-    and the server logs one warning naming the origin. A configuration mistake
-    stays a warning in the log instead of becoming a 500 in a customer's face.
+Suggestions arrive already geocoded, so picking one costs ONE request instead of
+Google's autocomplete-plus-details pair. GeoJSON is longitude-first; a swap would
+place every pickup in the Gulf of Guinea and nothing downstream would notice, so
+test/maps.geoapify.spec.ts asserts the order, the Nigeria filter, the metres and
+seconds conversion (including an account configured in miles), and that every
+failure path falls back to the stub. Nine cases.
 
-CORS_ORIGINS keeps its job for the case it exists for — a web app and an API on
-different hosts. Covered by test/cors.spec.ts (7 cases, including a lookalike
-host and unparseable input), and verified in a real express server: with the
-stale localhost-only allowlist, a POST from the preview origin now returns 201
-with the right Access-Control-Allow-Origin, and a foreign origin gets no CORS
-header rather than a 500. RUNBOOK gains the fault and its diagnosis; both
-.env.example files explain the new behaviour.
+The live map moves from Google's JavaScript API to Leaflet over Geoapify tiles —
+one small open library instead of a vendor script tag, dynamically imported so
+only screens that show a map pay for it, with the "Powered by Geoapify" and
+OpenStreetMap credits the free plan requires. Markers are circle markers, which
+need no icon assets and cannot appear as broken images. Without a key it still
+falls back to the schematic, which draws the same coordinates and says so.
+
+The product copy follows: the picker says "Address suggestions as you type"
+instead of naming a vendor, the tracking card says "Road route" for any real
+provider, and the admin city view badges STREET MAP or OUTLINE.
+
+documentation/MAPS-GEOAPIFY-SETUP.md is the click-by-click; CREDENTIALS-SETUP §3
+now leads with Geoapify and keeps Google as 3b. VITE_GEOAPIFY_API_KEY is wired
+through Dockerfile.web and docker-compose as a build arg, because that is the
+step people miss.
 

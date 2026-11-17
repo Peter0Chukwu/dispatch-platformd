@@ -1,28 +1,45 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { AppConfig } from '../config/app.config';
+import { AppConfig, type MapsProviderKey } from '../config/app.config';
 import { estimateRoute, haversineKm, type Point, type RouteEstimate } from './distance';
 import type { GeocodeResult, PlaceResult } from './maps-types';
 
 /**
  * MapsService — the only place that knows how routes are measured.
  *
- * Today `MAPS_PROVIDER=stub` (haversine × road factor). When the Google Maps key
- * is configured, `MAPS_PROVIDER=google` switches this to Google's current
- * services and NOTHING ELSE in the codebase has to change: PricingService only
- * ever calls `estimateRoute()` and receives the same shape back.
+ * `MAPS_PROVIDER` picks the provider; NOTHING ELSE in the codebase has to change,
+ * because PricingService only ever calls `estimateRoute()` and receives the same
+ * shape back:
  *
- * WHICH GOOGLE SERVICES, AND WHY THESE ONES
+ *   stub (default)  haversine × road factor, no key, no account
+ *   geoapify        OpenStreetMap data, one key for suggestions + routes + tiles
+ *   google          Places API (New) + Routes API + Geocoding
+ *   mapbox          not implemented — the enum value is reserved
+ *
+ * WHY GEOAPIFY IS THE DEFAULT CHOICE FOR A NEW DEPLOYMENT
+ * Its free plan needs no card, allows commercial use with attribution, and one
+ * key covers every call this file makes. Google's equivalent needs a billing
+ * account before it answers a single request.
+ *
+ * A note on coverage, measured rather than assumed: OpenStreetMap (what Geoapify
+ * serves) has Benin City's roads — a Ring Road → Ugbowo drive measures 10.6 km
+ * and returns in about 10 minutes — but many Benin City streets have no name in
+ * the data, and informal landmarks are absent from every provider. That is why
+ * the booking form leads with the platform's own saved locations and treats a
+ * typed address as the fallback.
+ *
+ * WHICH GOOGLE SERVICES, IF YOU CHOOSE GOOGLE
  * Google retired the legacy Places, Directions and Distance Matrix endpoints on
- * 5 October 2026: a Google Cloud project created after that date cannot enable
- * them at all. Since every deployment of this platform starts as a new project,
- * this file speaks only to what a new project can actually use —
+ * 5 October 2026: a Cloud project created after that date cannot enable them.
+ * This file therefore speaks only to what a new project can use —
  *   · Places API (New)     places.googleapis.com  — address suggestions + details
  *   · Routes API           routes.googleapis.com  — driving distance and duration
  *   · Geocoding API        maps.googleapis.com    — written address ↔ coordinates
- *                                           (Geocoding was not retired.)
- * A key that only has the legacy APIs enabled will fail here, and the service
- * falls back to the stub with a warning in the log rather than blocking a
- * booking.
+ * A key that only has the legacy APIs enabled fails here, and the service falls
+ * back to the stub with a warning rather than blocking a booking.
+ *
+ * The stub is always the floor. Any provider error — bad key, quota, outage —
+ * logs one warning and prices the booking from the stub table, because a
+ * customer must never be unable to book a parcel because a map vendor is down.
  */
 @Injectable()
 export class MapsService {
@@ -30,7 +47,7 @@ export class MapsService {
 
   constructor(private readonly config: AppConfig) {}
 
-  get provider(): 'stub' | 'google' | 'mapbox' {
+  get provider(): MapsProviderKey {
     return this.config.mapsProviderKey;
   }
 
@@ -40,6 +57,15 @@ export class MapsService {
    * stub so a booking is never blocked by a third-party outage.
    */
   async estimateRoute(from: Point, to: Point): Promise<RouteEstimate> {
+    if (this.provider === 'geoapify' && this.config.geoapifyApiKey) {
+      try {
+        return await this.geoapifyRoute(from, to, this.config.geoapifyApiKey);
+      } catch (error) {
+        this.logger.warn(
+          `Geoapify routing failed, falling back to the stub estimate: ${(error as Error).message}`,
+        );
+      }
+    }
     if (this.provider === 'google') {
       try {
         return await this.googleRoute(from, to);
@@ -67,6 +93,17 @@ export class MapsService {
     const trimmed = query.trim();
     if (trimmed.length < 2) return [];
 
+    if (this.provider === 'geoapify') {
+      const key = this.config.geoapifyApiKey;
+      if (key) {
+        try {
+          const results = await this.geoapifyPlaces('autocomplete', trimmed, key, limit);
+          if (results.length > 0) return results;
+        } catch (error) {
+          this.logger.warn(`Geoapify suggestions failed, falling back to local places: ${(error as Error).message}`);
+        }
+      }
+    }
     if (this.provider === 'google') {
       const key = this.config.googleMapsApiKey;
       if (key) {
@@ -86,6 +123,19 @@ export class MapsService {
     const trimmed = address.trim();
     if (trimmed.length < 3) return null;
 
+    if (this.provider === 'geoapify') {
+      const key = this.config.geoapifyApiKey;
+      if (key) {
+        try {
+          const [match] = await this.geoapifyPlaces('search', trimmed, key, 1);
+          if (match) {
+            return { address: match.address, lat: match.lat, lng: match.lng, source: 'GEOAPIFY', approximate: false };
+          }
+        } catch (error) {
+          this.logger.warn(`Geoapify geocode failed, falling back to local places: ${(error as Error).message}`);
+        }
+      }
+    }
     if (this.provider === 'google') {
       const key = this.config.googleMapsApiKey;
       if (key) {
@@ -127,6 +177,17 @@ export class MapsService {
 
   /** Coordinates → an address the rider can read. */
   async reverseGeocode(point: Point): Promise<GeocodeResult | null> {
+    if (this.provider === 'geoapify') {
+      const key = this.config.geoapifyApiKey;
+      if (key) {
+        try {
+          const address = await this.geoapifyReverse(point, key);
+          if (address) return { address, lat: point.lat, lng: point.lng, source: 'GEOAPIFY', approximate: false };
+        } catch (error) {
+          this.logger.warn(`Geoapify reverse geocode failed, falling back to local places: ${(error as Error).message}`);
+        }
+      }
+    }
     if (this.provider === 'google') {
       const key = this.config.googleMapsApiKey;
       if (key) {
@@ -164,6 +225,100 @@ export class MapsService {
       lng: point.lng,
       source: 'STUB',
       approximate: true,
+    };
+  }
+
+  /* ─────────────────────────────── Geoapify ───────────────────────────────
+   * OpenStreetMap data. One key covers suggestions, geocoding, reverse geocoding
+   * and routing, and the free plan needs no card.
+   *
+   * Every call is a GET with `apiKey` in the query string — Geoapify's documented
+   * scheme — so, unlike Google, there is no field mask and no header auth to get
+   * wrong. Autocomplete and search answer with already-geocoded rows, which means
+   * choosing a suggestion costs ONE request here instead of Google's one-plus-one.
+   */
+
+  /**
+   * Address suggestions ('autocomplete') or a single best match ('search').
+   * Both endpoints share a response shape: a GeoJSON FeatureCollection.
+   */
+  private async geoapifyPlaces(
+    kind: 'autocomplete' | 'search',
+    query: string,
+    key: string,
+    limit: number,
+  ): Promise<PlaceResult[]> {
+    const params = new URLSearchParams({
+      text: query,
+      // Nigeria only: a suggestion in Ghana or Cameroon is noise for a Benin City
+      // courier, and it also keeps the result list short and cheap.
+      filter: 'countrycode:ng',
+      lang: 'en',
+      limit: String(limit),
+      apiKey: key,
+    });
+    const response = await fetch(`https://api.geoapify.com/v1/geocode/${kind}?${params}`, {
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) throw new Error(`Geoapify ${kind} responded ${response.status}`);
+
+    const body = (await response.json()) as GeoapifyFeatureCollection;
+    return (body.features ?? [])
+      .map(toPlaceResult)
+      .filter((place): place is PlaceResult => place !== null)
+      .slice(0, limit);
+  }
+
+  /** Coordinates → the most readable address Geoapify can offer. */
+  private async geoapifyReverse(point: Point, key: string): Promise<string | null> {
+    const params = new URLSearchParams({
+      lat: String(point.lat),
+      lon: String(point.lng),
+      lang: 'en',
+      limit: '1',
+      apiKey: key,
+    });
+    const response = await fetch(`https://api.geoapify.com/v1/geocode/reverse?${params}`, {
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) throw new Error(`Geoapify reverse responded ${response.status}`);
+
+    const body = (await response.json()) as GeoapifyFeatureCollection;
+    const first = body.features?.[0]?.properties;
+    return first?.formatted ?? first?.address_line1 ?? null;
+  }
+
+  /**
+   * Driving distance and duration.
+   *
+   * Geoapify answers with `distance` and `time` on the route feature, in metres
+   * and seconds. It can return `units: 'miles'` if an account is configured that
+   * way, so the conversion is explicit rather than assumed.
+   */
+  private async geoapifyRoute(from: Point, to: Point, key: string): Promise<RouteEstimate> {
+    const params = new URLSearchParams({
+      waypoints: `${from.lat},${from.lng}|${to.lat},${to.lng}`,
+      mode: 'drive',
+      apiKey: key,
+    });
+    const response = await fetch(`https://api.geoapify.com/v1/routing?${params}`, {
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) throw new Error(`Geoapify routing responded ${response.status}`);
+
+    const body = (await response.json()) as {
+      features?: Array<{ properties?: { distance?: number; time?: number; units?: string } }>;
+    };
+    const route = body.features?.[0]?.properties;
+    if (!route?.distance) throw new Error('Geoapify returned no route');
+
+    const metres = route.units === 'miles' ? route.distance * 1609.344 : route.distance;
+    const seconds = route.time ?? 0;
+
+    return {
+      distanceKm: Math.round((metres / 1000) * 100) / 100,
+      durationMinutes: Math.max(1, Math.round(seconds / 60)),
+      source: 'GEOAPIFY',
     };
   }
 
@@ -293,6 +448,56 @@ export class MapsService {
       source: 'GOOGLE',
     };
   }
+}
+
+/* ──────────────────────── Geoapify's response shape ─────────────────────── */
+
+/**
+ * Geoapify answers with GeoJSON, not a bespoke object. Only the fields used here
+ * are declared — anything else in the payload is ignored, so a new field on
+ * their side cannot break a booking.
+ */
+interface GeoapifyFeatureCollection {
+  features?: Array<{
+    properties?: {
+      place_id?: string;
+      name?: string;
+      formatted?: string;
+      address_line1?: string;
+      address_line2?: string;
+      city?: string;
+      suburb?: string;
+      district?: string;
+      street?: string;
+      lat?: number;
+      lon?: number;
+    };
+    geometry?: { coordinates?: [number, number] };
+  }>;
+}
+
+/** One GeoJSON feature → the platform's PlaceResult, or null if it has no position. */
+function toPlaceResult(feature: NonNullable<GeoapifyFeatureCollection['features']>[number]): PlaceResult | null {
+  const props = feature.properties ?? {};
+  // Longitude first: GeoJSON, and the single easiest thing to get wrong here.
+  const lng = props.lon ?? feature.geometry?.coordinates?.[0];
+  const lat = props.lat ?? feature.geometry?.coordinates?.[1];
+  if (typeof lat !== 'number' || typeof lng !== 'number') return null;
+
+  const name = props.name ?? props.address_line1 ?? props.street ?? props.formatted ?? 'Unknown place';
+  const address = props.formatted ?? [props.address_line1, props.address_line2].filter(Boolean).join(', ') ?? name;
+
+  return {
+    id: props.place_id ?? `${lat},${lng}`,
+    name,
+    address: address || name,
+    // The neighbourhood is genuinely useful in Benin City, where "off Sapele Road"
+    // locates a parcel better than a house number nobody uses.
+    landmark: props.suburb ?? props.district ?? props.city ?? null,
+    lat,
+    lng,
+    source: 'GEOAPIFY',
+  };
 }
 
 /* ────────────────────────── the stub place table ────────────────────────── */

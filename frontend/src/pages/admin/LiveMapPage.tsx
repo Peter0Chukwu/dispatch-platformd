@@ -150,7 +150,11 @@ export default function LiveMapPage() {
                   subtitle={`${data.summary.positioned} of ${data.riders.length} online riders have a position · window ${Math.round(
                     data.freshnessWindowSeconds / 60,
                   )} min`}
-                  action={<Badge tone={data.mapProvider === "google" ? "success" : "warning"}>{data.mapProvider.toUpperCase()}</Badge>}
+                  action={
+                    <Badge tone={data.mapProvider === "stub" ? "warning" : "success"}>
+                      {data.mapProvider === "stub" ? "OUTLINE" : "STREET MAP"}
+                    </Badge>
+                  }
                 />
                 <CardBody>
                   {mapPoints.length === 0 ? (

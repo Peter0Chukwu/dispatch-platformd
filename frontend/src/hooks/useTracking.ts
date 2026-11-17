@@ -42,7 +42,7 @@ export interface Tracking {
   stale: boolean;
   eta: { minutes: number; distanceRemainingKm: number | null; source: string | null; headingTo: 'pickup' | 'destination' } | null;
   timeline: Array<{ status: string; label: string; at: string; reason: string | null }>;
-  mapProvider: 'stub' | 'google' | 'mapbox';
+  mapProvider: 'stub' | 'google' | 'geoapify' | 'mapbox';
   shareExpiresAt?: string | null;
 }
 
@@ -85,7 +85,7 @@ export interface LiveMap {
   };
   riders: LiveMapRider[];
   deliveries: LiveMapDelivery[];
-  mapProvider: 'stub' | 'google' | 'mapbox';
+  mapProvider: 'stub' | 'google' | 'geoapify' | 'mapbox';
 }
 
 export function useTracking(deliveryId: string | undefined) {

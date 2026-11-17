@@ -158,10 +158,11 @@ docker compose up -d api        # recreates only what changed
 | `TRACKING_LINK_SECRET` | rotating invalidates every outstanding tracking and report-download link. |
 | `CORS_ORIGINS` | extra browser origins allowed to call the API. The deployment's **own** origin is always allowed (see §7 below), so this only matters when the web app and the API are on different hosts. |
 | `SMS_MODE=CONSOLE` / `EMAIL_MODE=CONSOLE` | messages are **logged, not sent**. Never leave this on for real riders. |
-| `MAPS_PROVIDER=STUB` | fares use the stub distance model; the UI says so. Set `GOOGLE` plus the web build arg for real maps. |
+| `MAPS_PROVIDER=STUB` | fares use the stub distance model; the UI says so. Set `GEOAPIFY` (recommended) or `GOOGLE`, plus the matching `VITE_` build arg, for real maps. |
 
-> The web build takes `VITE_GOOGLE_MAPS_API_KEY` as a **build arg**, not a runtime variable —
-> it is compiled into the JavaScript. Changing it requires `docker compose build web`.
+> The web build takes `VITE_GEOAPIFY_API_KEY` (or `VITE_GOOGLE_MAPS_API_KEY`) as a **build arg**,
+> not a runtime variable — it is compiled into the JavaScript. Changing it requires
+> `docker compose build web`, and on a hosted platform a rebuild of the web service.
 
 ---
 
@@ -369,7 +370,7 @@ That is the rollback strategy for money: not restoration, *explanation*.
 
 ### "The map is empty / fares look wrong"
 
-* `MAPS_PROVIDER=STUB` means distances come from the stub model, not Google. The UI says so.
+* `MAPS_PROVIDER=STUB` means distances come from the stub model, not a routing provider. The UI says so.
 * With `GOOGLE`, a missing or unbilled key degrades to the stub **and logs a warning**. Check
   `docker compose logs api | grep -i maps`.
 * Fares themselves come from pricing rules in the database, not code. Fix them in admin →
