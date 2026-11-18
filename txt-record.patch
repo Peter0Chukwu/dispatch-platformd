@@ -1,0 +1,138 @@
+From 632cfd894009348a4b6e608ec065a979d689220d Mon Sep 17 00:00:00 2001
+From: TWL Build <build@twl.local>
+Date: Wed, 18 Nov 2026 12:12:02 +0000
+Subject: [PATCH] domain: the exact clicks, and a correction about the bare
+ domain
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Two things this fixes in the walk-through. First, the Host field: Namecheap wants
+the part before the domain, and pasting Northflank's full record name there
+silently produces a doubled domain that never verifies — the most common way this
+step fails, and it now says so in bold. Second, a correction: Northflank's own
+Namecheap guide documents an ALIAS record on @, which is Namecheap's CNAME
+flattening. That means the bare domain can point straight at the app and the
+redirect-record workaround I suggested last time is unnecessary. The fallback
+stays documented for accounts where ALIAS is refused.
+
+Also recorded: paste the target verbatim (no scheme, no quotes, no trailing dot),
+TTL 1 minute while verifying, and the green checkmark — Namecheap does not save
+an unsaved row, which reads as a record that vanished.
+---
+ documentation/CUSTOM-DOMAIN.md | 66 +++++++++++++++++++---------------
+ 1 file changed, 38 insertions(+), 28 deletions(-)
+
+diff --git a/documentation/CUSTOM-DOMAIN.md b/documentation/CUSTOM-DOMAIN.md
+index 7a8cbcf..0f4d097 100644
+--- a/documentation/CUSTOM-DOMAIN.md
++++ b/documentation/CUSTOM-DOMAIN.md
+@@ -31,23 +31,28 @@ Manage → Advanced DNS**. No card, no new account.
+ DNS* page looks the same. If a panel ever says "nameservers: custom", that domain's
+ DNS is managed elsewhere and that "elsewhere" is your DNS provider.)
+ 
+-### 0a. One decision to make first: `www` or no `www`
++### 0a. Which record goes on the bare domain
+ 
+-Namecheap's free DNS will not put a CNAME on the bare domain (`@`) — the DNS standard
+-does not allow it, and most registrars are the same. So pick one:
++A CNAME on the bare domain (`@`) is not allowed by the DNS standard, which is why
++registrars refuse it. Namecheap's answer is an **ALIAS record**, which behaves like a
++CNAME at the root — and it is available on their free DNS. Northflank's own Namecheap
++guide says exactly this: add an **ALIAS** record with host `@` and the target
++Northflank generated.
+ 
+-**Option A — no new accounts, works today (recommended to start):**
+-`www` points at the app, the bare domain redirects to `www`. Your public address
+-becomes `https://www.traderswelfarelogistics.online`. Ten minutes, nothing to install.
++So the scheme is:
+ 
+-**Option B — move DNS to Cloudflare (free):**
+-Cloudflare allows a CNAME on the bare domain ("CNAME flattening"), so
+-`https://traderswelfarelogistics.online` works with no redirect. Costs nothing but
+-means changing nameservers at Namecheap and waiting for propagation. Worth doing
+-later, not before your first demo.
++| Host | Type | What it points at |
++|---|---|---|
++| `@` (bare domain) | `ALIAS` | the target Northflank gives you |
++| `www` | `CNAME` | the same target |
++
++Result: `https://traderswelfarelogistics.online` works, and `www.` works too. No
++redirect tricks needed, and no reason to move DNS to Cloudflare.
+ 
+-Everything below is written for **Option A**. If you choose Option B, swap the URL in
+-§1b for the bare domain and skip the redirect record.
++If Namecheap ever refuses the ALIAS record for your domain (some old accounts or
++hosting-DNS setups cannot), the fallback is the plain one: CNAME on `www`, and a
++**URL Redirect Record** on `@` pointing at `https://www.traderswelfarelogistics.online`.
++Then the public address is the `www` version — swap it in §1b.
+ 
+ ---
+ 
+@@ -78,15 +83,22 @@ Namecheap's *Advanced DNS* table has four columns: **Type**, **Host**, **Target*
+ **TTL**. Host is the part *before* the domain — `www`, not `www.example.com`. Use
+ **Automatic** TTL everywhere.
+ 
+-| Type | Host | Target | Why |
++| Type | Host | Target | When |
+ |---|---|---|---|
+-| `TXT Record` | the value Northflank showed | the value Northflank showed | proves the domain is yours |
+-| `CNAME Record` | `www` | the target Northflank showed | the site itself |
+-| `URL Redirect Record` | `@` | `https://www.traderswelfarelogistics.online` | bare domain → `www` |
++| `TXT Record` | the *record name* Northflank showed, **without the domain on the end** | the *record content* | first — this verifies ownership |
++| `ALIAS Record` | `@` | the target Northflank showed for the bare domain | after verification |
++| `CNAME Record` | `www` | the target Northflank showed for `www` | after verification |
+ 
+-A `CNAME` at `@` will be refused by Namecheap with an error — that is expected, and
+-the redirect record is the answer. The redirect is permanent and free, so
+-`traderswelfarelogistics.online` typed alone still lands on the app.
++**The Host field is the part before the domain, not the whole thing.** If Northflank
++says the record name is `_northflank-challenge.traderswelfarelogistics.online`, the
++Host in Namecheap is `_northflank-challenge`. Pasting the whole string produces
++`_northflank-challenge.traderswelfarelogistics.online.traderswelfarelogistics.online`
++and the verification will simply never pass. If Northflank gives only the bare
++domain, use `@`.
++
++Paste the target exactly: no `https://`, no quotes (Namecheap adds them), no
++trailing dot. Set TTL to **1 min** while verifying, and finish with the green
++checkmark — Namecheap does not save a record until you do.
+ 
+ ### 1b. In the API's environment variables
+ 
+@@ -94,15 +106,13 @@ These two must match the new address **exactly** — scheme and host, no trailin
+ slash. A mismatch breaks sign-in in the browser while every `curl` test still passes,
+ which is the most confusing failure there is.
+ 
+-Option A (`www` canonical — what the steps above set up):
+-
+ ```dotenv
+-FRONTEND_URL=https://www.traderswelfarelogistics.online
+-CORS_ORIGINS=https://www.traderswelfarelogistics.online,https://traderswelfarelogistics.online
++FRONTEND_URL=https://traderswelfarelogistics.online
++CORS_ORIGINS=https://traderswelfarelogistics.online,https://www.traderswelfarelogistics.online
+ ```
+ 
+-Option B (bare domain canonical, if you moved DNS to Cloudflare) — use the address
+-without `www` in both lines instead. **Pick one and use it everywhere**: the value in
++If you took the redirect fallback in §0a, use `https://www.traderswelfarelogistics.online`
++as `FRONTEND_URL` instead. **Pick one and use it everywhere**: the value in
+ `FRONTEND_URL` is the address that appears in every verification email, and
+ `CORS_ORIGINS` decides whether the browser is allowed to sign in.
+ 
+@@ -226,11 +236,11 @@ the browser still uses the same origin.
+ 
+ ## 5. Checklist
+ 
+-- [ ] Decided `www` or bare domain as the public address (Option A or B, §0a)
++- [ ] Bare domain or `www` chosen as the public address (§0a)
+ - [ ] Domain added and verified in Northflank (TXT record)
+ - [ ] `www` CNAME added and verified
+ - [ ] Domain linked to the web service's public port
+-- [ ] `www` CNAME and the `@` redirect record added in Namecheap's *Advanced DNS*
++- [ ] `ALIAS` record on `@` and `CNAME` on `www` added in Namecheap's *Advanced DNS*
+ - [ ] `FRONTEND_URL` set to the chosen address, no trailing slash
+ - [ ] `CORS_ORIGINS` lists both the bare and `www` origins, no trailing slash
+ - [ ] API restarted; `…/api/v1/health` returns `ok` on the new domain
+-- 
+2.47.3
+

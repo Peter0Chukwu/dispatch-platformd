@@ -1,141 +1,78 @@
-TWL — verification that works, and calls without phone numbers
-================================================================
+TWL — the TXT record: where to get it, where to paste it
+========================================================
 
-Commit: 3c90759   (previous: f116cc5)
+Commit: 632cfd8
 
-WHAT THIS FIXES
----------------
-You said the verification screen showed an error. There were two faults, and I
-fixed both, plus one more I found on the way.
-
-1. THE LINK WENT TO A PAGE THAT DOES NOT EXIST
-   The email said "click here" and the link was /verify-email?token=... but the app
-   only ever had /verify. So every click landed on the 404 page, the token was never
-   used, and the address could never be confirmed. The link now goes to /verify, and
-   /verify-email is kept as an alias so links already in people's inboxes start
-   working instead of failing.
-
-2. THE SCREEN SAID "WE SENT YOU A CODE" WHEN NOTHING WAS SENT
-   With no SMS or email provider configured, the code was written into the API's log
-   file. A customer cannot read that. Worse, the messaging code threw an error when a
-   real provider was selected, which turned a sign-up into a server error. Now:
-     - SMS goes to Termii for real, email goes to Resend for real;
-     - a failed message is reported, never thrown: the account is always created;
-     - the verification screen says "we could not send the SMS just now" when that is
-       the truth, and the code still works;
-     - "Send the link again" now works without signing in — a brand-new customer has
-       no session, and before this there was no way for them to ask for it again.
-
-3. CALLING NOW WORKS, AND NO PHONE NUMBER IS INVOLVED
-   The Call button could only say "not implemented yet", because masked calling in
-   Nigeria needs an account with KYC, a rented pool of numbers and per-minute
-   billing — none of it self-serve. But the promise was never "dial a proxy number".
-   The promise was "talk without either of you learning the other's number".
-
-   A call inside the app keeps that promise with no number in it at all. Press Call
-   on a live delivery; the other person's phone rings in the app; they press Answer
-   and you talk. The audio goes straight from one browser to the other and never
-   through our server, and nothing is recorded.
-
-   The rules are enforced on the server, not in the browser:
-     - only the two people on that delivery may call each other
-     - only while the job is live: refused before a rider is assigned and after the
-       job is delivered or cancelled — that is the "no contact after the job" rule
-     - one call at a time, 45 seconds to answer, and closing the tab hangs up
-     - a fresh call id every time, so an old one cannot be reused
-
-WHAT YOU NEED TO DO
--------------------
-1. Copy the changed files into your clone (C:\Users\USER\Documents\dispatch-platform)
-   or apply verification-and-calls.patch. The zip holds every changed file in the
-   same folders, so copying the folders over is enough.
-2. Rebuild and redeploy the API and the website. The verification fix is in both, so
-   the demo will keep showing the old behaviour until both are redeployed.
-3. Nothing else is required for the fixes above. In-app calling works with no keys,
-   no sign-up and no cost.
-
-TO TURN ON REAL SMS AND EMAIL (both optional, both free to start)
------------------------------------------------------------------
-Email — Resend, free to 3,000 a month:
-  1. resend.com -> add your domain -> add the DNS records it shows you
-  2. API Keys -> create -> copy
-  3. In the API settings:  EMAIL_MODE=RESEND
-                           RESEND_API_KEY=re_...
-                           EMAIL_FROM="TWL <no-reply@yourdomain.com>"
-
-SMS — Termii, roughly N4 per message:
-  1. termii.com -> top up a little credit
-  2. Request a sender ID (3-11 characters, e.g. TWL). Approval takes a few days.
-  3. Ask Termii support, in writing, to enable the DND (transactional) route on your
-     account. Without it OTPs are refused or never reach numbers with do-not-disturb
-     on. This is the step people miss.
-  4. In the API settings:  SMS_MODE=TERMII
-                           TERMII_API_KEY=TL...
-                           TERMII_SENDER_ID=TWL
-                           TERMII_CHANNEL=dnd
-
-How to check it is really on: open /api/v1/health and look at "integrations". It
-should read "sms":"TERMII" and "email":"RESEND". If it reads TERMII_NO_KEY or
-RESEND_NO_KEY, the mode is switched on but the key is missing — that is the state
-that looks configured and sends nothing.
-
-WHATS LEFT TO CONNECT (the list you asked for)
+PART 1 — GETTING THE TXT VALUE FROM NORTHFLANK
 ----------------------------------------------
-Nothing below blocks the demo. The demo is real; it just does not reach the outside
-world in these specific ways yet.
+1. Log in to Northflank: https://app.northflank.com
+2. Open this page directly: https://app.northflank.com/s/account/domains/new
+   (or: the project/account menu -> Account settings -> Domains)
+3. Click "Add domain".
+4. Type exactly:  traderswelfarelogistics.online
+   No https://, no www, no trailing slash.
+5. Click "Add domain".
+6. The entry now appears with a status like "Unverified". Open it (or click the
+   verification entry beside it). It shows two things:
 
-  1. Resend + a verified domain ....... verification emails, password resets. Free to
-                                        3,000/month, 15 minutes.
-  2. Termii sender ID + DND route ..... real SMS codes. ~N4 a message, a few days for
-                                        the sender ID.
-  3. Paystack live keys + webhook ..... customers paying in, riders paid out. Sandbox
-                                        already works. Free, instant.
-  4. Push notifications (Firebase) .... a call or a new job reaching a CLOSED app or a
-                                        locked phone. Today both people must have the
-                                        app open. Free, about a day's work.
-  5. TURN relay (optional) ............ in-app calls on networks that block direct
-                                        audio. ~$1-10/month.
-  6. Termii number masking ............ only if you want a real handset to ring instead
-                                        of the app. Needs KYC and their support.
-  7. Geoapify production key .......... address search and the map. Free to 3,000
-                                        credits a day.
-  8. A database that never pauses ..... Supabase free pauses after a week idle.
-  9. A domain ......................... a link people trust in an email. ~N15,000/year.
- 10. A server that never sleeps ....... no 30-60 second cold start. ~$5-7/month.
+     record name     e.g. _northflank-challenge.traderswelfarelogistics.online
+     record content  a long random string
 
-Already connected and working: maps and address search, the database, Redis, chat,
-in-app calling, saved places, staff invitations, payments (sandbox).
+   Each has a copy icon. Click both and paste them into Notepad — leave that
+   Northflank tab OPEN, you come back to it in Part 3.
 
-TWO HONEST LIMITS OF IN-APP CALLING
------------------------------------
-- Both people must have the app open. A locked phone gets nothing until push
-  notifications (item 4) are added.
-- A few networks block direct browser-to-browser audio. When that happens the panel
-  says so and points at the message box, which always works. Item 5 fixes it.
+PART 2 — PASTING IT INTO NAMECHEAP
+----------------------------------
+1. Log in at namecheap.com
+2. Left menu -> Domain List
+3. Find traderswelfarelogistics.online -> click "Manage"
+4. Click the "Advanced DNS" tab
+5. Click the "ADD NEW RECORD" button
+6. Type dropdown -> choose "TXT Record"
+7. HOST field: paste the record name, then DELETE THE DOMAIN OFF THE END.
+   Namecheap already knows the domain.
+       _northflank-challenge.traderswelfarelogistics.online   <- from Northflank
+       _northflank-challenge                                  <- what you type
+   If Northflank showed just the bare domain, type  @
+8. TARGET field: paste the record content EXACTLY.
+   - no quotation marks (Namecheap adds them itself)
+   - no https://
+   - no trailing dot
+9. TTL: choose "1 min" (fastest feedback). Lower TTL = faster verification.
+10. Click the green checkmark to SAVE. Nothing is saved until you do — this is why
+    records sometimes "disappear". Then click "Save all changes" if shown.
 
-HOW TO PROVE IT, IN FIVE MINUTES
---------------------------------
-1. Sign in as a customer, book a delivery; accept it as a rider in a second browser
-   (or a private window).
-2. In the customer window open the delivery, find Contact, press Call.
-3. The rider window shows "Customer is calling" with Answer / Decline.
-4. Press Answer, allow the microphone, talk. The timer starts when audio connects.
-5. Mark the delivery delivered, then press Call again: it refuses. That refusal is
-   the feature — contact ends with the job.
+PART 3 — TELL NORTHFLANK TO CHECK
+---------------------------------
+1. Back on the Northflank domains page, find your domain entry.
+2. Click "Verify".
+3. Usually passes within a minute or two with TTL 1 min. DNS can occasionally take
+   longer — if it fails, wait 10 minutes and press Verify again. Nothing is broken.
 
-FILES IN THIS ZIP
------------------
-  READ-ME-FIRST.txt            this file
-  COMMIT-MESSAGE.txt           the commit message, in full
-  verification-and-calls.patch the complete diff (git apply, if you prefer patches)
-  backend/... frontend/... documentation/... .env.example   the changed files
+THE MOST COMMON MISTAKE
+-----------------------
+Pasting the full record name into Host. You then get:
+   _northflank-challenge.traderswelfarelogistics.online.traderswelfarelogistics.online
+It never verifies and looks like Northflank is at fault. Strip the domain.
 
-TESTS RUN BEFORE COMMITTING
----------------------------
-  backend: 81 tests, all passing (no database needed) — 10 on the SMS/email drivers,
-           13 on call permission rules, the rest the existing suite
-  typecheck: backend and frontend, both clean
-  frontend production build: succeeds
+AFTER THE DOMAIN IS VERIFIED (not before)
+-----------------------------------------
+Add the two records that actually serve the site:
+   ADD NEW RECORD -> ALIAS Record  -> Host: @    -> Target: (what Northflank gives for the bare domain)
+   ADD NEW RECORD -> CNAME Record  -> Host: www  -> Target: (what Northflank gives for www)
 
-Full detail is in documentation/MESSAGES-AND-CALLS.md — the recommended settings,
-what each step needs, and what is still outstanding.
+CORRECTION to what I told you last time: I said Namecheap cannot point the bare
+domain at a service and you would need a redirect. That was wrong — Namecheap
+supports an ALIAS record at @, which is what Northflank's own Namecheap guide uses.
+So the bare domain works directly, and there is no need to move to Cloudflare.
+(If Namecheap refuses the ALIAS on your account, fall back to CNAME on www plus a
+URL Redirect Record on @ to https://www.traderswelfarelogistics.online.)
+
+Then, in the API settings, restart after setting:
+   FRONTEND_URL=https://traderswelfarelogistics.online
+   CORS_ORIGINS=https://traderswelfarelogistics.online,https://www.traderswelfarelogistics.online
+
+FILES
+-----
+  documentation/CUSTOM-DOMAIN.md   sections 0a and 1a-and-a-half rewritten with the above
+  txt-record.patch, COMMIT-MESSAGE.txt

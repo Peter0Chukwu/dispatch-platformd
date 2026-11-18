@@ -1,38 +1,15 @@
-verification that tells the truth, and calls that need no phone number
+domain: the exact clicks, and a correction about the bare domain
 
-The verification screen could not work, and it was two separate faults.
+Two things this fixes in the walk-through. First, the Host field: Namecheap wants
+the part before the domain, and pasting Northflank's full record name there
+silently produces a doubled domain that never verifies — the most common way this
+step fails, and it now says so in bold. Second, a correction: Northflank's own
+Namecheap guide documents an ALIAS record on @, which is Namecheap's CNAME
+flattening. That means the bare domain can point straight at the app and the
+redirect-record workaround I suggested last time is unnecessary. The fallback
+stays documented for accounts where ALIAS is refused.
 
-The emailed link pointed at /verify-email, which the app has never had — every
-click landed on the 404 page and the token was never used, so an address could
-never be confirmed. The link now points at /verify (and /verify-email is kept as
-an alias, so links already sitting in inboxes stop failing). While in there: the
-link was built from the first CORS origin, which on a careless deployment is a
-developer's laptop; FRONTEND_URL is now what it uses.
-
-The second fault was quieter. With no SMS or email provider configured, codes were
-written to the API log and the screens still said "we sent you a code" — the most
-useless sentence in software. The messaging drivers were placeholders that threw
-when a real provider was selected, which turned a registration into a 500. Now:
-
-  · SMS goes to Termii for real (approval, DND route, sender ID — all in
-    MESSAGES-AND-CALLS.md), email goes to Resend with an HTML body;
-  · both return DeliveryResult {delivered, driver, reason} instead of throwing,
-    so a provider outage costs a message, never an account;
-  · registration reports exactly which message went out, and the verification
-    screen says "we could not send the SMS just now" when that is the truth;
-  · a new signed-out resend endpoint exists, because a brand-new customer has no
-    session and previously had no way to ask for the link again.
-
-And calling. It used to be a Call button that could only throw "adapter is not
-implemented yet", because number masking in Nigeria needs KYC, a rented number
-pool and per-minute billing — none of it self-serve. The promise was never "dial
-a proxy number", it was "talk without either of you learning the other's number".
-An in-app call keeps that promise with no number in it at all: WebRTC, browser to
-browser, audio never through our server. The server only decides who may ring
-whom — the two parties of a live delivery, nobody else, one call at a time, 45
-seconds to answer, closed when the job closes. VOICE_MODE=TERMII stays available
-for the day a masking account exists.
-
-23 new tests (81 total, no database): Termii and Resend request shapes, error
-bodies that arrive with a 200, and every refusal the call broker can make.
+Also recorded: paste the target verbatim (no scheme, no quotes, no trailing dot),
+TTL 1 minute while verifying, and the green checkmark — Namecheap does not save
+an unsaved row, which reads as a record that vanished.
 
