@@ -134,6 +134,37 @@ describe('phase 7 — outbound messages', () => {
       expect(body.html).toContain('href="https://twl.example.com/verify?token=abc"');
     });
 
+    it('keeps a sentence-ending full stop out of the link', async () => {
+      // The exact shape that broke a real password reset:
+      // "... token=abc. If you did not ask for this..."
+      fetchMock.mockResolvedValue({ ok: true, status: 200, text: async () => '{}' });
+
+      await new MessagingService(resendConfig).sendEmail({
+        ...email,
+        body: 'Reset here: https://twl.example.com/reset-password?token=abc123. If you did not ask, ignore.',
+      });
+
+      const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
+      expect(body.html).toContain('href="https://twl.example.com/reset-password?token=abc123"');
+      expect(body.html).not.toContain('abc123."');
+      // The full stop is still in the sentence, just not in the link.
+      expect(body.html).toContain('</a>. If you did not ask');
+    });
+
+    it('linkifies every link in a message, not every other one', async () => {
+      // A /g regex reused with .test() alternates true/false, which silently left
+      // half the links as plain text.
+      fetchMock.mockResolvedValue({ ok: true, status: 200, text: async () => '{}' });
+
+      await new MessagingService(resendConfig).sendEmail({
+        ...email,
+        body: 'One: https://twl.example.com/a Two: https://twl.example.com/b Three: https://twl.example.com/c',
+      });
+
+      const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
+      expect(body.html.match(/<a href=/g)).toHaveLength(3);
+    });
+
     it('escapes the message so a name cannot inject markup', async () => {
       fetchMock.mockResolvedValue({ ok: true, status: 200, text: async () => '{}' });
 

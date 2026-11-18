@@ -46,7 +46,25 @@ export default function VerifyPage() {
   const [busy, setBusy] = useState<'email' | 'phone' | 'resend' | 'resendEmail' | null>(null);
   const autoRan = useRef(false);
 
-  const verifyEmail = async (token: string) => {
+  /**
+   * Accepts the long code on its own *or* a whole pasted link.
+   *
+   * People paste the entire URL from the email into the box — reasonable, since
+   * that is what they were sent — and the old version sent it to the API verbatim,
+   * which answered "this verification link is not valid". Both shapes now work.
+   */
+  const tokenFrom = (input: string): string => {
+    const text = input.trim();
+    const match = /[?&]token=([^&#\s]+)/.exec(text);
+    return (match?.[1] ?? text).trim();
+  };
+
+  const verifyEmail = async (raw: string) => {
+    const token = tokenFrom(raw);
+    if (!token) {
+      setStatus({ tone: 'danger', message: 'Paste the link from the email, or the long code inside it.' });
+      return;
+    }
     setBusy('email');
     try {
       await api.post('/auth/verify-email', { token }, { skipAuthRefresh: true });
@@ -169,15 +187,15 @@ export default function VerifyPage() {
         <section className="card-surface p-4">
           <h2 className="text-sm font-semibold text-ink-900">1. Email address</h2>
           <p className="mt-0.5 text-xs text-ink-500">
-            We emailed you a link — opening it confirms your address automatically. If you would rather confirm
-            here, paste the part of the link that comes after <code>token=</code>.
+            We emailed you a link — opening it confirms your address automatically. If the link will not open,
+            paste the whole link here (or just the long code after <code>token=</code>) and press the button.
           </p>
           <div className="mt-3 space-y-3">
             <Input
-              label="Code from the email"
+              label="Link or code from the email"
               value={emailToken}
               onChange={(event) => setEmailToken(event.target.value)}
-              placeholder="Paste the long code from the link"
+              placeholder="Paste the whole link, or the code after token="
             />
             <div className="flex flex-wrap gap-2">
               <Button

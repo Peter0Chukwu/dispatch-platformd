@@ -201,10 +201,21 @@ function maskEmail(email: string): string {
  * verification link has to work in a phone's preview pane on a slow connection.
  */
 function renderEmail(message: OutboundMessage): string {
-  const linkPattern = /(https?:\/\/[^\s]+)/g;
+  // Two details that cost real emails:
+  //  · `.test()` on a /g regex advances lastIndex, so it answered differently for
+  //    every other part — half the links in a message were left as raw text.
+  //  · a full stop or bracket at the end of a sentence got swept into the href,
+  //    which made the token it carried invalid.
+  const isLink = /^https?:\/\//;
+  const trailing = /[.,;:!?)\]]+$/;
   const linked = message.body
-    .split(linkPattern)
-    .map((part) => (linkPattern.test(part) ? `<a href="${part}" style="color:#047857">${part}</a>` : escapeHtml(part)))
+    .split(/(https?:\/\/\S+)/g)
+    .map((part) => {
+      if (!isLink.test(part)) return escapeHtml(part);
+      const url = part.replace(trailing, '');
+      const tail = part.slice(url.length);
+      return `<a href="${escapeHtml(url)}" style="color:#047857">${escapeHtml(url)}</a>${escapeHtml(tail)}`;
+    })
     .join('');
   return `<!doctype html><html><body style="margin:0;padding:24px;background:#f8fafc;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif">
   <div style="max-width:520px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:12px;padding:24px">

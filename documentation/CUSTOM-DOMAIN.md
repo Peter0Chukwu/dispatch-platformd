@@ -65,14 +65,31 @@ API — so the API stays on its `code.run` address where nobody has to type it.
 ### 1a. In Northflank
 
 1. **Account settings → Domains → Add domain**, enter `traderswelfarelogistics.online`.
-2. Northflank shows a **TXT record** (a name and a value). Add it at your DNS host —
-   this proves the domain is yours.
-3. Back in Northflank, press **Verify**.
-4. **Add subdomain**: `www` under that domain. Northflank shows a **CNAME** target.
-   Add that at your DNS host too, then verify.
-5. Open your **web** service → **Run → Networking** → expand *Custom domains* for the
-   public port → **Choose a domain** → pick `traderswelfarelogistics.online` (and
-   `www.traderswelfarelogistics.online`) → save.
+2. Northflank shows a **TXT record** (a record name and a token). Add it at your DNS
+   host — this only proves the domain is yours. Nothing is served yet.
+3. Back in Northflank, press **Verify** on the domain entry.
+
+   **Northflank then adds the apex entry for you.** You do not create it: an entry
+   for `traderswelfarelogistics.online` itself appears in the list, unverified. Press
+   **Verify** on that entry to see the single record it needs — for Namecheap that is
+   an **ALIAS** record with host `@` and the token as the target.
+
+   This step is not optional. A verified *domain* means "you own it"; only a verified
+   *subdomain or apex entry* can be attached to a service, and until one is, the site
+   does not exist on the new address.
+
+4. **Add subdomain** (optional but recommended): click *Add subdomain*, choose the
+   domain namespace, enter `www`. Northflank shows a **CNAME** name and token — add
+   that at your DNS host, then verify. `www` costs nothing and catches anyone who
+   types it out of habit.
+
+5. Only now, attach it: open your **web** service → **Configure → Networking** →
+   expand *Custom domains & security rules* for the public port → **Choose a domain**
+   → select `traderswelfarelogistics.online` (and `www.…` if you added it) → save.
+
+   The TLS certificate is generated automatically once DNS resolves. The order
+   matters: DNS → verify → link → certificate. Linking before verifying simply
+   leaves the domain in a pending state.
 
 Certificates are issued automatically. A minute or two after DNS resolves, the site
 is up over HTTPS on the new name.
@@ -105,6 +122,13 @@ checkmark — Namecheap does not save a record until you do.
 These two must match the new address **exactly** — scheme and host, no trailing
 slash. A mismatch breaks sign-in in the browser while every `curl` test still passes,
 which is the most confusing failure there is.
+
+> **One address in `FRONTEND_URL`, a list in `CORS_ORIGINS`.** This is the mistake
+> worth reading twice: putting the comma-separated list into `FRONTEND_URL` builds
+> every verification link as
+> `https://www.example.com,https://example.com/verify?token=…`, and no browser will
+> open it. The API now takes the first filled-in entry of whatever it is given, so
+> the mistake no longer breaks anything — but set it correctly anyway.
 
 ```dotenv
 FRONTEND_URL=https://traderswelfarelogistics.online

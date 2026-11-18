@@ -1,78 +1,54 @@
-TWL — the TXT record: where to get it, where to paste it
-========================================================
+TWL — the reset link worked; the full stop broke it
+====================================================
 
-Commit: 632cfd8
+Commit: 43db649   (previous: cde5830)
 
-PART 1 — GETTING THE TXT VALUE FROM NORTHFLANK
-----------------------------------------------
-1. Log in to Northflank: https://app.northflank.com
-2. Open this page directly: https://app.northflank.com/s/account/domains/new
-   (or: the project/account menu -> Account settings -> Domains)
-3. Click "Add domain".
-4. Type exactly:  traderswelfarelogistics.online
-   No https://, no www, no trailing slash.
-5. Click "Add domain".
-6. The entry now appears with a status like "Unverified". Open it (or click the
-   verification entry beside it). It shows two things:
+WHAT YOU SAW
+------------
+The reset email arrived with the right address this time, and the link inside was
+followed by a full stop because it sat at the end of a sentence:
 
-     record name     e.g. _northflank-challenge.traderswelfarelogistics.online
-     record content  a long random string
+  .../reset-password?token=3xCfKl3MuCo4qPeh5VZur4K80n05ML_T3gv2dcVMXuM.
+                                                                      ^
+Mail apps treat that full stop as part of the link. So the token the page received
+ended in ".", which is not part of any token — and the API correctly said the link
+was invalid. Not the same fault as before, one layer down.
 
-   Each has a copy icon. Click both and paste them into Notepad — leave that
-   Northflank tab OPEN, you come back to it in Part 3.
+WHAT CHANGED
+------------
+1. The link now stands on its own line in both emails (reset and verification),
+   with no punctuation touching it.
+2. The server now recovers the token from whatever arrives — a bare token, a whole
+   pasted link, a link with a full stop, a token with a trailing space.
+3. A real bug found while in there: a regex reused with .test() meant every other
+   link in an HTML email was left as plain text instead of a clickable link.
+4. Trailing punctuation is no longer swept into the href.
 
-PART 2 — PASTING IT INTO NAMECHEAP
-----------------------------------
-1. Log in at namecheap.com
-2. Left menu -> Domain List
-3. Find traderswelfarelogistics.online -> click "Manage"
-4. Click the "Advanced DNS" tab
-5. Click the "ADD NEW RECORD" button
-6. Type dropdown -> choose "TXT Record"
-7. HOST field: paste the record name, then DELETE THE DOMAIN OFF THE END.
-   Namecheap already knows the domain.
-       _northflank-challenge.traderswelfarelogistics.online   <- from Northflank
-       _northflank-challenge                                  <- what you type
-   If Northflank showed just the bare domain, type  @
-8. TARGET field: paste the record content EXACTLY.
-   - no quotation marks (Namecheap adds them itself)
-   - no https://
-   - no trailing dot
-9. TTL: choose "1 min" (fastest feedback). Lower TTL = faster verification.
-10. Click the green checkmark to SAVE. Nothing is saved until you do — this is why
-    records sometimes "disappear". Then click "Save all changes" if shown.
+Six tests added (99 total, no database). Typecheck and production build clean.
 
-PART 3 — TELL NORTHFLANK TO CHECK
----------------------------------
-1. Back on the Northflank domains page, find your domain entry.
-2. Click "Verify".
-3. Usually passes within a minute or two with TTL 1 min. DNS can occasionally take
-   longer — if it fails, wait 10 minutes and press Verify again. Nothing is broken.
+THE LINK YOU ALREADY HAVE STILL WORKS
+-------------------------------------
+Open it with no full stop on the end:
 
-THE MOST COMMON MISTAKE
------------------------
-Pasting the full record name into Host. You then get:
-   _northflank-challenge.traderswelfarelogistics.online.traderswelfarelogistics.online
-It never verifies and looks like Northflank is at fault. Strip the domain.
+  https://www.traderswelfarelogistics.online/reset-password?token=3xCfKl3MuCo4qPeh5VZur4K80n05ML_T3gv2dcVMXuM
 
-AFTER THE DOMAIN IS VERIFIED (not before)
------------------------------------------
-Add the two records that actually serve the site:
-   ADD NEW RECORD -> ALIAS Record  -> Host: @    -> Target: (what Northflank gives for the bare domain)
-   ADD NEW RECORD -> CNAME Record  -> Host: www  -> Target: (what Northflank gives for www)
+or paste the whole thing into the box on that page — it now trims the punctuation
+itself. Valid for one hour from when it was sent.
 
-CORRECTION to what I told you last time: I said Namecheap cannot point the bare
-domain at a service and you would need a redirect. That was wrong — Namecheap
-supports an ALIAS record at @, which is what Northflank's own Namecheap guide uses.
-So the bare domain works directly, and there is no need to move to Cloudflare.
-(If Namecheap refuses the ALIAS on your account, fall back to CNAME on www plus a
-URL Redirect Record on @ to https://www.traderswelfarelogistics.online.)
+Note the address in your screenshot is www. Make sure www resolves before relying
+on it — earlier checks showed no www record, so the bare domain is the address that
+works: https://traderswelfarelogistics.online/...
 
-Then, in the API settings, restart after setting:
-   FRONTEND_URL=https://traderswelfarelogistics.online
-   CORS_ORIGINS=https://traderswelfarelogistics.online,https://www.traderswelfarelogistics.online
+REMINDER: that token is a one-hour key to your account. Don't paste it into chat
+or screenshots; if it is spent or you share it, request a new one.
 
-FILES
------
-  documentation/CUSTOM-DOMAIN.md   sections 0a and 1a-and-a-half rewritten with the above
-  txt-record.patch, COMMIT-MESSAGE.txt
+TO APPLY
+--------
+1. Deploy this commit (the live build is still behind — /api/v1/chat/unread
+   answers 404).
+2. Confirm FRONTEND_URL has ONE address and no comma.
+3. Request a fresh reset and confirm the link is clean, then set a new password.
+
+Files: backend/src/auth/verification.service.ts,
+backend/src/messaging/messaging.service.ts, the two test files,
+reset-link.patch, COMMIT-MESSAGE.txt

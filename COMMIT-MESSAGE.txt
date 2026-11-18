@@ -1,15 +1,20 @@
-domain: the exact clicks, and a correction about the bare domain
+email: the link stands alone, and the token is read back properly
 
-Two things this fixes in the walk-through. First, the Host field: Namecheap wants
-the part before the domain, and pasting Northflank's full record name there
-silently produces a doubled domain that never verifies — the most common way this
-step fails, and it now says so in bold. Second, a correction: Northflank's own
-Namecheap guide documents an ALIAS record on @, which is Namecheap's CNAME
-flattening. That means the bare domain can point straight at the app and the
-redirect-record workaround I suggested last time is unnecessary. The fallback
-stays documented for accounts where ALIAS is refused.
+The password reset arrived with its link working but the sentence's full stop
+attached to it — "?token=…VMXuM. If you did not ask" — and a mail client that
+auto-links takes that full stop into the URL. The token then carried a character
+that was never in it, and the API answered that the link was invalid. Both email
+bodies now put the URL on its own line with no punctuation touching it.
 
-Also recorded: paste the target verbatim (no scheme, no quotes, no trailing dot),
-TTL 1 minute while verifying, and the green checkmark — Namecheap does not save
-an unsaved row, which reads as a record that vanished.
+That is only half of it, because people will still paste the whole link, or a
+link with the full stop. cleanToken() now recovers the token from whatever they
+send: takes the part after token=, stops at the first space, and keeps only
+base64url characters. Applied on the server, so it does not matter which screen
+the request came from.
+
+While in the renderer, a real bug: .test() on a /g regex advances lastIndex, so
+every other link in a message was left as raw text. Replaced with a split that
+needs no state, and the href no longer swallows trailing punctuation.
+
+Six tests added (99 total, no database); typecheck and production build clean.
 

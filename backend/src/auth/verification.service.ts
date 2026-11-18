@@ -7,6 +7,44 @@ import { AppError } from '../common/errors/app-error';
 import { PasswordService } from './password.service';
 import type { Env } from '../config/env.config';
 
+/**
+ * One origin, from a value that may hold several.
+ *
+ * `CORS_ORIGINS` is legitimately a comma-separated list, and it is easy to paste
+ * that list into `FRONTEND_URL` by mistake — which produces links like
+ * `https://www.example.com,https://example.com/verify?token=…`, and every
+ * verification email carries a link no browser will open. Taking the first entry
+ * of whatever is configured turns that from an outage into a working link.
+ */
+export function firstOrigin(value: string | undefined | null): string | null {
+  // The first entry that is actually filled in — a leading or doubled comma is a
+  // typo, not a reason to send out a broken link.
+  const first = (value ?? '')
+    .split(',')
+    .map((entry) => entry.trim())
+    .find(Boolean);
+  if (!first) return null;
+  return first.replace(/\/+$/, '');
+}
+
+/**
+ * The token, recovered from whatever a person pasted.
+ *
+ * Tokens are 43 characters of base64url. Every real failure on this has been a
+ * human one: the whole link pasted, a trailing full stop picked up from the end of
+ * the sentence, a space after a copy. Those are stripped here, on the server, so
+ * the fix does not depend on which screen the person used.
+ */
+export function cleanToken(raw: string): string {
+  const text = String(raw ?? '').trim();
+  const match = /[?&]token=([^&#\s]+)/.exec(text);
+  // First chunk only: a token is never followed by a space, so anything after one is
+  // the rest of the sentence.
+  const candidate = (match?.[1] ?? text).split(/\s+/)[0] ?? '';
+  // base64url only — a full stop, bracket or quote was never part of the token.
+  return candidate.replace(/[^A-Za-z0-9_-]/g, '');
+}
+
 const TTL = {
   EMAIL_VERIFY: 24 * 60 * 60 * 1000, // 24 hours
   PHONE_OTP: 10 * 60 * 1000, // 10 minutes
@@ -52,9 +90,11 @@ export class VerificationService {
    * list is only the fallback for a machine that has not set it.
    */
   private get siteUrl(): string {
-    const frontend = this.config.get('FRONTEND_URL', { infer: true })?.trim();
-    const cors = this.config.get('CORS_ORIGINS', { infer: true }).split(',')[0]?.trim();
-    return (frontend || cors || 'http://localhost:5173').replace(/\/+$/, '');
+    return (
+      firstOrigin(this.config.get('FRONTEND_URL', { infer: true })) ??
+      firstOrigin(this.config.get('CORS_ORIGINS', { infer: true })) ??
+      'http://localhost:5173'
+    );
   }
 
   private async issue(userId: string, purpose: 'EMAIL_VERIFY' | 'PHONE_OTP' | 'PASSWORD_RESET', value: string, destination: string, ttlMs: number) {
@@ -92,7 +132,15 @@ export class VerificationService {
       to: user.email,
       kind: 'EMAIL_VERIFICATION',
       subject: 'Verify your email address',
-      body: `Hello ${user.firstName}, confirm your email address to activate your account: ${link}\n\nThe link works for 24 hours.`,
+      body: [
+        `Hello ${user.firstName},`,
+        '',
+        'Confirm your email address to activate your account:',
+        '',
+        link,
+        '',
+        'The link works for 24 hours.',
+      ].join('\n'),
     });
     return {
       ...(this.exposeCodes ? { devToken: token } : {}),
@@ -101,7 +149,8 @@ export class VerificationService {
     };
   }
 
-  async verifyEmail(token: string): Promise<{ userId: string }> {
+  async verifyEmail(rawToken: string): Promise<{ userId: string }> {
+    const token = cleanToken(rawToken);
     const record = await this.prisma.verificationToken.findUnique({ where: { tokenHash: hash(token) } });
     if (!record || record.purpose !== 'EMAIL_VERIFY') {
       throw new AppError('VALIDATION_FAILED', 'This verification link is not valid', 400);
@@ -203,7 +252,18 @@ export class VerificationService {
       to: user.email,
       kind: 'PASSWORD_RESET',
       subject: 'Reset your password',
-      body: `Hello ${user.firstName}, use this link to choose a new password (valid for 1 hour): ${link}. If you did not ask for this, ignore this message.`,
+      // The link sits on its own line, with no punctuation touching it. A full stop
+      // straight after a URL is picked up by mail clients as part of the link, and
+      // the token then ends in a character that was never in it.
+      body: [
+        `Hello ${user.firstName},`,
+        '',
+        'Use this link to choose a new password — it works for one hour:',
+        '',
+        link,
+        '',
+        'If you did not ask for this, ignore this message.',
+      ].join('\n'),
     });
     return {
       ...(this.exposeCodes ? { devToken: token } : {}),
@@ -211,7 +271,8 @@ export class VerificationService {
     };
   }
 
-  async resetPassword(token: string, newPassword: string): Promise<void> {
+  async resetPassword(rawToken: string, newPassword: string): Promise<void> {
+    const token = cleanToken(rawToken);
     const record = await this.prisma.verificationToken.findUnique({ where: { tokenHash: hash(token) } });
     if (!record || record.purpose !== 'PASSWORD_RESET' || record.consumedAt || record.expiresAt.getTime() < Date.now()) {
       throw new AppError('VALIDATION_FAILED', 'This reset link is invalid or has expired. Request a new one.', 400);

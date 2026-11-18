@@ -1,0 +1,244 @@
+From 43db6496480e744ce850eaf3705b940246eb26f0 Mon Sep 17 00:00:00 2001
+From: TWL Build <build@twl.local>
+Date: Wed, 18 Nov 2026 19:07:48 +0000
+Subject: [PATCH] email: the link stands alone, and the token is read back
+ properly
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The password reset arrived with its link working but the sentence's full stop
+attached to it — "?token=…VMXuM. If you did not ask" — and a mail client that
+auto-links takes that full stop into the URL. The token then carried a character
+that was never in it, and the API answered that the link was invalid. Both email
+bodies now put the URL on its own line with no punctuation touching it.
+
+That is only half of it, because people will still paste the whole link, or a
+link with the full stop. cleanToken() now recovers the token from whatever they
+send: takes the part after token=, stops at the first space, and keeps only
+base64url characters. Applied on the server, so it does not matter which screen
+the request came from.
+
+While in the renderer, a real bug: .test() on a /g regex advances lastIndex, so
+every other link in a message was left as raw text. Replaced with a split that
+needs no state, and the href no longer swallows trailing punctuation.
+
+Six tests added (99 total, no database); typecheck and production build clean.
+---
+ backend/src/auth/verification.service.ts   | 47 ++++++++++++++++++++--
+ backend/src/messaging/messaging.service.ts | 17 ++++++--
+ backend/test/messaging.spec.ts             | 31 ++++++++++++++
+ backend/test/verification-link.spec.ts     | 38 ++++++++++++++++-
+ 4 files changed, 125 insertions(+), 8 deletions(-)
+
+diff --git a/backend/src/auth/verification.service.ts b/backend/src/auth/verification.service.ts
+index a7ca4ba..82d96d7 100644
+--- a/backend/src/auth/verification.service.ts
++++ b/backend/src/auth/verification.service.ts
+@@ -27,6 +27,24 @@ export function firstOrigin(value: string | undefined | null): string | null {
+   return first.replace(/\/+$/, '');
+ }
+ 
++/**
++ * The token, recovered from whatever a person pasted.
++ *
++ * Tokens are 43 characters of base64url. Every real failure on this has been a
++ * human one: the whole link pasted, a trailing full stop picked up from the end of
++ * the sentence, a space after a copy. Those are stripped here, on the server, so
++ * the fix does not depend on which screen the person used.
++ */
++export function cleanToken(raw: string): string {
++  const text = String(raw ?? '').trim();
++  const match = /[?&]token=([^&#\s]+)/.exec(text);
++  // First chunk only: a token is never followed by a space, so anything after one is
++  // the rest of the sentence.
++  const candidate = (match?.[1] ?? text).split(/\s+/)[0] ?? '';
++  // base64url only — a full stop, bracket or quote was never part of the token.
++  return candidate.replace(/[^A-Za-z0-9_-]/g, '');
++}
++
+ const TTL = {
+   EMAIL_VERIFY: 24 * 60 * 60 * 1000, // 24 hours
+   PHONE_OTP: 10 * 60 * 1000, // 10 minutes
+@@ -114,7 +132,15 @@ export class VerificationService {
+       to: user.email,
+       kind: 'EMAIL_VERIFICATION',
+       subject: 'Verify your email address',
+-      body: `Hello ${user.firstName}, confirm your email address to activate your account: ${link}\n\nThe link works for 24 hours.`,
++      body: [
++        `Hello ${user.firstName},`,
++        '',
++        'Confirm your email address to activate your account:',
++        '',
++        link,
++        '',
++        'The link works for 24 hours.',
++      ].join('\n'),
+     });
+     return {
+       ...(this.exposeCodes ? { devToken: token } : {}),
+@@ -123,7 +149,8 @@ export class VerificationService {
+     };
+   }
+ 
+-  async verifyEmail(token: string): Promise<{ userId: string }> {
++  async verifyEmail(rawToken: string): Promise<{ userId: string }> {
++    const token = cleanToken(rawToken);
+     const record = await this.prisma.verificationToken.findUnique({ where: { tokenHash: hash(token) } });
+     if (!record || record.purpose !== 'EMAIL_VERIFY') {
+       throw new AppError('VALIDATION_FAILED', 'This verification link is not valid', 400);
+@@ -225,7 +252,18 @@ export class VerificationService {
+       to: user.email,
+       kind: 'PASSWORD_RESET',
+       subject: 'Reset your password',
+-      body: `Hello ${user.firstName}, use this link to choose a new password (valid for 1 hour): ${link}. If you did not ask for this, ignore this message.`,
++      // The link sits on its own line, with no punctuation touching it. A full stop
++      // straight after a URL is picked up by mail clients as part of the link, and
++      // the token then ends in a character that was never in it.
++      body: [
++        `Hello ${user.firstName},`,
++        '',
++        'Use this link to choose a new password — it works for one hour:',
++        '',
++        link,
++        '',
++        'If you did not ask for this, ignore this message.',
++      ].join('\n'),
+     });
+     return {
+       ...(this.exposeCodes ? { devToken: token } : {}),
+@@ -233,7 +271,8 @@ export class VerificationService {
+     };
+   }
+ 
+-  async resetPassword(token: string, newPassword: string): Promise<void> {
++  async resetPassword(rawToken: string, newPassword: string): Promise<void> {
++    const token = cleanToken(rawToken);
+     const record = await this.prisma.verificationToken.findUnique({ where: { tokenHash: hash(token) } });
+     if (!record || record.purpose !== 'PASSWORD_RESET' || record.consumedAt || record.expiresAt.getTime() < Date.now()) {
+       throw new AppError('VALIDATION_FAILED', 'This reset link is invalid or has expired. Request a new one.', 400);
+diff --git a/backend/src/messaging/messaging.service.ts b/backend/src/messaging/messaging.service.ts
+index 8970ec7..2f99884 100644
+--- a/backend/src/messaging/messaging.service.ts
++++ b/backend/src/messaging/messaging.service.ts
+@@ -201,10 +201,21 @@ function maskEmail(email: string): string {
+  * verification link has to work in a phone's preview pane on a slow connection.
+  */
+ function renderEmail(message: OutboundMessage): string {
+-  const linkPattern = /(https?:\/\/[^\s]+)/g;
++  // Two details that cost real emails:
++  //  · `.test()` on a /g regex advances lastIndex, so it answered differently for
++  //    every other part — half the links in a message were left as raw text.
++  //  · a full stop or bracket at the end of a sentence got swept into the href,
++  //    which made the token it carried invalid.
++  const isLink = /^https?:\/\//;
++  const trailing = /[.,;:!?)\]]+$/;
+   const linked = message.body
+-    .split(linkPattern)
+-    .map((part) => (linkPattern.test(part) ? `<a href="${part}" style="color:#047857">${part}</a>` : escapeHtml(part)))
++    .split(/(https?:\/\/\S+)/g)
++    .map((part) => {
++      if (!isLink.test(part)) return escapeHtml(part);
++      const url = part.replace(trailing, '');
++      const tail = part.slice(url.length);
++      return `<a href="${escapeHtml(url)}" style="color:#047857">${escapeHtml(url)}</a>${escapeHtml(tail)}`;
++    })
+     .join('');
+   return `<!doctype html><html><body style="margin:0;padding:24px;background:#f8fafc;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif">
+   <div style="max-width:520px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:12px;padding:24px">
+diff --git a/backend/test/messaging.spec.ts b/backend/test/messaging.spec.ts
+index d83cab6..92a4658 100644
+--- a/backend/test/messaging.spec.ts
++++ b/backend/test/messaging.spec.ts
+@@ -134,6 +134,37 @@ describe('phase 7 — outbound messages', () => {
+       expect(body.html).toContain('href="https://twl.example.com/verify?token=abc"');
+     });
+ 
++    it('keeps a sentence-ending full stop out of the link', async () => {
++      // The exact shape that broke a real password reset:
++      // "... token=abc. If you did not ask for this..."
++      fetchMock.mockResolvedValue({ ok: true, status: 200, text: async () => '{}' });
++
++      await new MessagingService(resendConfig).sendEmail({
++        ...email,
++        body: 'Reset here: https://twl.example.com/reset-password?token=abc123. If you did not ask, ignore.',
++      });
++
++      const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
++      expect(body.html).toContain('href="https://twl.example.com/reset-password?token=abc123"');
++      expect(body.html).not.toContain('abc123."');
++      // The full stop is still in the sentence, just not in the link.
++      expect(body.html).toContain('</a>. If you did not ask');
++    });
++
++    it('linkifies every link in a message, not every other one', async () => {
++      // A /g regex reused with .test() alternates true/false, which silently left
++      // half the links as plain text.
++      fetchMock.mockResolvedValue({ ok: true, status: 200, text: async () => '{}' });
++
++      await new MessagingService(resendConfig).sendEmail({
++        ...email,
++        body: 'One: https://twl.example.com/a Two: https://twl.example.com/b Three: https://twl.example.com/c',
++      });
++
++      const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
++      expect(body.html.match(/<a href=/g)).toHaveLength(3);
++    });
++
+     it('escapes the message so a name cannot inject markup', async () => {
+       fetchMock.mockResolvedValue({ ok: true, status: 200, text: async () => '{}' });
+ 
+diff --git a/backend/test/verification-link.spec.ts b/backend/test/verification-link.spec.ts
+index a1dddc7..af91224 100644
+--- a/backend/test/verification-link.spec.ts
++++ b/backend/test/verification-link.spec.ts
+@@ -1,5 +1,5 @@
+ import { describe, expect, it } from 'vitest';
+-import { firstOrigin } from '../src/auth/verification.service';
++import { cleanToken, firstOrigin } from '../src/auth/verification.service';
+ 
+ /**
+  * The link inside a verification email.
+@@ -36,3 +36,39 @@ describe('phase 7 — the address in a verification link', () => {
+     expect(firstOrigin(',https://b.example')).toBe('https://b.example');
+   });
+ });
++
++/**
++ * The token a person actually sends back.
++ *
++ * Both failures here are copies of what really happened: a full stop glued to the
++ * end of the link by the sentence, and the whole URL pasted into a box that wanted
++ * only the code.
++ */
++describe('phase 7 — reading the token back', () => {
++  const token = '3xCfKl3MuCo4qPeh5VZur4K80n05ML_T3gv2dcVMXuM';
++
++  it('accepts the bare token', () => {
++    expect(cleanToken(token)).toBe(token);
++  });
++
++  it('drops the full stop a sentence left behind', () => {
++    expect(cleanToken(`${token}.`)).toBe(token);
++  });
++
++  it('pulls the token out of a whole pasted link, punctuation and all', () => {
++    expect(cleanToken(`https://www.example.com/reset-password?token=${token}.`)).toBe(token);
++  });
++
++  it('survives a leading or trailing space from a copy', () => {
++    expect(cleanToken(`  ${token}  `)).toBe(token);
++  });
++
++  it('stops at the first space, so the rest of the sentence is not swallowed', () => {
++    expect(cleanToken(`${token} and then some words`)).toBe(token);
++  });
++
++  it('returns something that simply will not match when the input is nonsense', () => {
++    // No crash, no exception — just a token that the lookup will refuse.
++    expect(cleanToken('not a link at all')).toBe('not');
++  });
++});
+-- 
+2.47.3
+

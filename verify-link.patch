@@ -1,0 +1,195 @@
+From cde58306380b7a728ae38f5605834ae7a673882b Mon Sep 17 00:00:00 2001
+From: TWL Build <build@twl.local>
+Date: Wed, 18 Nov 2026 18:46:32 +0000
+Subject: [PATCH] verification: one address in FRONTEND_URL, whatever gets
+ pasted there
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The link in the email arrived as https://www.example,https://example/verify?token=…
+because the CORS list was pasted into FRONTEND_URL. Two addresses separated by a
+comma is not a URL, and Gmail refused to follow it — so the first real email this
+deployment ever sent was unusable.
+
+The link builder now takes the first filled-in entry of whatever it is given, so
+that class of mistake produces a working link rather than a broken one. It also
+means CORS_ORIGINS remains a legitimate fallback when FRONTEND_URL is unset.
+
+Second half, from the same report: pasting the whole link into the manual box said
+"this verification link is not valid", because the box sent the URL as if it were a
+token. Reasonable thing for a person to do — it is what they were sent — so the
+screen now accepts either shape and pulls the token out itself.
+
+Five tests on the address helper (91 total, no database); typecheck and production
+build clean.
+---
+ backend/src/auth/verification.service.ts | 28 +++++++++++++++--
+ backend/test/verification-link.spec.ts   | 38 ++++++++++++++++++++++++
+ documentation/CUSTOM-DOMAIN.md           |  7 +++++
+ frontend/src/pages/auth/VerifyPage.tsx   | 28 +++++++++++++----
+ 4 files changed, 93 insertions(+), 8 deletions(-)
+ create mode 100644 backend/test/verification-link.spec.ts
+
+diff --git a/backend/src/auth/verification.service.ts b/backend/src/auth/verification.service.ts
+index 30524b0..a7ca4ba 100644
+--- a/backend/src/auth/verification.service.ts
++++ b/backend/src/auth/verification.service.ts
+@@ -7,6 +7,26 @@ import { AppError } from '../common/errors/app-error';
+ import { PasswordService } from './password.service';
+ import type { Env } from '../config/env.config';
+ 
++/**
++ * One origin, from a value that may hold several.
++ *
++ * `CORS_ORIGINS` is legitimately a comma-separated list, and it is easy to paste
++ * that list into `FRONTEND_URL` by mistake — which produces links like
++ * `https://www.example.com,https://example.com/verify?token=…`, and every
++ * verification email carries a link no browser will open. Taking the first entry
++ * of whatever is configured turns that from an outage into a working link.
++ */
++export function firstOrigin(value: string | undefined | null): string | null {
++  // The first entry that is actually filled in — a leading or doubled comma is a
++  // typo, not a reason to send out a broken link.
++  const first = (value ?? '')
++    .split(',')
++    .map((entry) => entry.trim())
++    .find(Boolean);
++  if (!first) return null;
++  return first.replace(/\/+$/, '');
++}
++
+ const TTL = {
+   EMAIL_VERIFY: 24 * 60 * 60 * 1000, // 24 hours
+   PHONE_OTP: 10 * 60 * 1000, // 10 minutes
+@@ -52,9 +72,11 @@ export class VerificationService {
+    * list is only the fallback for a machine that has not set it.
+    */
+   private get siteUrl(): string {
+-    const frontend = this.config.get('FRONTEND_URL', { infer: true })?.trim();
+-    const cors = this.config.get('CORS_ORIGINS', { infer: true }).split(',')[0]?.trim();
+-    return (frontend || cors || 'http://localhost:5173').replace(/\/+$/, '');
++    return (
++      firstOrigin(this.config.get('FRONTEND_URL', { infer: true })) ??
++      firstOrigin(this.config.get('CORS_ORIGINS', { infer: true })) ??
++      'http://localhost:5173'
++    );
+   }
+ 
+   private async issue(userId: string, purpose: 'EMAIL_VERIFY' | 'PHONE_OTP' | 'PASSWORD_RESET', value: string, destination: string, ttlMs: number) {
+diff --git a/backend/test/verification-link.spec.ts b/backend/test/verification-link.spec.ts
+new file mode 100644
+index 0000000..a1dddc7
+--- /dev/null
++++ b/backend/test/verification-link.spec.ts
+@@ -0,0 +1,38 @@
++import { describe, expect, it } from 'vitest';
++import { firstOrigin } from '../src/auth/verification.service';
++
++/**
++ * The link inside a verification email.
++ *
++ * It is built from `FRONTEND_URL`, and the failure this guards against is the one
++ * that actually happened: a comma-separated CORS list pasted into that variable
++ * produced `https://www.example.com,https://example.com/verify?token=…` — a link
++ * no browser will open, sent to every new customer.
++ */
++describe('phase 7 — the address in a verification link', () => {
++  it('takes one origin from a comma-separated list', () => {
++    expect(firstOrigin('https://www.traderswelfarelogistics.online,https://traderswelfarelogistics.online')).toBe(
++      'https://www.traderswelfarelogistics.online',
++    );
++  });
++
++  it('keeps a plain origin exactly as it is', () => {
++    expect(firstOrigin('https://traderswelfarelogistics.online')).toBe('https://traderswelfarelogistics.online');
++  });
++
++  it('drops a trailing slash so the path does not double up', () => {
++    expect(firstOrigin('https://traderswelfarelogistics.online/')).toBe('https://traderswelfarelogistics.online');
++    expect(firstOrigin('https://traderswelfarelogistics.online///')).toBe('https://traderswelfarelogistics.online');
++  });
++
++  it('tolerates spaces around the entries', () => {
++    expect(firstOrigin('  https://a.example , https://b.example  ')).toBe('https://a.example');
++  });
++
++  it('says nothing when nothing is configured', () => {
++    expect(firstOrigin(undefined)).toBeNull();
++    expect(firstOrigin('')).toBeNull();
++    expect(firstOrigin('   ')).toBeNull();
++    expect(firstOrigin(',https://b.example')).toBe('https://b.example');
++  });
++});
+diff --git a/documentation/CUSTOM-DOMAIN.md b/documentation/CUSTOM-DOMAIN.md
+index 89ef34e..717a8fd 100644
+--- a/documentation/CUSTOM-DOMAIN.md
++++ b/documentation/CUSTOM-DOMAIN.md
+@@ -123,6 +123,13 @@ These two must match the new address **exactly** — scheme and host, no trailin
+ slash. A mismatch breaks sign-in in the browser while every `curl` test still passes,
+ which is the most confusing failure there is.
+ 
++> **One address in `FRONTEND_URL`, a list in `CORS_ORIGINS`.** This is the mistake
++> worth reading twice: putting the comma-separated list into `FRONTEND_URL` builds
++> every verification link as
++> `https://www.example.com,https://example.com/verify?token=…`, and no browser will
++> open it. The API now takes the first filled-in entry of whatever it is given, so
++> the mistake no longer breaks anything — but set it correctly anyway.
++
+ ```dotenv
+ FRONTEND_URL=https://traderswelfarelogistics.online
+ CORS_ORIGINS=https://traderswelfarelogistics.online,https://www.traderswelfarelogistics.online
+diff --git a/frontend/src/pages/auth/VerifyPage.tsx b/frontend/src/pages/auth/VerifyPage.tsx
+index 76badb6..07308f3 100644
+--- a/frontend/src/pages/auth/VerifyPage.tsx
++++ b/frontend/src/pages/auth/VerifyPage.tsx
+@@ -46,7 +46,25 @@ export default function VerifyPage() {
+   const [busy, setBusy] = useState<'email' | 'phone' | 'resend' | 'resendEmail' | null>(null);
+   const autoRan = useRef(false);
+ 
+-  const verifyEmail = async (token: string) => {
++  /**
++   * Accepts the long code on its own *or* a whole pasted link.
++   *
++   * People paste the entire URL from the email into the box — reasonable, since
++   * that is what they were sent — and the old version sent it to the API verbatim,
++   * which answered "this verification link is not valid". Both shapes now work.
++   */
++  const tokenFrom = (input: string): string => {
++    const text = input.trim();
++    const match = /[?&]token=([^&#\s]+)/.exec(text);
++    return (match?.[1] ?? text).trim();
++  };
++
++  const verifyEmail = async (raw: string) => {
++    const token = tokenFrom(raw);
++    if (!token) {
++      setStatus({ tone: 'danger', message: 'Paste the link from the email, or the long code inside it.' });
++      return;
++    }
+     setBusy('email');
+     try {
+       await api.post('/auth/verify-email', { token }, { skipAuthRefresh: true });
+@@ -169,15 +187,15 @@ export default function VerifyPage() {
+         <section className="card-surface p-4">
+           <h2 className="text-sm font-semibold text-ink-900">1. Email address</h2>
+           <p className="mt-0.5 text-xs text-ink-500">
+-            We emailed you a link — opening it confirms your address automatically. If you would rather confirm
+-            here, paste the part of the link that comes after <code>token=</code>.
++            We emailed you a link — opening it confirms your address automatically. If the link will not open,
++            paste the whole link here (or just the long code after <code>token=</code>) and press the button.
+           </p>
+           <div className="mt-3 space-y-3">
+             <Input
+-              label="Code from the email"
++              label="Link or code from the email"
+               value={emailToken}
+               onChange={(event) => setEmailToken(event.target.value)}
+-              placeholder="Paste the long code from the link"
++              placeholder="Paste the whole link, or the code after token="
+             />
+             <div className="flex flex-wrap gap-2">
+               <Button
+-- 
+2.47.3
+
