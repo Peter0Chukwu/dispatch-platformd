@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { emailLinkOrigin } from '../common/cors';
 import { ConfigService } from '@nestjs/config';
 import type { Env } from './env.config';
 
@@ -30,8 +31,26 @@ export class AppConfig {
   get flutterwaveSecretKey(): string { return this.config.get('FLUTTERWAVE_SECRET_KEY', { infer: true }); }
   get flutterwavePublicKey(): string { return this.config.get('FLUTTERWAVE_PUBLIC_KEY', { infer: true }); }
   get flutterwaveWebhookHash(): string { return this.config.get('FLUTTERWAVE_WEBHOOK_HASH', { infer: true }); }
-  /** Where a gateway returns the customer after paying. */
-  get frontendUrl(): string { return this.config.get('FRONTEND_URL', { infer: true }); }
+  /**
+   * The public site: where a payment gateway returns the customer, and where the
+   * links inside emails point. One address, even if the variable holds a list.
+   */
+  /** The public site, as used to build the links inside emails. */
+  get frontendUrl(): string {
+    return emailLinkOrigin(
+      this.config.get('FRONTEND_URL', { infer: true }),
+      this.config.get('CORS_ORIGINS', { infer: true }),
+    ).origin;
+  }
+
+  /** True when that address is also allowed to make browser requests. */
+  get frontendUrlAllowed(): boolean {
+    return emailLinkOrigin(
+      this.config.get('FRONTEND_URL', { infer: true }),
+      this.config.get('CORS_ORIGINS', { infer: true }),
+    ).allowed;
+  }
+
   get mapsProvider() { return this.config.get('MAPS_PROVIDER', { infer: true }); }
   /** Lower-cased provider for comparisons: 'stub' | 'google' | 'geoapify' | 'mapbox'. */
   get mapsProviderKey(): MapsProviderKey {

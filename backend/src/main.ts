@@ -95,6 +95,14 @@ async function bootstrap(): Promise<void> {
   // One line that answers "are customers actually receiving codes?" without
   // anyone having to read four environment variables.
   logger.log(app.get(MessagingService).describe());
+  // Where every verification and reset link will point. Stated at boot because the
+  // alternative is finding out from a customer who cannot open their email.
+  logger.log(`Email links will point at: ${config.frontendUrl}`);
+  if (!config.frontendUrlAllowed) {
+    logger.warn(
+      `${config.frontendUrl} is not in CORS_ORIGINS — links will open, but the browser may refuse to sign in from that address.`,
+    );
+  }
   if (config.paymentsMode === 'DEVELOPMENT') {
     logger.warn('PAYMENTS ARE SIMULATED (PAYMENTS_MODE=DEVELOPMENT). No real money can move.');
   }

@@ -42,6 +42,9 @@ export class HealthController {
       integrations: {
         payments: this.config.paymentsMode,
         maps: this.config.mapsProvider,
+        // The public site the API builds links from — the value that was wrong
+        // twice, and the first thing to check when a link misbehaves.
+        site: this.config.frontendUrl,
         // The delivery truth, not just the mode: TERMII_NO_KEY sends nothing.
         sms: this.config.smsDelivery,
         email: this.config.emailDelivery,

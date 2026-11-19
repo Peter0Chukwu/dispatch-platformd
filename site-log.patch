@@ -1,0 +1,194 @@
+From 0a2ced0ee320749845e152780f1feb268effa9ec Mon Sep 17 00:00:00 2001
+From: TWL Build <build@twl.local>
+Date: Thu, 19 Nov 2026 10:02:30 +0000
+Subject: [PATCH] config: say out loud where email links point, and check it
+ against CORS
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Two outages came from the same pair of variables, so the platform now states the
+answer instead of leaving it to be discovered in an inbox. At boot:
+
+  Email links will point at: https://traderswelfarelogistics.online
+
+and a warning if that address is not in CORS_ORIGINS — the case where the link
+opens fine but the page it lands on cannot sign anyone in. GET /health carries the
+same value as integrations.site, so it can be checked without logs.
+
+Underneath: FRONTEND_URL may hold a list by mistake, and only its first filled-in
+entry is used, both for email links and for the payment return URL. The existing
+frontendUrl getter returned the raw string, which is how a comma ended up in a
+link.
+
+Five tests on the helper (104 total, no database); typecheck clean.
+---
+ backend/src/common/cors.ts              | 29 +++++++++++++++++++
+ backend/src/config/app.config.ts        | 23 +++++++++++++--
+ backend/src/health/health.controller.ts |  3 ++
+ backend/src/main.ts                     |  8 ++++++
+ backend/test/cors.spec.ts               | 37 ++++++++++++++++++++++++-
+ 5 files changed, 97 insertions(+), 3 deletions(-)
+
+diff --git a/backend/src/common/cors.ts b/backend/src/common/cors.ts
+index 8dade7b..a53d1cc 100644
+--- a/backend/src/common/cors.ts
++++ b/backend/src/common/cors.ts
+@@ -76,3 +76,32 @@ export function decideCorsOrigin(
+ 
+   return { allowed: false, reason: 'blocked' };
+ }
++
++/**
++ * Where the links inside emails should point, and whether that address is allowed
++ * to call the API at all.
++ *
++ * `FRONTEND_URL` is the public site; `CORS_ORIGINS` is the list of origins permitted
++ * to make browser requests. They are different variables with different shapes, and
++ * mixing them up has now caused two real outages: a comma-separated list pasted into
++ * `FRONTEND_URL` produced links no browser could open, and an entry that was not in
++ * the allowlist meant the link worked while `www` refused to sign anyone in.
++ */
++export function emailLinkOrigin(
++  frontendUrl: string | undefined | null,
++  corsOrigins: string | undefined | null,
++): { origin: string; allowed: boolean } {
++  const first = (frontendUrl ?? '')
++    .split(',')
++    .map((entry) => entry.trim())
++    .find(Boolean);
++  const origin = (first ?? 'http://localhost:5173').replace(/\/+$/, '');
++
++  const allowlist = (corsOrigins ?? '')
++    .split(',')
++    .map(normaliseOrigin)
++    .filter(Boolean);
++  // An empty allowlist is a development default; nothing to warn about.
++  const allowed = allowlist.length === 0 || allowlist.includes(normaliseOrigin(origin));
++  return { origin, allowed };
++}
+diff --git a/backend/src/config/app.config.ts b/backend/src/config/app.config.ts
+index fe0fd6a..f28c155 100644
+--- a/backend/src/config/app.config.ts
++++ b/backend/src/config/app.config.ts
+@@ -1,4 +1,5 @@
+ import { Injectable } from '@nestjs/common';
++import { emailLinkOrigin } from '../common/cors';
+ import { ConfigService } from '@nestjs/config';
+ import type { Env } from './env.config';
+ 
+@@ -30,8 +31,26 @@ export class AppConfig {
+   get flutterwaveSecretKey(): string { return this.config.get('FLUTTERWAVE_SECRET_KEY', { infer: true }); }
+   get flutterwavePublicKey(): string { return this.config.get('FLUTTERWAVE_PUBLIC_KEY', { infer: true }); }
+   get flutterwaveWebhookHash(): string { return this.config.get('FLUTTERWAVE_WEBHOOK_HASH', { infer: true }); }
+-  /** Where a gateway returns the customer after paying. */
+-  get frontendUrl(): string { return this.config.get('FRONTEND_URL', { infer: true }); }
++  /**
++   * The public site: where a payment gateway returns the customer, and where the
++   * links inside emails point. One address, even if the variable holds a list.
++   */
++  /** The public site, as used to build the links inside emails. */
++  get frontendUrl(): string {
++    return emailLinkOrigin(
++      this.config.get('FRONTEND_URL', { infer: true }),
++      this.config.get('CORS_ORIGINS', { infer: true }),
++    ).origin;
++  }
++
++  /** True when that address is also allowed to make browser requests. */
++  get frontendUrlAllowed(): boolean {
++    return emailLinkOrigin(
++      this.config.get('FRONTEND_URL', { infer: true }),
++      this.config.get('CORS_ORIGINS', { infer: true }),
++    ).allowed;
++  }
++
+   get mapsProvider() { return this.config.get('MAPS_PROVIDER', { infer: true }); }
+   /** Lower-cased provider for comparisons: 'stub' | 'google' | 'geoapify' | 'mapbox'. */
+   get mapsProviderKey(): MapsProviderKey {
+diff --git a/backend/src/health/health.controller.ts b/backend/src/health/health.controller.ts
+index ecb4d64..ac2ebd4 100644
+--- a/backend/src/health/health.controller.ts
++++ b/backend/src/health/health.controller.ts
+@@ -42,6 +42,9 @@ export class HealthController {
+       integrations: {
+         payments: this.config.paymentsMode,
+         maps: this.config.mapsProvider,
++        // The public site the API builds links from — the value that was wrong
++        // twice, and the first thing to check when a link misbehaves.
++        site: this.config.frontendUrl,
+         // The delivery truth, not just the mode: TERMII_NO_KEY sends nothing.
+         sms: this.config.smsDelivery,
+         email: this.config.emailDelivery,
+diff --git a/backend/src/main.ts b/backend/src/main.ts
+index 765682e..5ae1210 100644
+--- a/backend/src/main.ts
++++ b/backend/src/main.ts
+@@ -95,6 +95,14 @@ async function bootstrap(): Promise<void> {
+   // One line that answers "are customers actually receiving codes?" without
+   // anyone having to read four environment variables.
+   logger.log(app.get(MessagingService).describe());
++  // Where every verification and reset link will point. Stated at boot because the
++  // alternative is finding out from a customer who cannot open their email.
++  logger.log(`Email links will point at: ${config.frontendUrl}`);
++  if (!config.frontendUrlAllowed) {
++    logger.warn(
++      `${config.frontendUrl} is not in CORS_ORIGINS — links will open, but the browser may refuse to sign in from that address.`,
++    );
++  }
+   if (config.paymentsMode === 'DEVELOPMENT') {
+     logger.warn('PAYMENTS ARE SIMULATED (PAYMENTS_MODE=DEVELOPMENT). No real money can move.');
+   }
+diff --git a/backend/test/cors.spec.ts b/backend/test/cors.spec.ts
+index acd533c..4ae403e 100644
+--- a/backend/test/cors.spec.ts
++++ b/backend/test/cors.spec.ts
+@@ -1,5 +1,5 @@
+ import { describe, expect, it } from 'vitest';
+-import { decideCorsOrigin } from '../src/common/cors';
++import { decideCorsOrigin, emailLinkOrigin } from '../src/common/cors';
+ 
+ /**
+  * A refused origin used to throw inside the CORS callback, which Express turned
+@@ -55,3 +55,38 @@ describe('who may call the API from a browser', () => {
+     expect(() => decideCorsOrigin('', '', undefined, [])).not.toThrow();
+   });
+ });
++
++/**
++ * Where email links point, and whether that address may sign in.
++ *
++ * Both halves of this were real: a comma-separated list used as a site address, and
++ * a site address missing from the CORS allowlist — which let the link open while the
++ * browser refused to sign in from the very page it landed on.
++ */
++describe('the address used in email links', () => {
++  it('takes one origin from a list', () => {
++    expect(
++      emailLinkOrigin(
++        'https://www.example.com,https://example.com',
++        'https://example.com,https://www.example.com',
++      ).origin,
++    ).toBe('https://www.example.com');
++  });
++
++  it('strips a trailing slash so paths do not double up', () => {
++    expect(emailLinkOrigin('https://example.com/', null).origin).toBe('https://example.com');
++  });
++
++  it('says whether that address is allowed to make browser requests', () => {
++    expect(emailLinkOrigin('https://example.com', 'https://example.com').allowed).toBe(true);
++    expect(emailLinkOrigin('https://www.example.com', 'https://example.com').allowed).toBe(false);
++  });
++
++  it('does not warn when no allowlist is configured at all', () => {
++    expect(emailLinkOrigin('http://localhost:5173', '').allowed).toBe(true);
++  });
++
++  it('falls back to the development site rather than an empty string', () => {
++    expect(emailLinkOrigin('', '').origin).toBe('http://localhost:5173');
++  });
++});
+-- 
+2.47.3
+

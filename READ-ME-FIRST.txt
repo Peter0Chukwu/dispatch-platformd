@@ -1,54 +1,68 @@
-TWL — the reset link worked; the full stop broke it
-====================================================
+TWL — your screenshots found the real problem
+=============================================
 
-Commit: 43db649   (previous: cde5830)
+Commit: 0a2ced0   (previous: 43db649)
 
-WHAT YOU SAW
-------------
-The reset email arrived with the right address this time, and the link inside was
-followed by a full stop because it sat at the end of a sentence:
+WHAT YOUR TWO SCREENSHOTS SHOW
+------------------------------
+Image 1 (Networking): traderswelfarelogistics.online is linked to port 80 of the
+WEB service. That is correct, and it is why the site loads.
 
-  .../reset-password?token=3xCfKl3MuCo4qPeh5VZur4K80n05ML_T3gv2dcVMXuM.
-                                                                      ^
-Mail apps treat that full stop as part of the link. So the token the page received
-ended in ".", which is not part of any token — and the API correctly said the link
-was invalid. Not the same fault as before, one layer down.
+Image 2 (Environment variables): this is the WEB service's environment, and it
+contains FRONTEND_URL. That variable does nothing here. The web container only
+reads API_UPSTREAM (and the VITE_* values, which are baked in at build time).
 
-WHAT CHANGED
-------------
-1. The link now stands on its own line in both emails (reset and verification),
-   with no punctuation touching it.
-2. The server now recovers the token from whatever arrives — a bare token, a whole
-   pasted link, a link with a full stop, a token with a trailing space.
-3. A real bug found while in there: a regex reused with .test() meant every other
-   link in an HTML email was left as plain text instead of a clickable link.
-4. Trailing punctuation is no longer swept into the href.
+FRONTEND_URL is read by the API service — it is what the API puts inside
+verification and reset emails. If it is set on the web service and not on the API
+service, the API falls back to the first entry of CORS_ORIGINS, which is how you
+ended up with www links and then a bare-domain link from different builds.
 
-Six tests added (99 total, no database). Typecheck and production build clean.
+WHERE EACH VARIABLE BELONGS
+---------------------------
+WEB service (what you screenshotted):
+  API_UPSTREAM            internal address of the API, e.g. api:4000
+  VITE_GEOAPIFY_API_KEY   build-time only: rebuilding is required after changing it
+  FRONTEND_URL            <- delete it here, it is doing nothing
 
-THE LINK YOU ALREADY HAVE STILL WORKS
--------------------------------------
-Open it with no full stop on the end:
+API service:
+  FRONTEND_URL=https://traderswelfarelogistics.online
+  CORS_ORIGINS=https://traderswelfarelogistics.online,https://www.traderswelfarelogistics.online
+  EMAIL_MODE=RESEND
+  RESEND_API_KEY=re_...
+  EMAIL_FROM="Traders Welfare Logistics <no-reply@traderswelfarelogistics.online>"
+  (plus DATABASE_URL, REDIS_URL, JWT secrets, PAYSTACK_*, TERMII_*, GEOAPIFY_API_KEY)
 
-  https://www.traderswelfarelogistics.online/reset-password?token=3xCfKl3MuCo4qPeh5VZur4K80n05ML_T3gv2dcVMXuM
+WHY BOTH ORIGINS IN CORS_ORIGINS
+--------------------------------
+www now resolves and serves the site, so somebody can land on www and sign in
+there. If www is not in CORS_ORIGINS, the page loads and sign-in fails. Listing
+both costs nothing.
 
-or paste the whole thing into the box on that page — it now trims the punctuation
-itself. Valid for one hour from when it was sent.
+WHAT THIS COMMIT ADDS
+---------------------
+The API now says the answer at boot, in the deploy log:
 
-Note the address in your screenshot is www. Make sure www resolves before relying
-on it — earlier checks showed no www record, so the bare domain is the address that
-works: https://traderswelfarelogistics.online/...
+  Email links will point at: https://traderswelfarelogistics.online
 
-REMINDER: that token is a one-hour key to your account. Don't paste it into chat
-or screenshots; if it is spent or you share it, request a new one.
+and warns if that address is not in CORS_ORIGINS — the silent case where the link
+opens but the page cannot sign anyone in. GET /api/v1/health also reports it:
+
+  "integrations": { "site": "https://traderswelfarelogistics.online", ... }
+
+So the next time a link looks wrong, one request tells you which address the API
+actually believes it is.
+
+Underneath, FRONTEND_URL may hold a list by mistake and only the first filled-in
+entry is used — for email links and for the payment return URL alike.
 
 TO APPLY
 --------
-1. Deploy this commit (the live build is still behind — /api/v1/chat/unread
-   answers 404).
-2. Confirm FRONTEND_URL has ONE address and no comma.
-3. Request a fresh reset and confirm the link is clean, then set a new password.
+1. Add FRONTEND_URL and CORS_ORIGINS to the API service (not the web service).
+2. Delete FRONTEND_URL from the web service.
+3. Deploy this commit and restart the API.
+4. Check /api/v1/health: integrations.site should read the bare domain, and
+   email should read RESEND.
+5. Request a fresh password reset and confirm the link opens the reset page.
 
-Files: backend/src/auth/verification.service.ts,
-backend/src/messaging/messaging.service.ts, the two test files,
-reset-link.patch, COMMIT-MESSAGE.txt
+104 tests passing (no database), typecheck clean.
+Files: 5 backend files, site-log.patch, COMMIT-MESSAGE.txt

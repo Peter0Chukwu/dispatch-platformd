@@ -76,3 +76,32 @@ export function decideCorsOrigin(
 
   return { allowed: false, reason: 'blocked' };
 }
+
+/**
+ * Where the links inside emails should point, and whether that address is allowed
+ * to call the API at all.
+ *
+ * `FRONTEND_URL` is the public site; `CORS_ORIGINS` is the list of origins permitted
+ * to make browser requests. They are different variables with different shapes, and
+ * mixing them up has now caused two real outages: a comma-separated list pasted into
+ * `FRONTEND_URL` produced links no browser could open, and an entry that was not in
+ * the allowlist meant the link worked while `www` refused to sign anyone in.
+ */
+export function emailLinkOrigin(
+  frontendUrl: string | undefined | null,
+  corsOrigins: string | undefined | null,
+): { origin: string; allowed: boolean } {
+  const first = (frontendUrl ?? '')
+    .split(',')
+    .map((entry) => entry.trim())
+    .find(Boolean);
+  const origin = (first ?? 'http://localhost:5173').replace(/\/+$/, '');
+
+  const allowlist = (corsOrigins ?? '')
+    .split(',')
+    .map(normaliseOrigin)
+    .filter(Boolean);
+  // An empty allowlist is a development default; nothing to warn about.
+  const allowed = allowlist.length === 0 || allowlist.includes(normaliseOrigin(origin));
+  return { origin, allowed };
+}

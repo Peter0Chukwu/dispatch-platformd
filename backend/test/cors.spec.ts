@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decideCorsOrigin } from '../src/common/cors';
+import { decideCorsOrigin, emailLinkOrigin } from '../src/common/cors';
 
 /**
  * A refused origin used to throw inside the CORS callback, which Express turned
@@ -53,5 +53,40 @@ describe('who may call the API from a browser', () => {
   it('never throws, whatever it is handed', () => {
     expect(() => decideCorsOrigin('not a url', 'also not a url', '', [''])).not.toThrow();
     expect(() => decideCorsOrigin('', '', undefined, [])).not.toThrow();
+  });
+});
+
+/**
+ * Where email links point, and whether that address may sign in.
+ *
+ * Both halves of this were real: a comma-separated list used as a site address, and
+ * a site address missing from the CORS allowlist — which let the link open while the
+ * browser refused to sign in from the very page it landed on.
+ */
+describe('the address used in email links', () => {
+  it('takes one origin from a list', () => {
+    expect(
+      emailLinkOrigin(
+        'https://www.example.com,https://example.com',
+        'https://example.com,https://www.example.com',
+      ).origin,
+    ).toBe('https://www.example.com');
+  });
+
+  it('strips a trailing slash so paths do not double up', () => {
+    expect(emailLinkOrigin('https://example.com/', null).origin).toBe('https://example.com');
+  });
+
+  it('says whether that address is allowed to make browser requests', () => {
+    expect(emailLinkOrigin('https://example.com', 'https://example.com').allowed).toBe(true);
+    expect(emailLinkOrigin('https://www.example.com', 'https://example.com').allowed).toBe(false);
+  });
+
+  it('does not warn when no allowlist is configured at all', () => {
+    expect(emailLinkOrigin('http://localhost:5173', '').allowed).toBe(true);
+  });
+
+  it('falls back to the development site rather than an empty string', () => {
+    expect(emailLinkOrigin('', '').origin).toBe('http://localhost:5173');
   });
 });

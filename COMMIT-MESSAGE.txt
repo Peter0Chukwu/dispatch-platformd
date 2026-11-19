@@ -1,20 +1,18 @@
-email: the link stands alone, and the token is read back properly
+config: say out loud where email links point, and check it against CORS
 
-The password reset arrived with its link working but the sentence's full stop
-attached to it — "?token=…VMXuM. If you did not ask" — and a mail client that
-auto-links takes that full stop into the URL. The token then carried a character
-that was never in it, and the API answered that the link was invalid. Both email
-bodies now put the URL on its own line with no punctuation touching it.
+Two outages came from the same pair of variables, so the platform now states the
+answer instead of leaving it to be discovered in an inbox. At boot:
 
-That is only half of it, because people will still paste the whole link, or a
-link with the full stop. cleanToken() now recovers the token from whatever they
-send: takes the part after token=, stops at the first space, and keeps only
-base64url characters. Applied on the server, so it does not matter which screen
-the request came from.
+  Email links will point at: https://traderswelfarelogistics.online
 
-While in the renderer, a real bug: .test() on a /g regex advances lastIndex, so
-every other link in a message was left as raw text. Replaced with a split that
-needs no state, and the href no longer swallows trailing punctuation.
+and a warning if that address is not in CORS_ORIGINS — the case where the link
+opens fine but the page it lands on cannot sign anyone in. GET /health carries the
+same value as integrations.site, so it can be checked without logs.
 
-Six tests added (99 total, no database); typecheck and production build clean.
+Underneath: FRONTEND_URL may hold a list by mistake, and only its first filled-in
+entry is used, both for email links and for the payment return URL. The existing
+frontendUrl getter returned the raw string, which is how a comma ended up in a
+link.
+
+Five tests on the helper (104 total, no database); typecheck clean.
 
