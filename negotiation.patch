@@ -1,0 +1,2413 @@
+From 6dd5a1fee9549bf03cb544111766601a31558405 Mon Sep 17 00:00:00 2001
+From: TWL Build <build@twl.local>
+Date: Thu, 19 Nov 2026 16:00:04 +0000
+Subject: [PATCH] feat(booking): three questions, a bill, and a price both
+ sides can argue with
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Booking is now from, to and size. The platform prices it and shows the bill, and the
+customer answers it: accept it, or name their own number. Whichever they pick is what
+nearby online riders are alerted for — nothing is charged until somebody takes the job.
+
+On the rider's card the two numbers are both visible when they differ: the bill the
+customer was given, and what the customer is offering. A rider can take the asking
+price or ask for more, and that price goes to the customer, who accepts it (that
+rider gets the job at that number) or declines it (the offer stays open at the
+asking price, so a refusal never costs a customer a rider).
+
+Acceptance now has exactly one path. A rider tapping Accept and a customer accepting a
+rider's price both go through DispatchService.conclude, so 'one winner per delivery',
+'commission frozen on the agreed number', 'losing riders told' and 'rider marked
+busy' are true once rather than true twice. chargeKobo is replaced with the agreed
+amount in that same transaction: the number agreed is the number charged.
+
+Both bands are enforced server-side and explained in naira: a customer may offer
+between half and three times the bill, a rider may ask for between one kobo and three
+times the asking price. The rounding helper was wrong by a factor of 100 (50 kobo is
+not N50) and the test caught it.
+
+Accepting sends both people to the thread for that delivery
+(/app/deliveries/:id/chat, /rider/deliveries/:id/chat) — the same ContactCard as
+before, no phone numbers, still no inbox.
+
+Migration 20261119120000_price_negotiation adds the money columns and CounterState.
+118 tests (13 files), typecheck clean both sides, production build clean.
+---
+ .../migration.sql                             |  36 ++
+ backend/prisma/schema.prisma                  |  36 ++
+ backend/src/common/errors/app-error.ts        |  13 +
+ .../src/deliveries/deliveries.controller.ts   |  47 ++-
+ backend/src/deliveries/deliveries.service.ts  |  59 ++-
+ backend/src/dispatch/dispatch.controller.ts   |  19 +-
+ backend/src/dispatch/dispatch.service.ts      | 343 +++++++++++++++++-
+ backend/src/dispatch/price-bands.ts           |  86 +++++
+ backend/src/realtime/realtime.gateway.ts      |  10 +
+ backend/src/realtime/realtime.types.ts        |   4 +
+ backend/test/price-bands.spec.ts              |  63 ++++
+ backend/tsconfig.json                         |   3 +-
+ documentation/PRICE-NEGOTIATION.md            | 101 ++++++
+ frontend/src/App.tsx                          |   4 +
+ frontend/src/components/OffersPanel.tsx       | 145 ++++++++
+ frontend/src/hooks/useDeliveries.ts           |  81 +++++
+ frontend/src/hooks/useRider.ts                |  34 ++
+ frontend/src/pages/DeliveryChatPage.tsx       |  55 +++
+ .../src/pages/customer/BookDeliveryPage.tsx   | 321 +++++++++-------
+ .../src/pages/customer/DeliveryDetailPage.tsx |  33 +-
+ frontend/src/pages/rider/OffersPage.tsx       | 178 +++++++--
+ packages/shared/src/schemas/delivery.ts       |  39 +-
+ 22 files changed, 1516 insertions(+), 194 deletions(-)
+ create mode 100644 backend/prisma/migrations/20261119120000_price_negotiation/migration.sql
+ create mode 100644 backend/src/dispatch/price-bands.ts
+ create mode 100644 backend/test/price-bands.spec.ts
+ create mode 100644 documentation/PRICE-NEGOTIATION.md
+ create mode 100644 frontend/src/components/OffersPanel.tsx
+ create mode 100644 frontend/src/pages/DeliveryChatPage.tsx
+
+diff --git a/backend/prisma/migrations/20261119120000_price_negotiation/migration.sql b/backend/prisma/migrations/20261119120000_price_negotiation/migration.sql
+new file mode 100644
+index 0000000..d8af557
+--- /dev/null
++++ b/backend/prisma/migrations/20261119120000_price_negotiation/migration.sql
+@@ -0,0 +1,36 @@
++-- Price negotiation: the customer can accept the bill or name their own price, and
++-- a rider can ask for more than either number. Every amount that mattered is stored
++-- on the row it belongs to, so a deal can always be reconstructed.
++
++-- CreateEnum
++CREATE TYPE "CounterState" AS ENUM ('NONE', 'PENDING', 'DECLINED', 'ACCEPTED');
++
++-- AlterTable: the delivery carries both numbers
++ALTER TABLE "deliveries"
++  ADD COLUMN "quotedKobo" BIGINT,
++  ADD COLUMN "askKobo" BIGINT,
++  ADD COLUMN "isNegotiated" BOOLEAN NOT NULL DEFAULT false,
++  ADD COLUMN "agreedKobo" BIGINT,
++  ADD COLUMN "agreedBasis" TEXT;
++
++-- Existing rows: the charge was always the quote, and nobody haggled.
++UPDATE "deliveries" SET "quotedKobo" = "chargeKobo" WHERE "quotedKobo" IS NULL;
++
++-- AlterTable: a rider's own price, on their own offer row
++ALTER TABLE "delivery_assignments"
++  ADD COLUMN "counterKobo" BIGINT,
++  ADD COLUMN "counterState" "CounterState" NOT NULL DEFAULT 'NONE',
++  ADD COLUMN "counteredAt" TIMESTAMP(3),
++  ADD COLUMN "agreedKobo" BIGINT,
++  ADD COLUMN "agreedBasis" TEXT;
++
++-- Offers that were already accepted agreed to the price on the delivery.
++UPDATE "delivery_assignments"
++   SET "agreedKobo" = d."chargeKobo", "agreedBasis" = 'QUOTE'
++  FROM "deliveries" d
++ WHERE d."id" = "delivery_assignments"."deliveryId"
++   AND "delivery_assignments"."status" = 'ACCEPTED'
++   AND "delivery_assignments"."agreedKobo" IS NULL;
++
++CREATE INDEX "delivery_assignments_deliveryId_counterState_idx"
++  ON "delivery_assignments" ("deliveryId", "counterState");
+diff --git a/backend/prisma/schema.prisma b/backend/prisma/schema.prisma
+index 2243278..8513018 100644
+--- a/backend/prisma/schema.prisma
++++ b/backend/prisma/schema.prisma
+@@ -115,6 +115,21 @@ enum DeliveryPaymentStatus {
+   FAILED
+ }
+ 
++/**
++ * What a rider did with the money on an offer.
++ *
++ * NONE      — they have not named a price.
++ * PENDING   — they asked for more; the customer has not answered yet.
++ * DECLINED  — the customer said no. The offer itself stays open, so the rider can
++ *             still take the job at the asking price.
++ */
++enum CounterState {
++  NONE
++  PENDING
++  DECLINED
++  ACCEPTED
++}
++
+ enum AssignmentStatus {
+   OFFERED
+   ACCEPTED
+@@ -768,6 +783,18 @@ model Delivery {
+   specialInstructions String?
+ 
+   scheduledFor       DateTime?
++  /// The bill the platform calculated for this route, before anybody haggled.
++  quotedKobo         BigInt?
++  /// What the customer is asking riders to accept: equal to quotedKobo when they
++  /// simply said yes, their own figure when they negotiated.
++  askKobo            BigInt?
++  /// True when the customer pushed back on the bill, so riders see two numbers.
++  isNegotiated       Boolean   @default(false)
++  /// What was finally agreed — the amount the customer pays and commission is cut
++  /// from. Null while the job is still on the board.
++  agreedKobo         BigInt?
++  /// Which number the deal was struck on: QUOTE | ASK | COUNTER.
++  agreedBasis        String?
+   chargeKobo         BigInt
+   discountKobo       BigInt    @default(0)
+   codAmountKobo      BigInt    @default(0)
+@@ -868,6 +895,15 @@ model DeliveryAssignment {
+   offeredAt       DateTime         @default(now())
+   expiresAt       DateTime
+   respondedAt     DateTime?
++  /// The price this rider asked for, when they asked for more than the customer's
++  /// number. Kept after a refusal: the customer's page shows what was turned down,
++  /// and a re-offer must not look like a fresh demand.
++  counterKobo     BigInt?
++  counterState    CounterState     @default(NONE)
++  counteredAt     DateTime?
++  /// The amount this rider finally agreed to, and which of the three numbers it was.
++  agreedKobo      BigInt?
++  agreedBasis     String?
+   rejectionReason String?
+   assignedById    String?          @db.Uuid
+   createdAt       DateTime         @default(now())
+diff --git a/backend/src/common/errors/app-error.ts b/backend/src/common/errors/app-error.ts
+index aa11759..cda208c 100644
+--- a/backend/src/common/errors/app-error.ts
++++ b/backend/src/common/errors/app-error.ts
+@@ -12,6 +12,11 @@ export type ErrorCode =
+   | 'PROMO_INVALID'
+   | 'OFFER_EXPIRED'
+   | 'OFFER_TAKEN'
++  | 'ASK_TOO_LOW'
++  | 'ASK_TOO_HIGH'
++  | 'COUNTER_TOO_LOW'
++  | 'COUNTER_TOO_HIGH'
++  | 'COUNTER_GONE'
+   | 'DELIVERY_TAKEN'
+   | 'RIDER_BUSY'
+   | 'RIDER_NOT_APPROVED'
+@@ -73,6 +78,14 @@ export class AppError extends HttpException {
+   static conflict(message: string, code: ErrorCode = 'CONFLICT') {
+     return new AppError(code, message, HttpStatus.CONFLICT);
+   }
++  /**
++   * A rule was broken by a request that was well-formed. The message is written for
++   * the person who broke it — "the lowest offer for this route is ₦1,200", not
++   * "validation failed".
++   */
++  static rule(message: string, code: ErrorCode = 'VALIDATION_FAILED') {
++    return new AppError(code, message, HttpStatus.UNPROCESSABLE_ENTITY);
++  }
+   static validation(details: ErrorDetail[]) {
+     return new AppError('VALIDATION_FAILED', 'Some fields need your attention', HttpStatus.UNPROCESSABLE_ENTITY, details);
+   }
+diff --git a/backend/src/deliveries/deliveries.controller.ts b/backend/src/deliveries/deliveries.controller.ts
+index 408af3f..5b26bcd 100644
+--- a/backend/src/deliveries/deliveries.controller.ts
++++ b/backend/src/deliveries/deliveries.controller.ts
+@@ -3,11 +3,13 @@ import {
+   DeliveryStatus,
+   cancelDeliverySchema,
+   createDeliverySchema,
++  declineCounterSchema,
+   packagePhotoSchema,
+   quoteDeliverySchema,
+   type CreateDeliveryInput,
+   type PackagePhotoInput,
+   type QuoteDeliveryInput,
++  type DeclineCounterInput,
+ } from '@dispatch/shared';
+ import type { z } from 'zod';
+ import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
+@@ -16,6 +18,7 @@ import { RequireType } from '../auth/decorators/require-type.decorator';
+ import { RateLimit } from '../common/rate-limit/rate-limit.decorator';
+ import type { AuthPrincipal } from '../auth/auth.types';
+ import { DeliveriesService } from './deliveries.service';
++import { DispatchService } from '../dispatch/dispatch.service';
+ 
+ /**
+  * Customer-facing delivery API.
+@@ -26,7 +29,10 @@ import { DeliveriesService } from './deliveries.service';
+ @Controller('deliveries')
+ @RequireType('CUSTOMER')
+ export class DeliveriesController {
+-  constructor(private readonly deliveries: DeliveriesService) {}
++  constructor(
++    private readonly deliveries: DeliveriesService,
++    private readonly dispatch: DispatchService,
++  ) {}
+ 
+   /** Price preview — deliberately cheap and repeatable: the UI calls it as the pin moves. */
+   @Post('quote')
+@@ -89,6 +95,45 @@ export class DeliveriesController {
+     return this.deliveries.getMine(customerId, id);
+   }
+ 
++  /**
++   * THE BILL AND THE HAGGLING, on the customer's own page.
++   *
++   * `quotedKobo` is what the platform billed, `askKobo` is what the customer is
++   * asking riders to accept, and every rider who named a price of their own appears
++   * with it. Accepting one assigns that rider; declining leaves their offer open at
++   * the asking price, so a refusal never costs the customer a rider.
++   */
++  @Get(':id/offers')
++  offers(
++    @CurrentUser('customerId') customerId: string,
++    @Param('id', new ParseUUIDPipe()) id: string,
++  ) {
++    return this.dispatch.offersForCustomer(customerId, id);
++  }
++
++  @Post(':id/offers/:assignmentId/accept')
++  @RateLimit({ points: 30, windowSeconds: 60, keyBy: 'ip+route' })
++  acceptOfferPrice(
++    @CurrentUser('customerId') customerId: string,
++    @Param('id', new ParseUUIDPipe()) id: string,
++    @Param('assignmentId', new ParseUUIDPipe()) assignmentId: string,
++  ) {
++    void id;
++    return this.dispatch.acceptCounter(customerId, assignmentId);
++  }
++
++  @Post(':id/offers/:assignmentId/decline')
++  @RateLimit({ points: 30, windowSeconds: 60, keyBy: 'ip+route' })
++  declineOfferPrice(
++    @CurrentUser('customerId') customerId: string,
++    @Param('id', new ParseUUIDPipe()) id: string,
++    @Param('assignmentId', new ParseUUIDPipe()) assignmentId: string,
++    @Body(new ZodValidationPipe(declineCounterSchema)) input: DeclineCounterInput,
++  ) {
++    void id;
++    return this.dispatch.declineCounter(customerId, assignmentId, input.reason);
++  }
++
+   @Post(':id/cancel')
+   @RateLimit({ points: 10, windowSeconds: 60, keyBy: 'ip+route' })
+   async cancel(
+diff --git a/backend/src/deliveries/deliveries.service.ts b/backend/src/deliveries/deliveries.service.ts
+index bccf3cc..deea6bd 100644
+--- a/backend/src/deliveries/deliveries.service.ts
++++ b/backend/src/deliveries/deliveries.service.ts
+@@ -12,6 +12,7 @@ import { PrismaService } from '../infra/prisma/prisma.service';
+ import { AppError } from '../common/errors/app-error';
+ import { PricingService, type Quote } from '../pricing/pricing.service';
+ import { DispatchService } from '../dispatch/dispatch.service';
++import { checkAsk, lowestAsk } from '../dispatch/price-bands';
+ import { RealtimeGateway } from '../realtime/realtime.gateway';
+ import { StorageService } from '../storage/storage.service';
+ import type { AuthPrincipal } from '../auth/auth.types';
+@@ -79,6 +80,11 @@ function toDeliveryDto(delivery: {
+   isFragile: boolean;
+   specialInstructions: string | null;
+   scheduledFor: Date | null;
++  quotedKobo?: bigint | null;
++  askKobo?: bigint | null;
++  agreedKobo?: bigint | null;
++  agreedBasis?: string | null;
++  isNegotiated?: boolean;
+   chargeKobo: bigint;
+   discountKobo: bigint;
+   codAmountKobo: bigint;
+@@ -120,6 +126,21 @@ function toDeliveryDto(delivery: {
+     },
+     scheduledFor: delivery.scheduledFor,
+     chargeKobo: delivery.chargeKobo.toString(),
++    /**
++     * The money conversation, in the open. `quoted` is the platform bill, `ask` is
++     * what the customer offered riders, `agreed` is what was finally accepted —
++     * null until a rider and the customer settled on a number.
++     */
++    pricing: {
++      quotedKobo: (delivery.quotedKobo ?? delivery.chargeKobo).toString(),
++      quotedFormatted: formatNaira(delivery.quotedKobo ?? delivery.chargeKobo),
++      askKobo: (delivery.askKobo ?? delivery.chargeKobo).toString(),
++      askFormatted: formatNaira(delivery.askKobo ?? delivery.chargeKobo),
++      isNegotiated: delivery.isNegotiated ?? false,
++      agreedKobo: delivery.agreedKobo?.toString() ?? null,
++      agreedFormatted: delivery.agreedKobo ? formatNaira(delivery.agreedKobo) : null,
++      agreedBasis: delivery.agreedBasis ?? null,
++    },
+     discountKobo: delivery.discountKobo.toString(),
+     codAmountKobo: delivery.codAmountKobo.toString(),
+     chargeFormatted: formatNaira(delivery.chargeKobo),
+@@ -227,6 +248,28 @@ export class DeliveriesService {
+       customerId,
+     });
+ 
++    // WHAT THE CUSTOMER DECIDED WHEN THE BILL APPEARED.
++    //
++    // The bill is always computed server-side. Accepting it means riders are asked
++    // for exactly that number. Negotiating means riders are asked for the customer's
++    // own figure — but only inside a band, because a customer asking ₦10 for a
++    // cross-town run is not a negotiation, it is a way to waste every rider's time.
++    const quotedKobo = BigInt(quote.totalKobo);
++    const negotiating = input.pricingDecision === 'NEGOTIATE' && !!input.askKobo;
++
++    if (negotiating) {
++      const band = checkAsk(quotedKobo, input.askKobo!);
++      if (!band.ok) {
++        throw AppError.rule(band.message, input.askKobo! < lowestAsk(quotedKobo) ? 'ASK_TOO_LOW' : 'ASK_TOO_HIGH');
++      }
++    }
++
++    const askKobo = negotiating ? input.askKobo! : quotedKobo;
++    // A description is optional now; the category still tells the rider what to
++    // expect, so an empty box never reaches the database empty.
++    const packageDescription =
++      input.packageDescription?.trim() || `${input.packageCategory.replace(/_/g, ' ').toLowerCase()} parcel`;
++
+     const branchId = await this.pricing.defaultBranchId();
+     const snapshot = toPriceSnapshot(quote);
+     // The completion OTP is generated now and locked away hashed; the rider types
+@@ -265,14 +308,20 @@ export class DeliveriesService {
+           recipientName: input.destination.contactName,
+           recipientPhone: input.destination.contactPhone,
+           packageCategory: input.packageCategory,
+-          packageDescription: input.packageDescription,
++          packageDescription,
+           packageWeightKg: input.packageWeightKg,
+           packagePhotoKey: input.packagePhotoKey,
+           isFragile: input.isFragile,
+           declaredValueKobo: input.declaredValueKobo,
+           specialInstructions: input.specialInstructions,
+           scheduledFor: input.scheduledFor,
+-          chargeKobo: BigInt(quote.totalKobo),
++          // The amount payable starts as the asking price. It is replaced with the
++          // agreed figure the moment a deal is struck (see DispatchService.conclude),
++          // which is the only number that is ever charged.
++          chargeKobo: askKobo,
++          quotedKobo,
++          askKobo,
++          isNegotiated: negotiating,
+           discountKobo: BigInt(quote.discountKobo),
+           codAmountKobo: input.codAmountKobo,
+           priceSnapshot: snapshot as unknown as Prisma.InputJsonObject,
+@@ -280,7 +329,7 @@ export class DeliveriesService {
+           otpExpiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+           items: {
+             create: {
+-              description: input.packageDescription,
++              description: packageDescription,
+               quantity: 1,
+               weightKg: input.packageWeightKg,
+               declaredValueKobo: input.declaredValueKobo,
+@@ -319,7 +368,9 @@ export class DeliveriesService {
+     });
+ 
+     this.logger.log(
+-      `Delivery ${delivery.reference} created for ${formatNaira(delivery.chargeKobo)} (${quote.distanceKm} km)`,
++      `Delivery ${delivery.reference} created for ${formatNaira(delivery.chargeKobo)} (${quote.distanceKm} km)${
++        negotiating ? ` — customer offered ${formatNaira(askKobo)} against a ${formatNaira(quotedKobo)} bill` : ''
++      }`,
+     );
+ 
+     // The dispatch desk hears about it immediately, before any rider does.
+diff --git a/backend/src/dispatch/dispatch.controller.ts b/backend/src/dispatch/dispatch.controller.ts
+index 797c1b4..9b957e2 100644
+--- a/backend/src/dispatch/dispatch.controller.ts
++++ b/backend/src/dispatch/dispatch.controller.ts
+@@ -1,5 +1,5 @@
+ import { Body, Controller, Get, Param, ParseUUIDPipe, Post } from '@nestjs/common';
+-import { rejectOfferSchema } from '@dispatch/shared';
++import { counterOfferSchema, rejectOfferSchema, type CounterOfferInput } from '@dispatch/shared';
+ import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
+ import { CurrentUser } from '../auth/decorators/current-user.decorator';
+ import { RequireType } from '../auth/decorators/require-type.decorator';
+@@ -26,6 +26,23 @@ export class DispatchController {
+     return this.dispatch.accept(riderId, id);
+   }
+ 
++  /**
++   * Ask for more than the price on the offer.
++   *
++   * Not an acceptance: nothing is charged, and the rider keeps their place until the
++   * customer answers. The ceiling is enforced in the service, not here, because a
++   * ceiling is a business rule and a schema is only a shape.
++   */
++  @Post(':id/counter')
++  @RateLimit({ points: 20, windowSeconds: 60, keyBy: 'ip+route' })
++  counter(
++    @CurrentUser('riderId') riderId: string,
++    @Param('id', new ParseUUIDPipe()) id: string,
++    @Body(new ZodValidationPipe(counterOfferSchema)) input: CounterOfferInput,
++  ) {
++    return this.dispatch.counter(riderId, id, input.amountKobo);
++  }
++
+   @Post(':id/reject')
+   @RateLimit({ points: 30, windowSeconds: 60, keyBy: 'ip+route' })
+   reject(
+diff --git a/backend/src/dispatch/dispatch.service.ts b/backend/src/dispatch/dispatch.service.ts
+index b021cd0..f565085 100644
+--- a/backend/src/dispatch/dispatch.service.ts
++++ b/backend/src/dispatch/dispatch.service.ts
+@@ -8,6 +8,7 @@ import { AppError } from '../common/errors/app-error';
+ import { haversineKm } from '../pricing/distance';
+ import { RealtimeGateway } from '../realtime/realtime.gateway';
+ import { MessagingService } from '../messaging/messaging.service';
++import { checkCounter } from './price-bands';
+ 
+ /** Ignore riders whose last location is older than this when ranking candidates. */
+ /** How old a rider's last position may be before dispatch treats them as unlocatable. */
+@@ -532,6 +533,9 @@ export class DispatchService {
+             reference: true,
+             deliveryType: true,
+             chargeKobo: true,
++            quotedKobo: true,
++            askKobo: true,
++            isNegotiated: true,
+             distanceKm: true,
+             durationMinutes: true,
+             pickupAddress: true,
+@@ -554,7 +558,11 @@ export class DispatchService {
+     const commissionPct = this.config.commissionPercent;
+     return assignments.map((assignment) => {
+       const delivery = assignment.delivery;
+-      const commissionKobo = percentOfKobo(delivery.chargeKobo, commissionPct, 50);
++      // The number the rider is being asked to accept: the customer's asking price,
++      // which is the platform bill unless the customer negotiated it down.
++      const askKobo = delivery.askKobo ?? delivery.chargeKobo;
++      const quotedKobo = delivery.quotedKobo ?? delivery.chargeKobo;
++      const commissionKobo = percentOfKobo(askKobo, commissionPct, 50);
+       return {
+         assignmentId: assignment.id,
+         offeredAt: assignment.offeredAt,
+@@ -584,13 +592,27 @@ export class DispatchService {
+           },
+           recipientName: delivery.recipientName,
+         },
++        /**
++         * The two numbers the rider needs to make a decision — and the third they
++         * can propose. `quotedKobo` is what the platform billed; `askKobo` is what
++         * the customer has offered. They differ only when the customer negotiated.
++         */
++        money: {
++          quotedKobo: quotedKobo.toString(),
++          quotedFormatted: formatNaira(quotedKobo),
++          askKobo: askKobo.toString(),
++          askFormatted: formatNaira(askKobo),
++          isNegotiated: delivery.isNegotiated,
++          counterKobo: assignment.counterKobo?.toString() ?? null,
++          counterState: assignment.counterState,
++        },
+         pay: {
+-          chargeKobo: delivery.chargeKobo.toString(),
++          chargeKobo: askKobo.toString(),
+           commissionPct,
+           commissionKobo: commissionKobo.toString(),
+-          /** What the rider takes home. */
+-          netKobo: (delivery.chargeKobo - commissionKobo).toString(),
+-          netFormatted: formatNaira(delivery.chargeKobo - commissionKobo),
++          /** What the rider takes home if they accept the asking price. */
++          netKobo: (askKobo - commissionKobo).toString(),
++          netFormatted: formatNaira(askKobo - commissionKobo),
+         },
+       };
+     });
+@@ -598,8 +620,257 @@ export class DispatchService {
+ 
+   /**
+    * Accept an offer. Exactly one rider can win, no matter how many tap at once.
++   *
++   * The amount agreed is the number on the card the rider just tapped: the
++   * customer's asking price. A customer accepting a rider's own price comes through
++   * {@link acceptCounter} instead, and both share {@link conclude} — the rules that
++   * make an acceptance safe (one winner, frozen commission, rivals told, rider
++   * marked busy) exist once.
+    */
+   async accept(riderId: string, assignmentId: string) {
++    const assignment = await this.prisma.deliveryAssignment.findUnique({
++      where: { id: assignmentId },
++      select: {
++        riderId: true,
++        delivery: {
++          select: { quotedKobo: true, askKobo: true, chargeKobo: true, isNegotiated: true },
++        },
++      },
++    });
++    if (!assignment || assignment.riderId !== riderId) throw AppError.notFound('Offer');
++
++    const agreedKobo = assignment.delivery.askKobo ?? assignment.delivery.chargeKobo;
++    return this.conclude({
++      assignmentId,
++      agreedKobo,
++      basis: assignment.delivery.isNegotiated ? 'ASK' : 'QUOTE',
++      actor: 'RIDER',
++      expectedRiderId: riderId,
++      requireLiveOffer: true,
++    });
++  }
++
++  /**
++   * A rider asking for more than the number on the offer.
++   *
++   * Deliberately not an acceptance: nothing is charged and nobody is assigned. The
++   * customer is told, and answers with accept or decline. A rider who asks for less
++   * than the asking price is told to take the job instead — silently charging the
++   * customer less than they offered would be a bug dressed as a favour.
++   */
++  async counter(riderId: string, assignmentId: string, amountKobo: bigint) {
++    const assignment = await this.prisma.deliveryAssignment.findUnique({
++      where: { id: assignmentId },
++      include: {
++        delivery: {
++          select: {
++            id: true,
++            reference: true,
++            customerId: true,
++            status: true,
++            askKobo: true,
++            chargeKobo: true,
++            quotedKobo: true,
++            isNegotiated: true,
++          },
++        },
++        rider: { select: { riderCode: true, user: { select: { firstName: true, lastName: true } } } },
++      },
++    });
++    if (!assignment || assignment.riderId !== riderId) throw AppError.notFound('Offer');
++    if (assignment.status !== 'OFFERED') {
++      throw AppError.conflict('That offer is no longer open.', 'OFFER_EXPIRED');
++    }
++    if (assignment.delivery.status !== 'PENDING') {
++      throw AppError.conflict('That delivery already has a rider.', 'DELIVERY_TAKEN');
++    }
++    if (assignment.expiresAt.getTime() <= Date.now()) {
++      throw AppError.conflict('That offer has expired. New jobs will appear here.', 'OFFER_EXPIRED');
++    }
++
++    const ask = assignment.delivery.askKobo ?? assignment.delivery.chargeKobo;
++    const band = checkCounter(ask, amountKobo);
++    if (!band.ok) {
++      throw AppError.rule(
++        band.message,
++        amountKobo <= ask ? 'COUNTER_TOO_LOW' : 'COUNTER_TOO_HIGH',
++      );
++    }
++
++    await this.prisma.deliveryAssignment.update({
++      where: { id: assignmentId },
++      data: { counterKobo: amountKobo, counterState: 'PENDING', counteredAt: new Date() },
++    });
++
++    // The customer's phone is where this is answered, so tell it. The payload only
++    // says "something changed"; the page refetches and asks the server for the real
++    // number, so a stale socket can never invent a price.
++    this.realtime.counterOffered(assignment.delivery.customerId, {
++      deliveryId: assignment.delivery.id,
++      reference: assignment.delivery.reference,
++      assignmentId,
++      askFormatted: formatNaira(ask),
++      counterFormatted: formatNaira(amountKobo),
++      at: new Date().toISOString(),
++    });
++
++    this.logger.log(
++      `Rider ${assignment.rider.riderCode} countered ${assignment.delivery.reference} at ${formatNaira(amountKobo)} (asked ${formatNaira(ask)})`,
++    );
++
++    return {
++      countered: true,
++      askKobo: ask.toString(),
++      counterKobo: amountKobo.toString(),
++      askFormatted: formatNaira(ask),
++      counterFormatted: formatNaira(amountKobo),
++      message: 'The customer has been told. You will see their answer here.',
++    };
++  }
++
++  /**
++   * The customer accepting a rider's price. That rider gets the job at that number,
++   * and every other rider is told it is gone.
++   */
++  async acceptCounter(customerId: string, assignmentId: string) {
++    const assignment = await this.prisma.deliveryAssignment.findUnique({
++      where: { id: assignmentId },
++      include: {
++        delivery: { select: { customerId: true, quotedKobo: true, askKobo: true, chargeKobo: true } },
++      },
++    });
++    // A customer may only ever answer a counter on their own delivery, and a
++    // delivery that is not theirs must read as "not found" — not "forbidden",
++    // which would confirm the id exists.
++    if (!assignment || assignment.delivery.customerId !== customerId) {
++      throw AppError.notFound('Offer');
++    }
++    if (assignment.counterState !== 'PENDING' || assignment.counterKobo === null) {
++      throw AppError.conflict('That price is no longer on the table.', 'COUNTER_GONE');
++    }
++    if (assignment.status !== 'OFFERED') {
++      throw AppError.conflict('That rider is no longer available for this job.', 'OFFER_EXPIRED');
++    }
++
++    return this.conclude({
++      assignmentId,
++      agreedKobo: assignment.counterKobo,
++      basis: 'COUNTER',
++      actor: 'CUSTOMER',
++      expectedRiderId: assignment.riderId,
++      requireLiveOffer: false,
++    });
++  }
++
++  /**
++   * The customer turning a rider's price down. Nothing is assigned: the rider's
++   * offer stays open at the asking price, so they can still take the job at the
++   * number they were originally shown.
++   */
++  async declineCounter(customerId: string, assignmentId: string, reason?: string) {
++    const assignment = await this.prisma.deliveryAssignment.findUnique({
++      where: { id: assignmentId },
++      include: { delivery: { select: { customerId: true, id: true, reference: true } } },
++    });
++    if (!assignment || assignment.delivery.customerId !== customerId) {
++      throw AppError.notFound('Offer');
++    }
++    if (assignment.counterState !== 'PENDING') {
++      throw AppError.conflict('That price is no longer on the table.', 'COUNTER_GONE');
++    }
++
++    await this.prisma.deliveryAssignment.update({
++      where: { id: assignmentId },
++      data: { counterState: 'DECLINED', respondedAt: new Date(), rejectionReason: reason ?? null },
++    });
++
++    this.realtime.counterAnswered(assignment.riderId, {
++      deliveryId: assignment.delivery.id,
++      assignmentId,
++      answer: 'DECLINED',
++      at: new Date().toISOString(),
++    });
++
++    return {
++      declined: true,
++      message: 'Rider told. Their offer stays open at the price you asked.',
++    };
++  }
++
++  /**
++   * What the customer sees while riders are being asked: the bill, their asking
++   * price, and every rider who named a price of their own. Names and rider codes
++   * only — no phone numbers, ever.
++   */
++  async offersForCustomer(customerId: string, deliveryId: string) {
++    const delivery = await this.prisma.delivery.findFirst({
++      where: { id: deliveryId, customerId },
++      select: {
++        id: true,
++        reference: true,
++        status: true,
++        quotedKobo: true,
++        askKobo: true,
++        isNegotiated: true,
++        chargeKobo: true,
++        agreedKobo: true,
++        agreedBasis: true,
++        riderId: true,
++      },
++    });
++    if (!delivery) throw AppError.notFound('Delivery');
++
++    const rows = await this.prisma.deliveryAssignment.findMany({
++      where: { deliveryId },
++      orderBy: { offeredAt: 'desc' },
++      include: { rider: { select: { riderCode: true, user: { select: { firstName: true, lastName: true } } } } },
++    });
++
++    const pending = rows.filter((row) => row.counterState === 'PENDING' && row.status === 'OFFERED');
++    return {
++      deliveryId: delivery.id,
++      reference: delivery.reference,
++      status: delivery.status,
++      quotedKobo: (delivery.quotedKobo ?? delivery.chargeKobo).toString(),
++      askKobo: (delivery.askKobo ?? delivery.chargeKobo).toString(),
++      isNegotiated: delivery.isNegotiated,
++      chargeKobo: delivery.chargeKobo.toString(),
++      agreedKobo: delivery.agreedKobo?.toString() ?? null,
++      agreedBasis: delivery.agreedBasis,
++      ridersAsked: rows.filter((row) => row.status === 'OFFERED').length,
++      pendingCount: pending.length,
++      offers: rows
++        .filter((row) => row.status !== 'REJECTED')
++        .map((row) => ({
++          assignmentId: row.id,
++          riderName: `${row.rider.user.firstName} ${row.rider.user.lastName}`.trim(),
++          riderCode: row.rider.riderCode,
++          status: row.status,
++          counterKobo: row.counterKobo?.toString() ?? null,
++          counterState: row.counterState,
++          agreedKobo: row.agreedKobo?.toString() ?? null,
++          offeredAt: row.offeredAt,
++          expiresAt: row.expiresAt,
++        })),
++    };
++  }
++
++  /**
++   * The one place a delivery gets a rider.
++   *
++   * Both routes into it — a rider tapping Accept, a customer accepting a rider's
++   * price — pass through here, so "exactly one winner" and "the commission is
++   * frozen on the agreed number" are true for both rather than true twice.
++   */
++  private async conclude(input: {
++    assignmentId: string;
++    agreedKobo: bigint;
++    basis: 'QUOTE' | 'ASK' | 'COUNTER';
++    actor: 'RIDER' | 'CUSTOMER';
++    expectedRiderId: string;
++    requireLiveOffer: boolean;
++  }) {
++    const { assignmentId, agreedKobo, basis, actor, expectedRiderId, requireLiveOffer } = input;
+     const lockKey = `dispatch:accept:${assignmentId}`;
+     const lockToken = randomUUID();
+     // 5 s is longer than any single acceptance can take; the token prevents a slow
+@@ -610,13 +881,28 @@ export class DispatchService {
+     }
+ 
+     try {
+-      await this.sweepExpired();
++      // A rider's acceptance has to beat the 20-second clock; a customer answering a
++      // price they were shown does not, so the sweep only runs for the rider path.
++      if (requireLiveOffer) await this.sweepExpired();
+ 
+       const result = await this.prisma.$transaction(async (tx) => {
+-        // 1. Claim the offer atomically.
++        // 1. Claim the offer atomically. The agreed number is written on this row, so
++        //    the rider's side of the deal is recorded where the rider is.
+         const claim = await tx.deliveryAssignment.updateMany({
+-          where: { id: assignmentId, riderId, status: 'OFFERED', expiresAt: { gt: new Date() } },
+-          data: { status: 'ACCEPTED', respondedAt: new Date() },
++          where: {
++            id: assignmentId,
++            riderId: expectedRiderId,
++            status: 'OFFERED',
++            ...(requireLiveOffer ? { expiresAt: { gt: new Date() } } : {}),
++            ...(basis === 'COUNTER' ? { counterState: 'PENDING' as const } : {}),
++          },
++          data: {
++            status: 'ACCEPTED',
++            respondedAt: new Date(),
++            agreedKobo,
++            agreedBasis: basis,
++            ...(basis === 'COUNTER' ? { counterState: 'ACCEPTED' as const } : {}),
++          },
+         });
+         if (claim.count === 0) return { ok: false as const, reason: 'offer-gone' as const };
+ 
+@@ -632,8 +918,13 @@ export class DispatchService {
+             // The rider has explicitly accepted, so the delivery moves straight to
+             // ACCEPTED. (ASSIGNED is for staff assignments the rider must confirm.)
+             status: 'ACCEPTED',
+-            riderId,
++            riderId: expectedRiderId,
+             acceptedAt: new Date(),
++            // The price that was actually agreed is the price that gets charged, and
++            // the price the commission is cut from. Both are frozen together below.
++            chargeKobo: agreedKobo,
++            agreedKobo,
++            agreedBasis: basis,
+           },
+         });
+         if (deliveryClaim.count === 0) {
+@@ -649,21 +940,26 @@ export class DispatchService {
+ 
+         // 4. Freeze the commission split onto the delivery so it can never drift.
+         const commissionPct = this.config.commissionPercent;
+-        const commissionKobo = percentOfKobo(assignment.delivery.chargeKobo, commissionPct, 50);
++        const commissionKobo = percentOfKobo(agreedKobo, commissionPct, 50);
+         await tx.delivery.update({
+           where: { id: assignment.deliveryId },
+           data: {
+             commissionSnapshot: {
+               commissionPct,
+               commissionKobo: commissionKobo.toString(),
+-              riderNetKobo: (assignment.delivery.chargeKobo - commissionKobo).toString(),
++              riderNetKobo: (agreedKobo - commissionKobo).toString(),
++              agreedKobo: agreedKobo.toString(),
++              agreedBasis: basis,
+               computedAt: new Date().toISOString(),
+             },
+           },
+         });
+ 
+         // 5. The rider is now busy — they must stop receiving new offers.
+-        await tx.rider.update({ where: { id: riderId }, data: { availability: 'ON_DELIVERY' } });
++        await tx.rider.update({
++          where: { id: expectedRiderId },
++          data: { availability: 'ON_DELIVERY' },
++        });
+ 
+         // 6. History.
+         await tx.deliveryStatusHistory.create({
+@@ -671,8 +967,11 @@ export class DispatchService {
+             deliveryId: assignment.deliveryId,
+             fromStatus: 'PENDING',
+             toStatus: 'ACCEPTED',
+-            actorType: 'RIDER',
+-            reason: 'Offer accepted by rider',
++            actorType: actor,
++            reason:
++              actor === 'RIDER'
++                ? `Offer accepted by rider at ${formatNaira(agreedKobo)}`
++                : `Customer accepted the rider's price (${formatNaira(agreedKobo)})`,
+           },
+         });
+ 
+@@ -685,7 +984,9 @@ export class DispatchService {
+ 
+       if (!result.ok) {
+         throw AppError.conflict(
+-          'That offer has expired or was already taken. New jobs will appear here.',
++          actor === 'RIDER'
++            ? 'That offer has expired or was already taken. New jobs will appear here.'
++            : 'That price is no longer on the table.',
+           'OFFER_EXPIRED',
+         );
+       }
+@@ -705,7 +1006,7 @@ export class DispatchService {
+       // Tell the riders who lost the race, so the offer disappears from their phone
+       // instead of sitting there until it is tapped and refused.
+       for (const rival of rivals) {
+-        if (rival.riderId === riderId) continue;
++        if (rival.riderId === expectedRiderId) continue;
+         this.realtime.offerRevoked(rival.riderId, {
+           assignmentId: rival.id,
+           deliveryId: result.deliveryId,
+@@ -720,11 +1021,13 @@ export class DispatchService {
+           status: 'ACCEPTED',
+           at: new Date().toISOString(),
+         },
+-        { staff: true, riderIds: [riderId] },
++        { staff: true, riderIds: [expectedRiderId] },
+       );
+ 
+-      this.logger.log(`Rider ${riderId} accepted delivery ${result.reference}`);
+-      return { accepted: true, deliveryId: result.deliveryId };
++      this.logger.log(
++        `${actor === 'RIDER' ? `Rider ${expectedRiderId}` : 'Customer'} accepted delivery ${result.reference} at ${formatNaira(agreedKobo)} (${basis})`,
++      );
++      return { accepted: true, deliveryId: result.deliveryId, agreedKobo: agreedKobo.toString() };
+     } catch (error) {
+       // Duck-typed on purpose: `instanceof` is unreliable when a bundled build can
+       // load this module twice (the same trap that once turned Zod errors into 500s).
+diff --git a/backend/src/dispatch/price-bands.ts b/backend/src/dispatch/price-bands.ts
+new file mode 100644
+index 0000000..7ef6f93
+--- /dev/null
++++ b/backend/src/dispatch/price-bands.ts
+@@ -0,0 +1,86 @@
++/**
++ * THE TWO NUMBERS A DEAL HAS TO LIVE BETWEEN
++ *
++ * Both sides of a negotiation name a price, and both need a floor and a ceiling —
++ * otherwise "negotiate" becomes a way to waste a whole city's riders on an offer
++ * nobody could ever take, and "ask for more" becomes a way to send a customer a
++ * number that looks like a threat rather than a quote.
++ *
++ * Kept as plain functions with no database and no Nest, so the rules can be read
++ * (and tested) without wiring up a server.
++ */
++import { formatNaira } from '@dispatch/shared';
++
++/**
++ * Rounded down to ₦50 — and a naira is 100 kobo, so that is 5,000 kobo. Getting
++ * this wrong by a factor of 100 would floor every offer to the nearest 50 kobo and
++ * quietly make the floor meaningless, which is exactly what the test caught.
++ */
++const roundToFiftyNaira = (kobo: bigint): bigint => (kobo / 5_000n) * 5_000n;
++
++/**
++ * The lowest offer a customer may make for a route: half the bill.
++ *
++ * Below half, a rider is working for fuel money, and letting the offer through
++ * only means watching it be refused by everyone in the city — the customer waits,
++ * then books again at a higher price. Better to say no at the start.
++ */
++export function lowestAsk(quotedKobo: bigint): bigint {
++  return roundToFiftyNaira(quotedKobo / 2n);
++}
++
++/** The highest offer a customer may make: three times the bill (a generous tip). */
++export function highestAsk(quotedKobo: bigint): bigint {
++  return quotedKobo * 3n;
++}
++
++export type BandCheck = { ok: true } | { ok: false; message: string };
++
++/**
++ * Is this a real negotiation, or a typo?
++ *
++ * Note what it accepts: a customer offering MORE than the bill. That is not a
++ * mistake — it is how you get a rider to a hard address at 9pm — so it is allowed
++ * all the way to the ceiling.
++ */
++export function checkAsk(quotedKobo: bigint, askKobo: bigint): BandCheck {
++  const floor = lowestAsk(quotedKobo);
++  const ceiling = highestAsk(quotedKobo);
++  if (askKobo < floor) {
++    return {
++      ok: false,
++      message: `The lowest offer accepted for this route is ${formatNaira(floor)}. Accept the bill, or offer between ${formatNaira(floor)} and ${formatNaira(ceiling)}.`,
++    };
++  }
++  if (askKobo > ceiling) {
++    return {
++      ok: false,
++      message: `That is more than three times the bill. Offer at most ${formatNaira(ceiling)}.`,
++    };
++  }
++  return { ok: true };
++}
++
++/**
++ * A rider asking for more than the customer's number.
++ *
++ * At or below the asking price there is nothing to negotiate: they should take the
++ * job, and the message says so. Above three times the ask, a slipped key is far
++ * more likely than a genuine demand.
++ */
++export function checkCounter(askKobo: bigint, counterKobo: bigint): BandCheck {
++  if (counterKobo <= askKobo) {
++    return {
++      ok: false,
++      message: `Ask for more than ${formatNaira(askKobo)}, or accept the job at ${formatNaira(askKobo)}.`,
++    };
++  }
++  const ceiling = askKobo * 3n;
++  if (counterKobo > ceiling) {
++    return {
++      ok: false,
++      message: `That is more than three times the asking price. Ask for at most ${formatNaira(ceiling)}.`,
++    };
++  }
++  return { ok: true };
++}
+diff --git a/backend/src/realtime/realtime.gateway.ts b/backend/src/realtime/realtime.gateway.ts
+index de09296..54bb285 100644
+--- a/backend/src/realtime/realtime.gateway.ts
++++ b/backend/src/realtime/realtime.gateway.ts
+@@ -286,6 +286,16 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
+     this.toRider(riderId, RT.OFFER_REVOKED, revoked);
+   }
+ 
++  /** A rider asked for more: the customer's page shows the new number. */
++  counterOffered(customerId: string, payload: Record<string, unknown>): void {
++    this.toCustomer(customerId, RT.OFFER_COUNTERED, payload);
++  }
++
++  /** The customer answered that price, so the rider's card can stop waiting. */
++  counterAnswered(riderId: string, payload: Record<string, unknown>): void {
++    this.toRider(riderId, RT.COUNTER_ANSWERED, payload);
++  }
++
+   deliveryPush(push: DeliveryPush, audience: { staff?: boolean; customerId?: string | null; riderIds?: string[] }): void {
+     if (audience.staff) this.toStaff(RT.DELIVERY_UPDATED, push);
+     if (audience.customerId) this.toCustomer(audience.customerId, RT.DELIVERY_UPDATED, push);
+diff --git a/backend/src/realtime/realtime.types.ts b/backend/src/realtime/realtime.types.ts
+index a3e17d9..2923bb2 100644
+--- a/backend/src/realtime/realtime.types.ts
++++ b/backend/src/realtime/realtime.types.ts
+@@ -16,6 +16,10 @@ export const RT = {
+   OFFER_NEW: 'offer:new',
+   /** An offer was withdrawn because somebody else took the job or it expired. */
+   OFFER_REVOKED: 'offer:revoked',
++  /** A rider named their own price — the customer has an answer to give. */
++  OFFER_COUNTERED: 'offer:countered',
++  /** The customer accepted or turned down a rider's price. */
++  COUNTER_ANSWERED: 'offer:counter-answered',
+   /** A delivery was created, moved, assigned or cancelled. */
+   DELIVERY_NEW: 'delivery:new',
+   DELIVERY_UPDATED: 'delivery:updated',
+diff --git a/backend/test/price-bands.spec.ts b/backend/test/price-bands.spec.ts
+new file mode 100644
+index 0000000..ebbed96
+--- /dev/null
++++ b/backend/test/price-bands.spec.ts
+@@ -0,0 +1,63 @@
++import { checkAsk, checkCounter, highestAsk, lowestAsk } from '../src/dispatch/price-bands';
++
++/**
++ * The haggling rules, as numbers.
++ *
++ * A bill of ₦2,000 = 200_000 kobo is the running example: the customer may offer
++ * anything from ₦1,000 to ₦6,000, and a rider may ask up to three times whatever
++ * number is on the card they were shown.
++ */
++const BILL = 200_000n;
++
++describe('what a customer may offer', () => {
++  it('accepts the bill itself, and anything above it up to the ceiling', () => {
++    expect(checkAsk(BILL, BILL).ok).toBe(true);
++    expect(checkAsk(BILL, BILL * 2n).ok).toBe(true);
++    expect(checkAsk(BILL, highestAsk(BILL)).ok).toBe(true);
++  });
++
++  it('accepts exactly half, which is the floor', () => {
++    expect(lowestAsk(BILL)).toBe(100_000n);
++    expect(checkAsk(BILL, 100_000n).ok).toBe(true);
++  });
++
++  it('refuses a kobo below the floor, and says what the floor is', () => {
++    const result = checkAsk(BILL, 99_999n);
++    expect(result.ok).toBe(false);
++    if (!result.ok) expect(result.message).toContain('₦1,000');
++  });
++
++  it('refuses more than three times the bill — a slipped key, not a tip', () => {
++    const result = checkAsk(BILL, BILL * 3n + 1n);
++    expect(result.ok).toBe(false);
++    if (!result.ok) expect(result.message).toContain('₦6,000');
++  });
++
++  it('rounds the floor down to a whole ₦50, never up', () => {
++    // ₦1,234 bill → half is ₦617 → floor is ₦600, not ₦650.
++    expect(lowestAsk(123_400n)).toBe(60_000n);
++  });
++});
++
++describe('what a rider may ask for', () => {
++  const ASK = 100_000n; // the customer offered ₦1,000
++
++  it('must be more than the number on the card', () => {
++    expect(checkCounter(ASK, ASK).ok).toBe(false);
++    expect(checkCounter(ASK, ASK - 1n).ok).toBe(false);
++    expect(checkCounter(ASK, ASK + 1n).ok).toBe(true);
++  });
++
++  it('is capped at three times the asking price', () => {
++    expect(checkCounter(ASK, ASK * 3n).ok).toBe(true);
++    const over = checkCounter(ASK, ASK * 3n + 1n);
++    expect(over.ok).toBe(false);
++    if (!over.ok) expect(over.message).toContain('₦3,000');
++  });
++
++  it('tells a rider who asked for less to simply take the job', () => {
++    const result = checkCounter(ASK, 50_000n);
++    expect(result.ok).toBe(false);
++    if (!result.ok) expect(result.message).toContain('accept the job');
++  });
++});
+diff --git a/backend/tsconfig.json b/backend/tsconfig.json
+index 9f743af..26d6dcb 100644
+--- a/backend/tsconfig.json
++++ b/backend/tsconfig.json
+@@ -10,7 +10,8 @@
+     "emitDecoratorMetadata": true,
+     "strictPropertyInitialization": false,
+     "types": [
+-      "node"
++      "node",
++      "vitest/globals"
+     ],
+     "declaration": false
+   },
+diff --git a/documentation/PRICE-NEGOTIATION.md b/documentation/PRICE-NEGOTIATION.md
+new file mode 100644
+index 0000000..08db6e1
+--- /dev/null
++++ b/documentation/PRICE-NEGOTIATION.md
+@@ -0,0 +1,101 @@
++# Requesting a rider, and the price conversation
++
++The booking flow is now three questions and a decision:
++
++1. **From** — where the parcel is collected.
++2. **To** — where it is going.
++3. **Size** — how big it is. A photo and a description are offered, never required.
++
++Then the platform shows a **bill**, worked out from the real route and the size. The
++customer answers it in one of two ways, and that answer decides what riders see.
++
++| The customer chooses | What riders are asked for | What the rider can do |
++| --- | --- | --- |
++| **Accept the bill** | exactly the bill | take the job, or ask for more |
++| **Negotiate** | the customer's own number | take it, ask for more, or pass |
++
++Nothing is charged at either point. Payment happens **after** a rider has the job,
++from the delivery page.
++
++## The rules, and why they exist
++
++**A negotiation has a floor and a ceiling.** The customer may offer between half and
++three times the bill, both rounded to whole naira. Below half, a rider is working for
++fuel money and every rider in the city refuses — the customer waits, then books again
++at a higher price. Above three times the bill is nearly always a slipped keystroke.
++Both refusals are said in naira, not in error codes.
++
++**A rider may only ask for more.** Asking for exactly the asking price is not a
++counter, it is an acceptance with extra steps; asking for less would have the platform
++quietly charging the customer less than they offered, which is a bug dressed as a
++favour. The ceiling is three times the asking price, for the same keystroke reason.
++
++**The customer decides every counter.** When a rider names a price, the customer sees
++that price and accepts or declines it. Accepting assigns that rider at that number.
++Declining does **not** end the rider's offer: it stays open at the asking price, so a
++customer who turns down ₦2,500 has not lost the rider who might still take ₦2,000.
++
++**One winner, always.** Both routes into an assignment — a rider tapping Accept, a
++customer accepting a rider's price — pass through the same transaction
++(`DispatchService.conclude`). The offer row is claimed atomically, the delivery is
++claimed atomically, the commission is frozen on the agreed number, the losing riders
++are told the job is gone, and the rider is marked busy. There is no second path that
++could assign a delivery twice.
++
++**The agreed number is the charged number.** `deliveries.chargeKobo` is replaced with
++the agreed amount at the moment of acceptance, and `commissionSnapshot` is computed
++from it in the same transaction. Whatever was agreed is what the customer pays and
++what the rider's cut is worked out from.
++
++## What is stored where
++
++On the delivery:
++
++| Column | Meaning |
++| --- | --- |
++| `quotedKobo` | the bill the platform calculated |
++| `askKobo` | what the customer asked riders for (equal to the bill when they accepted it) |
++| `isNegotiated` | whether the customer pushed back |
++| `agreedKobo` | the settled amount — null until somebody takes the job |
++| `agreedBasis` | `QUOTE` (took the bill), `ASK` (took the customer's number), `COUNTER` (customer took a rider's number) |
++| `chargeKobo` | the amount payable, always equal to `agreedKobo` once a rider has the job |
++
++On each offer (`delivery_assignments`):
++
++| Column | Meaning |
++| --- | --- |
++| `counterKobo` | the price this rider asked for, if any |
++| `counterState` | `NONE` / `PENDING` (waiting on the customer) / `DECLINED` / `ACCEPTED` |
++| `agreedKobo`, `agreedBasis` | what this rider settled at, and on which number |
++
++## API
++
++| Method | Path | Who | What |
++| --- | --- | --- | --- |
++| `POST` | `/api/v1/deliveries/quote` | customer | the bill, no writes |
++| `POST` | `/api/v1/deliveries` | customer | creates the job — `pricingDecision: ACCEPT \| NEGOTIATE`, `askKobo` |
++| `GET` | `/api/v1/deliveries/:id/offers` | customer (own job) | the bill, the ask, and every rider's price |
++| `POST` | `/api/v1/deliveries/:id/offers/:assignmentId/accept` | customer | take a rider's price; that rider gets the job |
++| `POST` | `/api/v1/deliveries/:id/offers/:assignmentId/decline` | customer | refuse a price; the offer stays open |
++| `GET` | `/api/v1/rider/offers` | rider | live offers with the bill and the ask |
++| `POST` | `/api/v1/rider/offers/:id/accept` | rider | take the job at the asking price |
++| `POST` | `/api/v1/rider/offers/:id/counter` | rider | ask for more (`amountKobo`) |
++| `POST` | `/api/v1/rider/offers/:id/reject` | rider | pass |
++
++Both portals are pushed the change over the socket (`offer:countered`,
++`offer:counter-answered`), and both pages still refetch from the API — a socket
++message can never invent a price.
++
++## Where the two of them end up
++
++Accepting an offer sends **both** people to the thread for that delivery:
++`/app/deliveries/:id/chat` for the customer, `/rider/deliveries/:id/chat` for the
++rider. It is the same `ContactCard` the delivery pages already use — chat and in-app
++calling, no phone numbers either side, and the thread closes when the job finishes.
++There is still no inbox: a thread belongs to one delivery and nothing else.
++
++## Tests
++
++`backend/test/price-bands.spec.ts` covers the two bands (including the ₦50 rounding,
++which caught a real factor-of-100 bug: 50 kobo is not ₦50). The acceptance transaction
++is covered by the existing dispatch tests.
+diff --git a/frontend/src/App.tsx b/frontend/src/App.tsx
+index 338bb19..60a2d4f 100644
+--- a/frontend/src/App.tsx
++++ b/frontend/src/App.tsx
+@@ -45,6 +45,7 @@ import {
+   RequirePermission,
+ } from "./routes/guards";
+ import NotFoundPage from "./pages/NotFoundPage";
++import { DeliveryChatPage } from './pages/DeliveryChatPage';
+ import { CallOverlay } from "./components/CallOverlay";
+ import { MessageNotifier } from "./components/MessageNotifier";
+ 
+@@ -136,6 +137,8 @@ export default function App() {
+           <Route path="book" element={<BookDeliveryPage />} />
+           <Route path="deliveries" element={<DeliveriesPage />} />
+           <Route path="deliveries/:id" element={<DeliveryDetailPage />} />
++          {/* Accepting an offer lands both people in the thread for that job. */}
++          <Route path="deliveries/:id/chat" element={<DeliveryChatPage portal="Customer" />} />
+           <Route path="wallet" element={<CustomerWalletPage />} />
+           <Route path="settings" element={<SettingsPage portal="Customer" />} />
+         </Route>
+@@ -145,6 +148,7 @@ export default function App() {
+           <Route index element={<RiderHome />} />
+           <Route path="offers" element={<RiderOffersPage />} />
+           <Route path="active" element={<RiderActiveJobPage />} />
++          <Route path="deliveries/:id/chat" element={<DeliveryChatPage portal="Rider" />} />
+           <Route path="earnings" element={<RiderEarningsPage />} />
+           <Route path="documents" element={<RiderDocumentsPage />} />
+           <Route path="settings" element={<SettingsPage portal="Rider" />} />
+diff --git a/frontend/src/components/OffersPanel.tsx b/frontend/src/components/OffersPanel.tsx
+new file mode 100644
+index 0000000..b45bfbb
+--- /dev/null
++++ b/frontend/src/components/OffersPanel.tsx
+@@ -0,0 +1,145 @@
++import { Badge, Button, Card, CardBody, CardHeader, useToast } from './ui';
++import { formatNaira } from '@dispatch/shared';
++import {
++  useAcceptOfferPrice,
++  useDeclineOfferPrice,
++  useDeliveryOffers,
++  type DeliveryOffer,
++} from '../hooks/useDeliveries';
++import { useApiError } from '../contexts/AuthContext';
++
++/**
++ * THE BILL, AND WHAT RIDERS SAID ABOUT IT
++ *
++ * A customer's own page while the job is on the board. It shows the two numbers
++ * that matter — the bill and what they asked for — and every rider who named a
++ * price of their own, with Accept and Decline beside it.
++ *
++ * Declining is not a dead end: the rider's offer stays open at the asking price, so
++ * a customer who turns down ₦2,500 has not lost the rider who might still take
++ * ₦2,000. The server enforces that; this screen only reflects it.
++ */
++export function OffersPanel({ deliveryId }: { deliveryId: string }) {
++  const { notify } = useToast();
++  const offers = useDeliveryOffers(deliveryId);
++  const accept = useAcceptOfferPrice(deliveryId);
++  const decline = useDeclineOfferPrice(deliveryId);
++
++  const data = offers.data;
++  const pending = (data?.offers ?? []).filter((offer) => offer.counterState === 'PENDING');
++
++  const take = async (offer: DeliveryOffer) => {
++    try {
++      await accept.mutateAsync(offer.assignmentId);
++      notify({
++        tone: 'success',
++        title: 'Rider booked',
++        description: `${offer.riderName} is on the way at ${formatNaira(offer.counterKobo ?? '0')}.`,
++      });
++    } catch (error) {
++      notify({ tone: 'error', title: 'Could not take that price', description: useApiError(error) ?? 'Please try again.' });
++    }
++  };
++
++  const refuse = async (offer: DeliveryOffer) => {
++    try {
++      await decline.mutateAsync(offer.assignmentId);
++      notify({
++        tone: 'info',
++        title: 'Price declined',
++        description: `${offer.riderName} can still take the job at your price.`,
++      });
++    } catch (error) {
++      notify({ tone: 'error', title: 'Could not decline', description: useApiError(error) ?? 'Please try again.' });
++    }
++  };
++
++  if (!data) return null;
++
++  return (
++    <Card>
++      <CardHeader
++        title="What you asked for"
++        subtitle={
++          data.isNegotiated
++            ? 'You negotiated this price — riders see your number, not the bill'
++            : 'You accepted the bill — riders see exactly this'
++        }
++      />
++      <CardBody className="space-y-4">
++        <div className="grid gap-3 sm:grid-cols-2">
++          <div className="rounded-xl border border-ink-200 p-3">
++            <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">Our bill</p>
++            <p className={data.isNegotiated ? 'mt-1 text-lg font-semibold text-ink-400 line-through' : 'mt-1 text-lg font-bold text-ink-900'}>
++              {formatNaira(data.quotedKobo)}
++            </p>
++          </div>
++          <div className="rounded-xl border border-brand-200 bg-brand-50/60 p-3">
++            <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">
++              {data.isNegotiated ? 'You are offering riders' : 'Riders are being asked'}
++            </p>
++            <p className="mt-1 text-lg font-bold text-brand-800">{formatNaira(data.askKobo)}</p>
++          </div>
++        </div>
++
++        <div className="flex flex-wrap items-center gap-2 text-sm text-ink-600">
++          <Badge tone={data.ridersAsked > 0 ? 'info' : 'neutral'}>
++            {data.ridersAsked > 0
++              ? `${data.ridersAsked} rider${data.ridersAsked === 1 ? '' : 's'} looking right now`
++              : 'No rider has been alerted yet'}
++          </Badge>
++          {data.pendingCount > 0 && (
++            <Badge tone="warning">
++              {data.pendingCount} asking for a different price
++            </Badge>
++          )}
++        </div>
++
++        {pending.length > 0 && (
++          <div className="space-y-2">
++            <p className="text-xs font-semibold uppercase tracking-wide text-ink-400">Riders asking for more</p>
++            {pending.map((offer) => (
++              <div
++                key={offer.assignmentId}
++                className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-warning-200 bg-warning-50 p-3"
++              >
++                <div className="min-w-0">
++                  <p className="text-sm font-semibold text-ink-900">{offer.riderName}</p>
++                  <p className="text-xs text-ink-500">{offer.riderCode}</p>
++                </div>
++                <div className="text-right">
++                  <p className="text-base font-bold text-ink-900">{formatNaira(offer.counterKobo ?? '0')}</p>
++                  <p className="text-[11px] text-ink-500">instead of {formatNaira(data.askKobo)}</p>
++                </div>
++                <div className="flex w-full gap-2 sm:w-auto">
++                  <Button
++                    size="sm"
++                    className="flex-1"
++                    isLoading={accept.isPending}
++                    onClick={() => void take(offer)}
++                  >
++                    Accept
++                  </Button>
++                  <Button
++                    size="sm"
++                    variant="secondary"
++                    className="flex-1"
++                    isLoading={decline.isPending}
++                    onClick={() => void refuse(offer)}
++                  >
++                    Decline
++                  </Button>
++                </div>
++              </div>
++            ))}
++          </div>
++        )}
++
++        <p className="text-xs leading-relaxed text-ink-500">
++          Nothing is charged until a rider has the job. If a rider asks for more, you decide — and declining costs you
++          nothing: their offer stays open at your price.
++        </p>
++      </CardBody>
++    </Card>
++  );
++}
+diff --git a/frontend/src/hooks/useDeliveries.ts b/frontend/src/hooks/useDeliveries.ts
+index 068e682..2971597 100644
+--- a/frontend/src/hooks/useDeliveries.ts
++++ b/frontend/src/hooks/useDeliveries.ts
+@@ -49,6 +49,17 @@ export interface Delivery {
+   recipient: { name: string; phone: string };
+   package: { category: string; description: string; weightKg: number | null; isFragile: boolean; specialInstructions: string | null };
+   scheduledFor: string | null;
++  /** The bill, the customer's asking price, and what was finally agreed. */
++  pricing?: {
++    quotedKobo: string;
++    quotedFormatted: string;
++    askKobo: string;
++    askFormatted: string;
++    isNegotiated: boolean;
++    agreedKobo: string | null;
++    agreedFormatted: string | null;
++    agreedBasis: string | null;
++  };
+   chargeKobo: string;
+   discountKobo: string;
+   codAmountKobo: string;
+@@ -118,3 +129,73 @@ export function useCancelDelivery(id: string) {
+     },
+   });
+ }
++
++
++/* ───────────────────────── the bill and the haggling ───────────────────────── */
++
++export interface DeliveryOffer {
++  assignmentId: string;
++  riderName: string;
++  riderCode: string;
++  status: string;
++  counterKobo: string | null;
++  counterState: 'NONE' | 'PENDING' | 'DECLINED' | 'ACCEPTED';
++  agreedKobo: string | null;
++  offeredAt: string;
++  expiresAt: string;
++}
++
++export interface DeliveryOffers {
++  deliveryId: string;
++  reference: string;
++  status: string;
++  quotedKobo: string;
++  askKobo: string;
++  isNegotiated: boolean;
++  chargeKobo: string;
++  agreedKobo: string | null;
++  agreedBasis: string | null;
++  ridersAsked: number;
++  pendingCount: number;
++  offers: DeliveryOffer[];
++}
++
++/** Who was asked, and who named a price. Polled while the job is on the board. */
++export function useDeliveryOffers(id: string | undefined, enabled = true) {
++  return useQuery({
++    queryKey: ['delivery', id, 'offers'],
++    queryFn: () => api.get<DeliveryOffers>(`/deliveries/${id}/offers`),
++    enabled: !!id && enabled,
++    refetchInterval: enabled ? 5000 : false,
++    staleTime: 0,
++  });
++}
++
++/** Accept a rider's price. That rider gets the job at that number. */
++export function useAcceptOfferPrice(id: string) {
++  const queryClient = useQueryClient();
++  return useMutation({
++    mutationFn: (assignmentId: string) =>
++      api.post<{ accepted: boolean; deliveryId: string; agreedKobo: string }>(
++        `/deliveries/${id}/offers/${assignmentId}/accept`,
++        {},
++      ),
++    onSuccess: () => {
++      void queryClient.invalidateQueries({ queryKey: ['delivery', id] });
++      void queryClient.invalidateQueries({ queryKey: ['delivery', id, 'offers'] });
++      void queryClient.invalidateQueries({ queryKey: ['deliveries'] });
++    },
++  });
++}
++
++/** Turn a rider's price down. Their offer stays open at the price you asked. */
++export function useDeclineOfferPrice(id: string) {
++  const queryClient = useQueryClient();
++  return useMutation({
++    mutationFn: (assignmentId: string) =>
++      api.post<{ declined: boolean }>(`/deliveries/${id}/offers/${assignmentId}/decline`, {}),
++    onSuccess: () => {
++      void queryClient.invalidateQueries({ queryKey: ['delivery', id, 'offers'] });
++    },
++  });
++}
+diff --git a/frontend/src/hooks/useRider.ts b/frontend/src/hooks/useRider.ts
+index c61c16e..209dade 100644
+--- a/frontend/src/hooks/useRider.ts
++++ b/frontend/src/hooks/useRider.ts
+@@ -74,6 +74,19 @@ export interface Offer {
+     package: { category: string; description: string; isFragile: boolean };
+     recipientName: string;
+   };
++  /**
++   * What the platform billed, what the customer asked for, and what this rider has
++   * already asked for (if anything). The two only differ when the customer haggled.
++   */
++  money: {
++    quotedKobo: string;
++    quotedFormatted: string;
++    askKobo: string;
++    askFormatted: string;
++    isNegotiated: boolean;
++    counterKobo: string | null;
++    counterState: 'NONE' | 'PENDING' | 'DECLINED' | 'ACCEPTED';
++  };
+   pay: {
+     chargeKobo: string;
+     commissionPct: number;
+@@ -204,6 +217,27 @@ export function useRejectOffer() {
+   });
+ }
+ 
++/**
++ * Ask for more than the number on the offer.
++ *
++ * Returns the asking price and the rider's own, so the card can say what is now on
++ * the customer's screen instead of guessing.
++ */
++export function useCounterOffer() {
++  const queryClient = useQueryClient();
++  return useMutation({
++    mutationFn: ({ assignmentId, amountKobo }: { assignmentId: string; amountKobo: string }) =>
++      api.post<{ countered: boolean; counterFormatted: string; askFormatted: string; message: string }>(
++        `/rider/offers/${assignmentId}/counter`,
++        { amountKobo },
++      ),
++    onSuccess: () => {
++      void queryClient.invalidateQueries({ queryKey: ['rider', 'offers'] });
++    },
++    retry: false,
++  });
++}
++
+ export function useActiveJob() {
+   return useQuery({
+     queryKey: ['rider', 'active-job'],
+diff --git a/frontend/src/pages/DeliveryChatPage.tsx b/frontend/src/pages/DeliveryChatPage.tsx
+new file mode 100644
+index 0000000..6cb8efc
+--- /dev/null
++++ b/frontend/src/pages/DeliveryChatPage.tsx
+@@ -0,0 +1,55 @@
++import { Link, useParams } from 'react-router-dom';
++import { Card, CardBody } from '../components/ui';
++import { ContactCard } from '../components/ContactCard';
++import { PortalShell } from '../layouts/PortalShell';
++import { CUSTOMER_NAV } from './customer/nav';
++import { RIDER_NAV } from './rider/nav';
++
++/**
++ * ONE JOB, ONE THREAD
++ *
++ * Accepting an offer drops both people here, because the next thing either of them
++ * wants is the other one's answer to a question — "which gate?", "I am outside".
++ *
++ * This is not an inbox and there is no list of chats: the thread belongs to a
++ * delivery, it exists only while that delivery is live, and it disappears from both
++ * portals when the job is done. That is the promise that nobody takes a phone number
++ * away from this platform.
++ */
++export function DeliveryChatPage({ portal }: { portal: 'Customer' | 'Rider' }) {
++  const { id } = useParams<{ id: string }>();
++  const isCustomer = portal === 'Customer';
++  const backTo = isCustomer ? '/app/deliveries' : '/rider/active';
++
++  return (
++    <PortalShell portal={portal} nav={isCustomer ? CUSTOMER_NAV : RIDER_NAV}>
++      <div className="mx-auto max-w-2xl space-y-4">
++        <div className="flex items-center justify-between">
++          <Link to={backTo} className="text-sm font-medium text-brand-700 hover:underline">
++            ← {isCustomer ? 'All deliveries' : 'My active job'}
++          </Link>
++          {isCustomer && id && (
++            <Link to={`/app/deliveries/${id}`} className="text-sm font-medium text-brand-700 hover:underline">
++              Delivery details →
++            </Link>
++          )}
++        </div>
++
++        <Card>
++          <CardBody className="p-0">
++            {id ? (
++              <ContactCard deliveryId={id} perspective={isCustomer ? 'CUSTOMER' : 'RIDER'} />
++            ) : (
++              <p className="p-6 text-sm text-ink-500">This chat has no delivery attached.</p>
++            )}
++          </CardBody>
++        </Card>
++
++        <p className="px-1 text-xs leading-relaxed text-ink-400">
++          Chat and calls stay inside the app on purpose. Neither of you sees the other's phone number, and this thread
++          closes when the delivery is finished.
++        </p>
++      </div>
++    </PortalShell>
++  );
++}
+diff --git a/frontend/src/pages/customer/BookDeliveryPage.tsx b/frontend/src/pages/customer/BookDeliveryPage.tsx
+index 6aa86e6..e128a61 100644
+--- a/frontend/src/pages/customer/BookDeliveryPage.tsx
++++ b/frontend/src/pages/customer/BookDeliveryPage.tsx
+@@ -12,7 +12,10 @@ import type { SavedLocation } from '../../lib/benin-city-locations';
+ import { cn } from '../../lib/cn';
+ import { useApiError } from '../../contexts/AuthContext';
+ 
+-const STEPS = ['Pickup', 'Drop-off', 'Package', 'Review'] as const;
++const STEPS = ['From', 'To', 'Size', 'Bill'] as const;
++
++/** ₦ formatting for the negotiation box, which is typed in naira and sent in kobo. */
++const nairaOf = (kobo: bigint | number | string): number => Number(kobo) / 100;
+ 
+ const DELIVERY_TYPES = [
+   { value: 'STANDARD', label: 'Standard', hint: 'Same city, within a few hours' },
+@@ -53,13 +56,17 @@ export default function BookDeliveryPage() {
+   const [scheduledFor, setScheduledFor] = useState('');
+   const [packageCategory, setPackageCategory] = useState('DOCUMENTS');
+   const [packageDescription, setPackageDescription] = useState('');
+-  const [packageWeightKg, setPackageWeightKg] = useState('');
+   const [packagePhotoKey, setPackagePhotoKey] = useState<string | undefined>(undefined);
+-  const [isFragile, setIsFragile] = useState(false);
+-  const [specialInstructions, setSpecialInstructions] = useState('');
+   const [promoCode, setPromoCode] = useState('');
+   const [appliedPromo, setAppliedPromo] = useState<string | undefined>(undefined);
+   const [acceptTerms, setAcceptTerms] = useState(false);
++  /**
++   * What the customer decided about the bill: take it, or name their own price.
++   * 'NONE' means they have not chosen yet — the bill step will not let them past
++   * without answering, because riders cannot be asked for a number nobody picked.
++   */
++  const [decision, setDecision] = useState<'NONE' | 'ACCEPT' | 'NEGOTIATE'>('NONE');
++  const [offerNaira, setOfferNaira] = useState('');
+   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+ 
+   const bothLocated = pickup.lat !== null && destination.lat !== null;
+@@ -109,13 +116,27 @@ export default function BookDeliveryPage() {
+       }
+     }
+     if (index === 2) {
+-      if (packageDescription.trim().length < 5) {
+-        errors['packageDescription'] = 'Describe the package in a few words';
+-      }
++      // A description and a photo are both optional now: the size is what prices
++      // the job, and asking for more than that is how a one-minute booking becomes
++      // a form people abandon.
+       if (deliveryType === 'SCHEDULED' && !scheduledFor) {
+         errors['scheduledFor'] = 'Choose when it should be collected';
+       }
+     }
++    if (index === 3) {
++      if (decision === 'NONE') {
++        errors['decision'] = 'Accept the bill, or tell us what you want to pay';
++      }
++      if (decision === 'NEGOTIATE') {
++        const offered = Number(offerNaira.replace(/,/g, ''));
++        if (!Number.isFinite(offered) || offered <= 0) {
++          errors['askKobo'] = 'Enter the amount you want to pay';
++        }
++      }
++      if (!acceptTerms) {
++        errors['acceptTerms'] = 'Tick the box to accept the delivery terms';
++      }
++    }
+     setFieldErrors(errors);
+     return Object.keys(errors).length === 0;
+   };
+@@ -147,22 +168,27 @@ export default function BookDeliveryPage() {
+       },
+       packageCategory,
+       packageDescription,
+-      packageWeightKg: packageWeightKg ? Number(packageWeightKg) : undefined,
+       ...(packagePhotoKey ? { packagePhotoKey } : {}),
+-      isFragile,
+-      specialInstructions: specialInstructions || undefined,
+       ...(deliveryType === 'SCHEDULED' && scheduledFor ? { scheduledFor: new Date(scheduledFor) } : {}),
+       ...(appliedPromo ? { promoCode: appliedPromo } : {}),
+       acceptTerms: true as const,
+       paymentMethod: 'PAYSTACK' as const,
++      // The bill was on screen; this is the answer to it.
++      pricingDecision: decision === 'NEGOTIATE' ? ('NEGOTIATE' as const) : ('ACCEPT' as const),
++      ...(decision === 'NEGOTIATE'
++        ? { askKobo: BigInt(Math.round(Number(offerNaira.replace(/,/g, '')) * 100)) }
++        : {}),
+     };
+ 
+     try {
+       const created = await createDelivery.mutateAsync(payload as never);
+       notify({
+         tone: 'success',
+-        title: 'Booking created',
+-        description: `${created.reference} — ${created.chargeFormatted}. Pay by card, transfer or from your wallet on the next screen.`,
++        title: decision === 'NEGOTIATE' ? 'Offer sent to riders' : 'Riders are being asked',
++        description:
++          decision === 'NEGOTIATE'
++            ? `${created.reference} — you offered ${formatNaira(created.pricing?.askKobo ?? created.chargeKobo)}. Riders who accept, counter, and you decide.`
++            : `${created.reference} — riders are being asked for ${created.chargeFormatted}. Pay once a rider accepts.`,
+       });
+       navigate(`/app/deliveries/${created.id}`);
+     } catch (error) {
+@@ -259,37 +285,60 @@ export default function BookDeliveryPage() {
+               {step === 2 && (
+                 <div className="space-y-5">
+                   <div>
+-                    <h3 className="text-base font-semibold text-ink-900">What are we carrying?</h3>
++                    <h3 className="text-base font-semibold text-ink-900">How big is it?</h3>
+                     <p className="mt-0.5 text-xs text-ink-500">
+-                      Fragile and bulky items need proper handling — tell us the truth and the rider comes prepared.
++                      This is what prices the trip along with the distance. Nothing else is required.
+                     </p>
+                   </div>
+ 
+-                  <div className="grid gap-4 sm:grid-cols-2">
+-                    <Field label="Category" required htmlFor="package-category">
+-                      <Select
+-                        id="package-category"
+-                        value={packageCategory}
+-                        options={PACKAGE_CATEGORIES.map((category) => ({
+-                          value: category.value,
+-                          label: category.label,
+-                        }))}
+-                        onChange={(event) => setPackageCategory(event.target.value)}
+-                      />
+-                    </Field>
+-                    <Field label="Weight (kg)" hint="Optional — helps us plan the rider" htmlFor="package-weight">
++                  <Field label="Size of the parcel" required htmlFor="package-category">
++                    <Select
++                      id="package-category"
++                      value={packageCategory}
++                      options={PACKAGE_CATEGORIES.map((category) => ({
++                        value: category.value,
++                        label: category.label,
++                      }))}
++                      onChange={(event) => setPackageCategory(event.target.value)}
++                    />
++                  </Field>
++
++                  <div className="grid gap-2 sm:grid-cols-2">
++                    {DELIVERY_TYPES.map((option) => (
++                      <button
++                        key={option.value}
++                        type="button"
++                        onClick={() => setDeliveryType(option.value)}
++                        className={cn(
++                          'rounded-xl border p-3 text-left transition-colors',
++                          deliveryType === option.value
++                            ? 'border-brand-500 bg-brand-50 ring-1 ring-brand-500/30'
++                            : 'border-ink-200 hover:border-ink-300',
++                        )}
++                      >
++                        <p className="text-sm font-semibold text-ink-900">{option.label}</p>
++                        <p className="text-xs text-ink-500">{option.hint}</p>
++                      </button>
++                    ))}
++                  </div>
++
++                  {deliveryType === 'SCHEDULED' && (
++                    <Field
++                      label="Collection date and time"
++                      required
++                      error={fieldErrors['scheduledFor']}
++                      hint="At least 15 minutes from now"
++                      htmlFor="scheduled-for"
++                    >
+                       <Input
+-                        id="package-weight"
+-                        type="number"
+-                        min={0}
+-                        max={500}
+-                        step="0.5"
+-                        placeholder="e.g. 2.5"
+-                        value={packageWeightKg}
+-                        onChange={(event) => setPackageWeightKg(event.target.value)}
++                        id="scheduled-for"
++                        type="datetime-local"
++                        value={scheduledFor}
++                        error={fieldErrors['scheduledFor']}
++                        onChange={(event) => setScheduledFor(event.target.value)}
+                       />
+                     </Field>
+-                  </div>
++                  )}
+ 
+                   <Field
+                     label="Photo of the parcel"
+@@ -300,133 +349,131 @@ export default function BookDeliveryPage() {
+ 
+                   <Field
+                     label="What is inside?"
+-                    required
+-                    error={fieldErrors['packageDescription']}
+-                    hint="A rider may open the package for a security check"
++                    hint="Optional — a rider may open the package for a security check either way"
+                     htmlFor="package-description"
+                   >
+                     <Textarea
+                       id="package-description"
+                       rows={2}
+-                      placeholder="e.g. One envelope with signed contracts"
++                      placeholder="e.g. A box of shoes"
+                       value={packageDescription}
+-                      error={fieldErrors['packageDescription']}
+                       onChange={(event) => setPackageDescription(event.target.value)}
+                     />
+                   </Field>
+ 
+-                  <label className="flex items-start gap-2.5 rounded-xl border border-ink-200 p-3">
+-                    <input
+-                      type="checkbox"
+-                      className="mt-0.5 h-4 w-4 rounded border-ink-300"
+-                      checked={isFragile}
+-                      onChange={(event) => setIsFragile(event.target.checked)}
+-                    />
+-                    <span>
+-                      <span className="text-sm font-medium text-ink-800">This item is fragile</span>
+-                      <span className="block text-xs text-ink-500">Riders handle it separately and confirm hand-over</span>
+-                    </span>
+-                  </label>
+-
+-                  <Field label="Special instructions" hint="Optional" htmlFor="package-instructions">
+-                    <Textarea
+-                      id="package-instructions"
+-                      rows={2}
+-                      placeholder="e.g. Call on arrival, gate 3"
+-                      value={specialInstructions}
+-                      onChange={(event) => setSpecialInstructions(event.target.value)}
+-                    />
+-                  </Field>
+-
+-                  <div>
+-                    <h3 className="text-base font-semibold text-ink-900">How fast?</h3>
+-                    <div className="mt-2 grid gap-2 sm:grid-cols-2">
+-                      {DELIVERY_TYPES.map((option) => (
+-                        <button
+-                          key={option.value}
+-                          type="button"
+-                          onClick={() => setDeliveryType(option.value)}
+-                          className={cn(
+-                            'rounded-xl border p-3 text-left transition-colors',
+-                            deliveryType === option.value
+-                              ? 'border-brand-500 bg-brand-50 ring-1 ring-brand-500/30'
+-                              : 'border-ink-200 hover:border-ink-300',
+-                          )}
+-                        >
+-                          <p className="text-sm font-semibold text-ink-900">{option.label}</p>
+-                          <p className="text-xs text-ink-500">{option.hint}</p>
+-                        </button>
+-                      ))}
+-                    </div>
+-                  </div>
+-
+-                  {deliveryType === 'SCHEDULED' && (
+-                    <Field
+-                      label="Collection date and time"
+-                      required
+-                      error={fieldErrors['scheduledFor']}
+-                      hint="At least 15 minutes from now"
+-                      htmlFor="scheduled-for"
+-                    >
++                  <details className="rounded-xl border border-ink-200 p-3">
++                    <summary className="cursor-pointer text-sm font-medium text-ink-800">Have a promo code?</summary>
++                    <div className="mt-3 flex gap-2">
+                       <Input
+-                        id="scheduled-for"
+-                        type="datetime-local"
+-                        value={scheduledFor}
+-                        error={fieldErrors['scheduledFor']}
+-                        onChange={(event) => setScheduledFor(event.target.value)}
++                        placeholder="e.g. BENIN10"
++                        value={promoCode}
++                        onChange={(event) => setPromoCode(event.target.value.toUpperCase())}
+                       />
+-                    </Field>
+-                  )}
+-
+-                  <div>
+-                    <Field label="Promo code" hint="Optional" htmlFor="promo-code">
+-                      <div className="flex gap-2">
+-                        <Input
+-                          id="promo-code"
+-                          placeholder="e.g. LAGOS10"
+-                          value={promoCode}
+-                          onChange={(event) => setPromoCode(event.target.value.toUpperCase())}
+-                        />
+-                        <Button type="button" variant="secondary" onClick={applyPromo}>
+-                          Apply
+-                        </Button>
+-                      </div>
+-                    </Field>
++                      <Button type="button" variant="secondary" onClick={applyPromo}>
++                        Apply
++                      </Button>
++                    </div>
+                     {appliedPromo && (
+                       <p className="mt-1.5 text-xs text-ink-500">
+                         Applied <strong>{appliedPromo}</strong>
+                         {quote?.promo ? ` — ${quote.promo.description}` : ''}
+-                        {quoteError ? ' — could not be applied' : ''}
+                       </p>
+                     )}
+-                  </div>
++                  </details>
+                 </div>
+               )}
+ 
+               {step === 3 && (
+                 <div className="space-y-4">
+-                  <h3 className="text-base font-semibold text-ink-900">Check everything before you confirm</h3>
++                  <h3 className="text-base font-semibold text-ink-900">Your bill</h3>
++                  <p className="text-sm text-ink-500">
++                    Worked out from the distance and the size. Accept it and nearby riders are alerted straight away — or
++                    name your own price and they can take it, counter, or pass.
++                  </p>
+ 
+                   <div className="grid gap-3 sm:grid-cols-2">
+                     <SummaryBlock title="Collecting from" address={pickup.address} contact={`${pickup.contactName} · ${pickup.contactPhone}`} />
+                     <SummaryBlock title="Delivering to" address={destination.address} contact={`${destination.contactName} · ${destination.contactPhone}`} />
+                   </div>
+ 
+-                  <div className="rounded-xl border border-ink-200 p-3 text-sm">
+-                    <p className="font-medium text-ink-800">{packageDescription}</p>
+-                    <p className="mt-0.5 text-xs text-ink-500">
+-                      {packageCategory} · {DELIVERY_TYPES.find((t) => t.value === deliveryType)?.label}
+-                      {isFragile ? ' · fragile' : ''}
+-                      {packageWeightKg ? ` · ${packageWeightKg} kg` : ''}
+-                    </p>
+-                  </div>
++                  {quote && (
++                    <div className="rounded-xl border border-brand-200 bg-brand-50/50 p-4">
++                      <PriceBreakdown
++                        lines={quote.lines}
++                        totalKobo={quote.totalKobo}
++                        meta={{
++                          distanceKm: quote.distanceKm,
++                          durationMinutes: quote.durationMinutes,
++                          routeSource: quote.routeSource,
++                          zoneName: quote.zone?.name,
++                        }}
++                      />
++                    </div>
++                  )}
+ 
+-                  {quote?.promo && (
+-                    <Alert tone="success" title={`Promo ${quote.promo.code} applied`}>
+-                      {quote.promo.description} — you save {formatNaira(quote.promo.discountKobo)}.
+-                    </Alert>
++                  {quote && (
++                    <div className="grid gap-2 sm:grid-cols-2">
++                      <button
++                        type="button"
++                        onClick={() => setDecision('ACCEPT')}
++                        className={cn(
++                          'rounded-xl border p-3 text-left transition-colors',
++                          decision === 'ACCEPT'
++                            ? 'border-brand-500 bg-brand-50 ring-1 ring-brand-500/30'
++                            : 'border-ink-200 hover:border-ink-300',
++                        )}
++                      >
++                        <p className="text-sm font-semibold text-ink-900">Accept the bill</p>
++                        <p className="text-xs text-ink-500">Riders see {formatNaira(quote.totalKobo)}</p>
++                      </button>
++                      <button
++                        type="button"
++                        onClick={() => {
++                          setDecision('NEGOTIATE');
++                          if (!offerNaira) setOfferNaira(String(nairaOf(quote.totalKobo)));
++                        }}
++                        className={cn(
++                          'rounded-xl border p-3 text-left transition-colors',
++                          decision === 'NEGOTIATE'
++                            ? 'border-brand-500 bg-brand-50 ring-1 ring-brand-500/30'
++                            : 'border-ink-200 hover:border-ink-300',
++                        )}
++                      >
++                        <p className="text-sm font-semibold text-ink-900">Negotiate</p>
++                        <p className="text-xs text-ink-500">Name the price you want to pay</p>
++                      </button>
++                    </div>
++                  )}
++
++                  {decision === 'NEGOTIATE' && quote && (
++                    <div className="space-y-2 rounded-xl border border-ink-200 p-3">
++                      <Field
++                        label="What do you want to pay?"
++                        required
++                        error={fieldErrors['askKobo']}
++                        hint={`Riders see this instead of the bill. Between ${formatNaira(Number(quote.totalKobo) / 2)} and ${formatNaira(Number(quote.totalKobo) * 3)}.`}
++                        htmlFor="ask-amount"
++                      >
++                        <Input
++                          id="ask-amount"
++                          type="number"
++                          inputMode="decimal"
++                          min={0}
++                          step="50"
++                          value={offerNaira}
++                          error={fieldErrors['askKobo']}
++                          onChange={(event) => setOfferNaira(event.target.value)}
++                        />
++                      </Field>
++                      <p className="text-xs text-ink-500">
++                        A rider may accept this, ask for more, or pass. You decide on any price they ask for — nothing is
++                        charged until a rider has the job.
++                      </p>
++                    </div>
+                   )}
+ 
++                  {fieldErrors['decision'] && <p className="text-xs font-medium text-danger-700">{fieldErrors['decision']}</p>}
++
+                   <label className="flex items-start gap-2.5 rounded-xl border border-ink-200 p-3">
+                     <input
+                       type="checkbox"
+@@ -453,11 +500,17 @@ export default function BookDeliveryPage() {
+                   <Button onClick={next}>Continue</Button>
+                 ) : (
+                   <Button
+-                    onClick={submit}
++                    onClick={() => {
++                      if (validateStep(3)) void submit();
++                    }}
+                     isLoading={createDelivery.isPending}
+-                    disabled={!quote || !acceptTerms}
++                    disabled={!quote || decision === 'NONE' || !acceptTerms}
+                   >
+-                    Confirm booking{quote ? ` — ${formatNaira(quote.totalKobo)}` : ''}
++                    {decision === 'NEGOTIATE'
++                      ? `Offer ${offerNaira ? `₦${Number(offerNaira.replace(/,/g, '')).toLocaleString('en-NG')}` : 'your price'} to riders`
++                      : quote
++                        ? `Accept and alert riders — ${formatNaira(quote.totalKobo)}`
++                        : 'Send to riders'}
+                   </Button>
+                 )}
+               </div>
+diff --git a/frontend/src/pages/customer/DeliveryDetailPage.tsx b/frontend/src/pages/customer/DeliveryDetailPage.tsx
+index 3a8da85..aa2e6ad 100644
+--- a/frontend/src/pages/customer/DeliveryDetailPage.tsx
++++ b/frontend/src/pages/customer/DeliveryDetailPage.tsx
+@@ -1,6 +1,6 @@
+ import { useCallback, useState } from 'react';
+ import { useQueryClient } from '@tanstack/react-query';
+-import { Link, useParams } from 'react-router-dom';
++import { Link, useNavigate, useParams } from 'react-router-dom';
+ import { CHAT_OPEN_STATUSES, DELIVERY_STATUS_LABELS, formatNaira, formatNgPhone } from '@dispatch/shared';
+ import { PortalShell } from '../../layouts/PortalShell';
+ import {
+@@ -19,6 +19,7 @@ import { PriceBreakdown } from '../../components/PriceBreakdown';
+ import { PaymentPanel } from '../../components/PaymentPanel';
+ import { DeliveryTrackingCard } from '../../components/DeliveryTrackingCard';
+ import { ContactCard } from '../../components/ContactCard';
++import { OffersPanel } from '../../components/OffersPanel';
+ import { CUSTOMER_NAV } from './nav';
+ import { useCancelDelivery, useDelivery } from '../../hooks/useDeliveries';
+ import { useApiError } from '../../contexts/AuthContext';
+@@ -27,6 +28,7 @@ import { LIVE_EVENTS, useLiveEvent } from '../../lib/live';
+ 
+ export default function DeliveryDetailPage() {
+   const { id } = useParams<{ id: string }>();
++  const navigate = useNavigate();
+   const { notify } = useToast();
+   const { data: delivery, isLoading, isError } = useDelivery(id);
+   const cancelDelivery = useCancelDelivery(id ?? '');
+@@ -39,10 +41,17 @@ export default function DeliveryDetailPage() {
+     LIVE_EVENTS.DELIVERY_UPDATED,
+     useCallback(
+       (payload: unknown) => {
+-        const update = payload as { deliveryId?: string };
+-        if (update.deliveryId && id && update.deliveryId !== id) return;
++        const update = payload as { id?: string; status?: string };
++        if (update.id && id && update.id !== id) return;
+         void queryClient.invalidateQueries({ queryKey: ['delivery', id] });
++        void queryClient.invalidateQueries({ queryKey: ['delivery', id, 'offers'] });
+         void queryClient.invalidateQueries({ queryKey: ['deliveries'] });
++        // A rider has taken the job: the two of them belong in the thread, where they
++        // can talk before the rider moves — the same place the rider was sent to.
++        if (update.status === 'ACCEPTED' && id) {
++          notify({ tone: 'success', title: 'A rider has your job', description: 'Opening your chat with them.' });
++          navigate(`/app/deliveries/${id}/chat`);
++        }
+       },
+       [id, queryClient],
+     ),
+@@ -127,6 +136,24 @@ export default function DeliveryDetailPage() {
+               </CardBody>
+             </Card>
+ 
++            {delivery.status === 'PENDING' && <OffersPanel deliveryId={delivery.id} />}
++
++            {delivery.status !== 'PENDING' && (CHAT_OPEN_STATUSES as readonly string[]).includes(delivery.status) && (
++              <Card>
++                <CardBody className="flex flex-wrap items-center justify-between gap-3">
++                  <div>
++                    <p className="text-sm font-semibold text-ink-900">
++                      Talk to {delivery.riderFirstName ?? 'your rider'}
++                    </p>
++                    <p className="text-xs text-ink-500">
++                      Chat or call from inside the app. Neither of you ever sees the other's number.
++                    </p>
++                  </div>
++                  <Button onClick={() => navigate(`/app/deliveries/${delivery.id}/chat`)}>Open chat</Button>
++                </CardBody>
++              </Card>
++            )}
++
+             <PaymentPanel
+               deliveryId={delivery.id}
+               amountKobo={delivery.chargeKobo}
+diff --git a/frontend/src/pages/rider/OffersPage.tsx b/frontend/src/pages/rider/OffersPage.tsx
+index 5dee4bc..600bd4d 100644
+--- a/frontend/src/pages/rider/OffersPage.tsx
++++ b/frontend/src/pages/rider/OffersPage.tsx
+@@ -5,6 +5,7 @@ import {
+   Alert,
+   Badge,
+   Button,
++  Input,
+   Card,
+   CardBody,
+   EmptyState,
+@@ -19,6 +20,7 @@ import { RIDER_NAV } from './nav';
+ import { useApiError } from '../../contexts/AuthContext';
+ import {
+   useAcceptOffer,
++  useCounterOffer,
+   useOffers,
+   useRejectOffer,
+   useRiderProfile,
+@@ -33,7 +35,11 @@ export default function OffersPage() {
+   const offers = useOffers(online);
+   const accept = useAcceptOffer();
+   const reject = useRejectOffer();
++  const counter = useCounterOffer();
+   const [busyId, setBusyId] = useState<string | null>(null);
++  // Which card has its "ask for more" box open, and what has been typed in it.
++  const [askingId, setAskingId] = useState<string | null>(null);
++  const [askAmount, setAskAmount] = useState('');
+ 
+   /**
+    * Live offers. The push only carries enough to announce the job; the list itself
+@@ -62,8 +68,9 @@ export default function OffersPage() {
+     setBusyId(offer.assignmentId);
+     try {
+       await accept.mutateAsync(offer.assignmentId);
+-      notify({ tone: 'success', title: 'Job accepted', description: 'Head to the pickup address.' });
+-      navigate(`/rider/active?job=${offer.delivery.id}`);
++      notify({ tone: 'success', title: 'Job accepted', description: 'Head to the pickup address — the customer is waiting in chat.' });
++      // Straight into the thread: the two of them can talk before either moves.
++      navigate(`/rider/deliveries/${offer.delivery.id}/chat`);
+     } catch (error) {
+       // Losing the race is expected behaviour, not a bug: another rider took it first.
+       notify({ tone: 'error', title: 'Offer no longer available', description: useApiError(error) ?? 'It was taken by another rider or has expired.' });
+@@ -73,6 +80,40 @@ export default function OffersPage() {
+     }
+   };
+ 
++  /**
++   * Name a price. Naira in the box, kobo on the wire — the API never takes a
++   * decimal amount and the customer never sees one.
++   */
++  const askForMore = async (offer: Offer) => {
++    const naira = Number(askAmount.replace(/,/g, ''));
++    if (!Number.isFinite(naira) || naira <= 0) {
++      notify({ tone: 'error', title: 'Enter a price', description: 'Type the amount you want for this job.' });
++      return;
++    }
++    setBusyId(offer.assignmentId);
++    try {
++      const result = await counter.mutateAsync({
++        assignmentId: offer.assignmentId,
++        amountKobo: String(Math.round(naira * 100)),
++      });
++      setAskingId(null);
++      setAskAmount('');
++      notify({
++        tone: 'success',
++        title: `Asked for ${result.counterFormatted}`,
++        description: result.message,
++      });
++    } catch (error) {
++      notify({
++        tone: 'error',
++        title: 'That price was not sent',
++        description: useApiError(error) ?? 'Please try again.',
++      });
++    } finally {
++      setBusyId(null);
++    }
++  };
++
+   const pass = async (offer: Offer) => {
+     setBusyId(offer.assignmentId);
+     try {
+@@ -191,15 +232,51 @@ export default function OffersPage() {
+                   </div>
+                 </div>
+ 
+-                <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-ink-50 p-3">
+-                  <div>
+-                    <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">You earn</p>
+-                    <p className="text-lg font-bold text-accent-700">{offer.pay.netFormatted}</p>
+-                  </div>
+-                  <div className="text-right text-xs text-ink-500">
+-                    <p>Customer pays {offer.pay.chargeKobo ? `₦${(Number(offer.pay.chargeKobo) / 100).toFixed(2)}` : '—'}</p>
+-                    <p>Commission {offer.pay.commissionPct}%</p>
++                <div className="space-y-3 rounded-xl bg-ink-50 p-3">
++                  {offer.money.isNegotiated ? (
++                    <div className="space-y-1.5">
++                      <div className="flex items-baseline justify-between gap-3 text-xs">
++                        <span className="text-ink-500">Our bill</span>
++                        <span className="text-ink-400 line-through">{offer.money.quotedFormatted}</span>
++                      </div>
++                      <div className="flex items-baseline justify-between gap-3">
++                        <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">
++                          Customer is offering
++                        </span>
++                        <span className="text-lg font-bold text-brand-800">{offer.money.askFormatted}</span>
++                      </div>
++                      <p className="text-[11px] text-ink-500">
++                        They negotiated the bill down. Take it, or ask for a price of your own.
++                      </p>
++                    </div>
++                  ) : (
++                    <div className="flex items-baseline justify-between gap-3">
++                      <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">
++                        Customer is paying
++                      </span>
++                      <span className="text-lg font-bold text-brand-800">{offer.money.askFormatted}</span>
++                    </div>
++                  )}
++
++                  <div className="flex flex-wrap items-center justify-between gap-3 border-t border-ink-200 pt-2.5">
++                    <div>
++                      <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">You earn</p>
++                      <p className="text-lg font-bold text-accent-700">{offer.pay.netFormatted}</p>
++                    </div>
++                    <p className="text-right text-xs text-ink-500">Commission {offer.pay.commissionPct}%</p>
+                   </div>
++
++                  {offer.money.counterState === 'PENDING' && offer.money.counterKobo && (
++                    <p className="rounded-lg bg-warning-50 px-3 py-2 text-xs font-medium text-warning-800">
++                      You asked for ₦{(Number(offer.money.counterKobo) / 100).toLocaleString('en-NG')} — waiting for the
++                      customer. You can still take the job at {offer.money.askFormatted} meanwhile.
++                    </p>
++                  )}
++                  {offer.money.counterState === 'DECLINED' && (
++                    <p className="rounded-lg bg-ink-100 px-3 py-2 text-xs text-ink-600">
++                      Your price was turned down. The job is still here at {offer.money.askFormatted}.
++                    </p>
++                  )}
+                 </div>
+ 
+                 {offer.distanceToPickupKm !== null && (
+@@ -208,24 +285,69 @@ export default function OffersPage() {
+                   </p>
+                 )}
+ 
+-                <div className="flex flex-col gap-2 sm:flex-row">
+-                  <Button
+-                    className="flex-1"
+-                    onClick={() => void take(offer)}
+-                    isLoading={busyId === offer.assignmentId && accept.isPending}
+-                    disabled={busyId !== null && busyId !== offer.assignmentId}
+-                  >
+-                    Accept job
+-                  </Button>
+-                  <Button
+-                    variant="secondary"
+-                    className="sm:w-32"
+-                    onClick={() => void pass(offer)}
+-                    disabled={busyId !== null}
+-                  >
+-                    Pass
+-                  </Button>
+-                </div>
++                {askingId === offer.assignmentId ? (
++                  <div className="space-y-2 rounded-xl border border-brand-200 bg-brand-50/60 p-3">
++                    <label className="text-xs font-semibold text-ink-700" htmlFor={`ask-${offer.assignmentId}`}>
++                      What should the customer pay?
++                    </label>
++                    <Input
++                      id={`ask-${offer.assignmentId}`}
++                      type="number"
++                      inputMode="decimal"
++                      min={0}
++                      step="50"
++                      placeholder={`More than ${offer.money.askFormatted.replace('₦', '')}`}
++                      value={askAmount}
++                      onChange={(event) => setAskAmount(event.target.value)}
++                    />
++                    <p className="text-[11px] text-ink-500">
++                      Your asking price. The customer decides — nothing is charged until they say yes.
++                    </p>
++                    <div className="flex gap-2">
++                      <Button
++                        size="sm"
++                        className="flex-1"
++                        isLoading={counter.isPending}
++                        onClick={() => void askForMore(offer)}
++                      >
++                        Send my price
++                      </Button>
++                      <Button size="sm" variant="ghost" onClick={() => setAskingId(null)}>
++                        Cancel
++                      </Button>
++                    </div>
++                  </div>
++                ) : (
++                  <div className="flex flex-col gap-2 sm:flex-row">
++                    <Button
++                      className="flex-1"
++                      onClick={() => void take(offer)}
++                      isLoading={busyId === offer.assignmentId && accept.isPending}
++                      disabled={busyId !== null && busyId !== offer.assignmentId}
++                    >
++                      Accept {offer.money.askFormatted}
++                    </Button>
++                    <Button
++                      variant="secondary"
++                      className="sm:w-36"
++                      onClick={() => {
++                        setAskingId(offer.assignmentId);
++                        setAskAmount('');
++                      }}
++                      disabled={busyId !== null}
++                    >
++                      Ask for more
++                    </Button>
++                    <Button
++                      variant="ghost"
++                      className="sm:w-24"
++                      onClick={() => void pass(offer)}
++                      disabled={busyId !== null}
++                    >
++                      Pass
++                    </Button>
++                  </div>
++                )}
+               </CardBody>
+             </Card>
+           ))}
+diff --git a/packages/shared/src/schemas/delivery.ts b/packages/shared/src/schemas/delivery.ts
+index 0f56b3a..c72f860 100644
+--- a/packages/shared/src/schemas/delivery.ts
++++ b/packages/shared/src/schemas/delivery.ts
+@@ -42,7 +42,9 @@ export const createDeliverySchema = z.object({
+   pickup: addressInputSchema,
+   destination: addressInputSchema,
+   packageCategory: z.enum(packageCategoryValues),
+-  packageDescription: z.string().trim().min(5, 'Describe the package').max(500),
++  // Optional now: the request form asks for where it is going and how big it is.
++  // A description is a courtesy to the rider, not a requirement to book.
++  packageDescription: z.string().trim().max(500).optional(),
+   packageWeightKg: z.coerce.number().min(0).max(500).optional(),
+   packagePhotoKey: z.string().max(300).optional(),
+   isFragile: z.boolean().default(false),
+@@ -53,6 +55,15 @@ export const createDeliverySchema = z.object({
+   codAmountKobo: z.coerce.bigint().nonnegative().default(0n),
+   paymentMethod: z.enum(['PAYSTACK', 'FLUTTERWAVE', 'WALLET', 'CASH']).default('PAYSTACK'),
+   acceptTerms: z.literal(true, { message: 'Accept the delivery terms to continue' }),
++  /**
++   * What the customer decided when the bill appeared.
++   *
++   * ACCEPT    — take the platform's price as it stands.
++   * NEGOTIATE — riders are alerted with `askKobo` instead, and may still ask for
++   *             more. The bill is always shown first, so nobody haggles blind.
++   */
++  pricingDecision: z.enum(['ACCEPT', 'NEGOTIATE']).default('ACCEPT'),
++  askKobo: z.coerce.bigint().positive().optional(),
+ })
+   .refine(
+     (d) => d.deliveryType !== DeliveryType.SCHEDULED || !!d.scheduledFor,
+@@ -61,7 +72,13 @@ export const createDeliverySchema = z.object({
+   .refine(
+     (d) => !d.scheduledFor || d.scheduledFor.getTime() > Date.now() + 15 * 60 * 1000,
+     { message: 'Scheduled deliveries must be at least 15 minutes from now', path: ['scheduledFor'] },
+-  );
++  )
++  // A negotiation without a number is not a negotiation. The band is checked
++  // against the actual bill server-side too — this only catches the obvious.
++  .refine((d) => d.pricingDecision !== 'NEGOTIATE' || (d.askKobo ?? 0n) >= 10_000n, {
++    message: 'Enter the price you want to pay (at least ₦100)',
++    path: ['askKobo'],
++  });
+ export type CreateDeliveryInput = z.infer<typeof createDeliverySchema>;
+ 
+ /** POST /deliveries/package-photo — photograph the parcel before booking, get a key back. */
+@@ -94,6 +111,24 @@ export const CHAT_OPEN_STATUSES = [
+   'ASSIGNED', 'ACCEPTED', 'ARRIVED_AT_PICKUP', 'PICKED_UP', 'IN_TRANSIT', 'ARRIVED_AT_DESTINATION',
+ ] as const;
+ 
++/**
++ * A rider asking for more than the number on the offer.
++ *
++ * Riders see the bill the customer was given and, when the customer haggled, the
++ * number they asked for. This is the third option: the rider's own figure. The
++ * customer decides, so nobody is ever charged a price they did not see.
++ */
++export const counterOfferSchema = z.object({
++  amountKobo: z.coerce.bigint().positive().min(10_000n, 'Ask for at least ₦100'),
++});
++export type CounterOfferInput = z.infer<typeof counterOfferSchema>;
++
++/** A customer turning down a rider's asking price. The offer itself stays open. */
++export const declineCounterSchema = z.object({
++  reason: z.string().trim().max(200).optional(),
++});
++export type DeclineCounterInput = z.infer<typeof declineCounterSchema>;
++
+ export const cancelDeliverySchema = z.object({
+   reason: z.string().trim().min(5, 'Give a short reason').max(300),
+ });
+-- 
+2.47.3
+

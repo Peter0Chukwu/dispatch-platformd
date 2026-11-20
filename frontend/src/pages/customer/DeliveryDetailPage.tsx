@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { CHAT_OPEN_STATUSES, DELIVERY_STATUS_LABELS, formatNaira, formatNgPhone } from '@dispatch/shared';
 import { PortalShell } from '../../layouts/PortalShell';
 import {
@@ -19,6 +19,7 @@ import { PriceBreakdown } from '../../components/PriceBreakdown';
 import { PaymentPanel } from '../../components/PaymentPanel';
 import { DeliveryTrackingCard } from '../../components/DeliveryTrackingCard';
 import { ContactCard } from '../../components/ContactCard';
+import { OffersPanel } from '../../components/OffersPanel';
 import { CUSTOMER_NAV } from './nav';
 import { useCancelDelivery, useDelivery } from '../../hooks/useDeliveries';
 import { useApiError } from '../../contexts/AuthContext';
@@ -27,6 +28,7 @@ import { LIVE_EVENTS, useLiveEvent } from '../../lib/live';
 
 export default function DeliveryDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const { notify } = useToast();
   const { data: delivery, isLoading, isError } = useDelivery(id);
   const cancelDelivery = useCancelDelivery(id ?? '');
@@ -39,10 +41,17 @@ export default function DeliveryDetailPage() {
     LIVE_EVENTS.DELIVERY_UPDATED,
     useCallback(
       (payload: unknown) => {
-        const update = payload as { deliveryId?: string };
-        if (update.deliveryId && id && update.deliveryId !== id) return;
+        const update = payload as { id?: string; status?: string };
+        if (update.id && id && update.id !== id) return;
         void queryClient.invalidateQueries({ queryKey: ['delivery', id] });
+        void queryClient.invalidateQueries({ queryKey: ['delivery', id, 'offers'] });
         void queryClient.invalidateQueries({ queryKey: ['deliveries'] });
+        // A rider has taken the job: the two of them belong in the thread, where they
+        // can talk before the rider moves — the same place the rider was sent to.
+        if (update.status === 'ACCEPTED' && id) {
+          notify({ tone: 'success', title: 'A rider has your job', description: 'Opening your chat with them.' });
+          navigate(`/app/deliveries/${id}/chat`);
+        }
       },
       [id, queryClient],
     ),
@@ -126,6 +135,24 @@ export default function DeliveryDetailPage() {
                 </div>
               </CardBody>
             </Card>
+
+            {delivery.status === 'PENDING' && <OffersPanel deliveryId={delivery.id} />}
+
+            {delivery.status !== 'PENDING' && (CHAT_OPEN_STATUSES as readonly string[]).includes(delivery.status) && (
+              <Card>
+                <CardBody className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-semibold text-ink-900">
+                      Talk to {delivery.riderFirstName ?? 'your rider'}
+                    </p>
+                    <p className="text-xs text-ink-500">
+                      Chat or call from inside the app. Neither of you ever sees the other's number.
+                    </p>
+                  </div>
+                  <Button onClick={() => navigate(`/app/deliveries/${delivery.id}/chat`)}>Open chat</Button>
+                </CardBody>
+              </Card>
+            )}
 
             <PaymentPanel
               deliveryId={delivery.id}

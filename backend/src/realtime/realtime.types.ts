@@ -16,6 +16,10 @@ export const RT = {
   OFFER_NEW: 'offer:new',
   /** An offer was withdrawn because somebody else took the job or it expired. */
   OFFER_REVOKED: 'offer:revoked',
+  /** A rider named their own price — the customer has an answer to give. */
+  OFFER_COUNTERED: 'offer:countered',
+  /** The customer accepted or turned down a rider's price. */
+  COUNTER_ANSWERED: 'offer:counter-answered',
   /** A delivery was created, moved, assigned or cancelled. */
   DELIVERY_NEW: 'delivery:new',
   DELIVERY_UPDATED: 'delivery:updated',

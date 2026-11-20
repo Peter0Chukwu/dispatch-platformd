@@ -10,7 +10,8 @@
     "emitDecoratorMetadata": true,
     "strictPropertyInitialization": false,
     "types": [
-      "node"
+      "node",
+      "vitest/globals"
     ],
     "declaration": false
   },

@@ -42,7 +42,9 @@ export const createDeliverySchema = z.object({
   pickup: addressInputSchema,
   destination: addressInputSchema,
   packageCategory: z.enum(packageCategoryValues),
-  packageDescription: z.string().trim().min(5, 'Describe the package').max(500),
+  // Optional now: the request form asks for where it is going and how big it is.
+  // A description is a courtesy to the rider, not a requirement to book.
+  packageDescription: z.string().trim().max(500).optional(),
   packageWeightKg: z.coerce.number().min(0).max(500).optional(),
   packagePhotoKey: z.string().max(300).optional(),
   isFragile: z.boolean().default(false),
@@ -53,6 +55,15 @@ export const createDeliverySchema = z.object({
   codAmountKobo: z.coerce.bigint().nonnegative().default(0n),
   paymentMethod: z.enum(['PAYSTACK', 'FLUTTERWAVE', 'WALLET', 'CASH']).default('PAYSTACK'),
   acceptTerms: z.literal(true, { message: 'Accept the delivery terms to continue' }),
+  /**
+   * What the customer decided when the bill appeared.
+   *
+   * ACCEPT    — take the platform's price as it stands.
+   * NEGOTIATE — riders are alerted with `askKobo` instead, and may still ask for
+   *             more. The bill is always shown first, so nobody haggles blind.
+   */
+  pricingDecision: z.enum(['ACCEPT', 'NEGOTIATE']).default('ACCEPT'),
+  askKobo: z.coerce.bigint().positive().optional(),
 })
   .refine(
     (d) => d.deliveryType !== DeliveryType.SCHEDULED || !!d.scheduledFor,
@@ -61,7 +72,13 @@ export const createDeliverySchema = z.object({
   .refine(
     (d) => !d.scheduledFor || d.scheduledFor.getTime() > Date.now() + 15 * 60 * 1000,
     { message: 'Scheduled deliveries must be at least 15 minutes from now', path: ['scheduledFor'] },
-  );
+  )
+  // A negotiation without a number is not a negotiation. The band is checked
+  // against the actual bill server-side too — this only catches the obvious.
+  .refine((d) => d.pricingDecision !== 'NEGOTIATE' || (d.askKobo ?? 0n) >= 10_000n, {
+    message: 'Enter the price you want to pay (at least ₦100)',
+    path: ['askKobo'],
+  });
 export type CreateDeliveryInput = z.infer<typeof createDeliverySchema>;
 
 /** POST /deliveries/package-photo — photograph the parcel before booking, get a key back. */
@@ -93,6 +110,24 @@ export type SendMessageInput = z.infer<typeof sendMessageSchema>;
 export const CHAT_OPEN_STATUSES = [
   'ASSIGNED', 'ACCEPTED', 'ARRIVED_AT_PICKUP', 'PICKED_UP', 'IN_TRANSIT', 'ARRIVED_AT_DESTINATION',
 ] as const;
+
+/**
+ * A rider asking for more than the number on the offer.
+ *
+ * Riders see the bill the customer was given and, when the customer haggled, the
+ * number they asked for. This is the third option: the rider's own figure. The
+ * customer decides, so nobody is ever charged a price they did not see.
+ */
+export const counterOfferSchema = z.object({
+  amountKobo: z.coerce.bigint().positive().min(10_000n, 'Ask for at least ₦100'),
+});
+export type CounterOfferInput = z.infer<typeof counterOfferSchema>;
+
+/** A customer turning down a rider's asking price. The offer itself stays open. */
+export const declineCounterSchema = z.object({
+  reason: z.string().trim().max(200).optional(),
+});
+export type DeclineCounterInput = z.infer<typeof declineCounterSchema>;
 
 export const cancelDeliverySchema = z.object({
   reason: z.string().trim().min(5, 'Give a short reason').max(300),

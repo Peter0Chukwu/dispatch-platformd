@@ -45,7 +45,9 @@ import {
   RequirePermission,
 } from "./routes/guards";
 import NotFoundPage from "./pages/NotFoundPage";
+import { DeliveryChatPage } from './pages/DeliveryChatPage';
 import { CallOverlay } from "./components/CallOverlay";
+import { MessageNotifier } from "./components/MessageNotifier";
 
 export default function App() {
   return (
@@ -54,6 +56,8 @@ export default function App() {
           screen instead of dying when they open their wallet mid-conversation. It
           draws nothing unless there is a call. */}
       <CallOverlay />
+      {/* Announce a message that arrives on a thread nobody is looking at. */}
+      <MessageNotifier />
       <Routes>
         {/* Public */}
         <Route path="/" element={<LandingPage />} />
@@ -133,6 +137,8 @@ export default function App() {
           <Route path="book" element={<BookDeliveryPage />} />
           <Route path="deliveries" element={<DeliveriesPage />} />
           <Route path="deliveries/:id" element={<DeliveryDetailPage />} />
+          {/* Accepting an offer lands both people in the thread for that job. */}
+          <Route path="deliveries/:id/chat" element={<DeliveryChatPage portal="Customer" />} />
           <Route path="wallet" element={<CustomerWalletPage />} />
           <Route path="settings" element={<SettingsPage portal="Customer" />} />
         </Route>
@@ -142,6 +148,7 @@ export default function App() {
           <Route index element={<RiderHome />} />
           <Route path="offers" element={<RiderOffersPage />} />
           <Route path="active" element={<RiderActiveJobPage />} />
+          <Route path="deliveries/:id/chat" element={<DeliveryChatPage portal="Rider" />} />
           <Route path="earnings" element={<RiderEarningsPage />} />
           <Route path="documents" element={<RiderDocumentsPage />} />
           <Route path="settings" element={<SettingsPage portal="Rider" />} />

@@ -12,7 +12,10 @@ import type { SavedLocation } from '../../lib/benin-city-locations';
 import { cn } from '../../lib/cn';
 import { useApiError } from '../../contexts/AuthContext';
 
-const STEPS = ['Pickup', 'Drop-off', 'Package', 'Review'] as const;
+const STEPS = ['From', 'To', 'Size', 'Bill'] as const;
+
+/** ₦ formatting for the negotiation box, which is typed in naira and sent in kobo. */
+const nairaOf = (kobo: bigint | number | string): number => Number(kobo) / 100;
 
 const DELIVERY_TYPES = [
   { value: 'STANDARD', label: 'Standard', hint: 'Same city, within a few hours' },
@@ -53,13 +56,17 @@ export default function BookDeliveryPage() {
   const [scheduledFor, setScheduledFor] = useState('');
   const [packageCategory, setPackageCategory] = useState('DOCUMENTS');
   const [packageDescription, setPackageDescription] = useState('');
-  const [packageWeightKg, setPackageWeightKg] = useState('');
   const [packagePhotoKey, setPackagePhotoKey] = useState<string | undefined>(undefined);
-  const [isFragile, setIsFragile] = useState(false);
-  const [specialInstructions, setSpecialInstructions] = useState('');
   const [promoCode, setPromoCode] = useState('');
   const [appliedPromo, setAppliedPromo] = useState<string | undefined>(undefined);
   const [acceptTerms, setAcceptTerms] = useState(false);
+  /**
+   * What the customer decided about the bill: take it, or name their own price.
+   * 'NONE' means they have not chosen yet — the bill step will not let them past
+   * without answering, because riders cannot be asked for a number nobody picked.
+   */
+  const [decision, setDecision] = useState<'NONE' | 'ACCEPT' | 'NEGOTIATE'>('NONE');
+  const [offerNaira, setOfferNaira] = useState('');
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   const bothLocated = pickup.lat !== null && destination.lat !== null;
@@ -109,11 +116,25 @@ export default function BookDeliveryPage() {
       }
     }
     if (index === 2) {
-      if (packageDescription.trim().length < 5) {
-        errors['packageDescription'] = 'Describe the package in a few words';
-      }
+      // A description and a photo are both optional now: the size is what prices
+      // the job, and asking for more than that is how a one-minute booking becomes
+      // a form people abandon.
       if (deliveryType === 'SCHEDULED' && !scheduledFor) {
         errors['scheduledFor'] = 'Choose when it should be collected';
+      }
+    }
+    if (index === 3) {
+      if (decision === 'NONE') {
+        errors['decision'] = 'Accept the bill, or tell us what you want to pay';
+      }
+      if (decision === 'NEGOTIATE') {
+        const offered = Number(offerNaira.replace(/,/g, ''));
+        if (!Number.isFinite(offered) || offered <= 0) {
+          errors['askKobo'] = 'Enter the amount you want to pay';
+        }
+      }
+      if (!acceptTerms) {
+        errors['acceptTerms'] = 'Tick the box to accept the delivery terms';
       }
     }
     setFieldErrors(errors);
@@ -147,22 +168,27 @@ export default function BookDeliveryPage() {
       },
       packageCategory,
       packageDescription,
-      packageWeightKg: packageWeightKg ? Number(packageWeightKg) : undefined,
       ...(packagePhotoKey ? { packagePhotoKey } : {}),
-      isFragile,
-      specialInstructions: specialInstructions || undefined,
       ...(deliveryType === 'SCHEDULED' && scheduledFor ? { scheduledFor: new Date(scheduledFor) } : {}),
       ...(appliedPromo ? { promoCode: appliedPromo } : {}),
       acceptTerms: true as const,
       paymentMethod: 'PAYSTACK' as const,
+      // The bill was on screen; this is the answer to it.
+      pricingDecision: decision === 'NEGOTIATE' ? ('NEGOTIATE' as const) : ('ACCEPT' as const),
+      ...(decision === 'NEGOTIATE'
+        ? { askKobo: BigInt(Math.round(Number(offerNaira.replace(/,/g, '')) * 100)) }
+        : {}),
     };
 
     try {
       const created = await createDelivery.mutateAsync(payload as never);
       notify({
         tone: 'success',
-        title: 'Booking created',
-        description: `${created.reference} — ${created.chargeFormatted}. Pay by card, transfer or from your wallet on the next screen.`,
+        title: decision === 'NEGOTIATE' ? 'Offer sent to riders' : 'Riders are being asked',
+        description:
+          decision === 'NEGOTIATE'
+            ? `${created.reference} — you offered ${formatNaira(created.pricing?.askKobo ?? created.chargeKobo)}. Riders who accept, counter, and you decide.`
+            : `${created.reference} — riders are being asked for ${created.chargeFormatted}. Pay once a rider accepts.`,
       });
       navigate(`/app/deliveries/${created.id}`);
     } catch (error) {
@@ -259,105 +285,41 @@ export default function BookDeliveryPage() {
               {step === 2 && (
                 <div className="space-y-5">
                   <div>
-                    <h3 className="text-base font-semibold text-ink-900">What are we carrying?</h3>
+                    <h3 className="text-base font-semibold text-ink-900">How big is it?</h3>
                     <p className="mt-0.5 text-xs text-ink-500">
-                      Fragile and bulky items need proper handling — tell us the truth and the rider comes prepared.
+                      This is what prices the trip along with the distance. Nothing else is required.
                     </p>
                   </div>
 
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <Field label="Category" required htmlFor="package-category">
-                      <Select
-                        id="package-category"
-                        value={packageCategory}
-                        options={PACKAGE_CATEGORIES.map((category) => ({
-                          value: category.value,
-                          label: category.label,
-                        }))}
-                        onChange={(event) => setPackageCategory(event.target.value)}
-                      />
-                    </Field>
-                    <Field label="Weight (kg)" hint="Optional — helps us plan the rider" htmlFor="package-weight">
-                      <Input
-                        id="package-weight"
-                        type="number"
-                        min={0}
-                        max={500}
-                        step="0.5"
-                        placeholder="e.g. 2.5"
-                        value={packageWeightKg}
-                        onChange={(event) => setPackageWeightKg(event.target.value)}
-                      />
-                    </Field>
-                  </div>
-
-                  <Field
-                    label="Photo of the parcel"
-                    hint="Optional, but it protects you: the rider knows exactly what they are collecting, and the photo settles any damage dispute."
-                  >
-                    <PackagePhotoInput value={packagePhotoKey} onChange={setPackagePhotoKey} />
-                  </Field>
-
-                  <Field
-                    label="What is inside?"
-                    required
-                    error={fieldErrors['packageDescription']}
-                    hint="A rider may open the package for a security check"
-                    htmlFor="package-description"
-                  >
-                    <Textarea
-                      id="package-description"
-                      rows={2}
-                      placeholder="e.g. One envelope with signed contracts"
-                      value={packageDescription}
-                      error={fieldErrors['packageDescription']}
-                      onChange={(event) => setPackageDescription(event.target.value)}
+                  <Field label="Size of the parcel" required htmlFor="package-category">
+                    <Select
+                      id="package-category"
+                      value={packageCategory}
+                      options={PACKAGE_CATEGORIES.map((category) => ({
+                        value: category.value,
+                        label: category.label,
+                      }))}
+                      onChange={(event) => setPackageCategory(event.target.value)}
                     />
                   </Field>
 
-                  <label className="flex items-start gap-2.5 rounded-xl border border-ink-200 p-3">
-                    <input
-                      type="checkbox"
-                      className="mt-0.5 h-4 w-4 rounded border-ink-300"
-                      checked={isFragile}
-                      onChange={(event) => setIsFragile(event.target.checked)}
-                    />
-                    <span>
-                      <span className="text-sm font-medium text-ink-800">This item is fragile</span>
-                      <span className="block text-xs text-ink-500">Riders handle it separately and confirm hand-over</span>
-                    </span>
-                  </label>
-
-                  <Field label="Special instructions" hint="Optional" htmlFor="package-instructions">
-                    <Textarea
-                      id="package-instructions"
-                      rows={2}
-                      placeholder="e.g. Call on arrival, gate 3"
-                      value={specialInstructions}
-                      onChange={(event) => setSpecialInstructions(event.target.value)}
-                    />
-                  </Field>
-
-                  <div>
-                    <h3 className="text-base font-semibold text-ink-900">How fast?</h3>
-                    <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                      {DELIVERY_TYPES.map((option) => (
-                        <button
-                          key={option.value}
-                          type="button"
-                          onClick={() => setDeliveryType(option.value)}
-                          className={cn(
-                            'rounded-xl border p-3 text-left transition-colors',
-                            deliveryType === option.value
-                              ? 'border-brand-500 bg-brand-50 ring-1 ring-brand-500/30'
-                              : 'border-ink-200 hover:border-ink-300',
-                          )}
-                        >
-                          <p className="text-sm font-semibold text-ink-900">{option.label}</p>
-                          <p className="text-xs text-ink-500">{option.hint}</p>
-                        </button>
-                      ))}
-                    </div>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {DELIVERY_TYPES.map((option) => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() => setDeliveryType(option.value)}
+                        className={cn(
+                          'rounded-xl border p-3 text-left transition-colors',
+                          deliveryType === option.value
+                            ? 'border-brand-500 bg-brand-50 ring-1 ring-brand-500/30'
+                            : 'border-ink-200 hover:border-ink-300',
+                        )}
+                      >
+                        <p className="text-sm font-semibold text-ink-900">{option.label}</p>
+                        <p className="text-xs text-ink-500">{option.hint}</p>
+                      </button>
+                    ))}
                   </div>
 
                   {deliveryType === 'SCHEDULED' && (
@@ -378,54 +340,139 @@ export default function BookDeliveryPage() {
                     </Field>
                   )}
 
-                  <div>
-                    <Field label="Promo code" hint="Optional" htmlFor="promo-code">
-                      <div className="flex gap-2">
-                        <Input
-                          id="promo-code"
-                          placeholder="e.g. LAGOS10"
-                          value={promoCode}
-                          onChange={(event) => setPromoCode(event.target.value.toUpperCase())}
-                        />
-                        <Button type="button" variant="secondary" onClick={applyPromo}>
-                          Apply
-                        </Button>
-                      </div>
-                    </Field>
+                  <Field
+                    label="Photo of the parcel"
+                    hint="Optional, but it protects you: the rider knows exactly what they are collecting, and the photo settles any damage dispute."
+                  >
+                    <PackagePhotoInput value={packagePhotoKey} onChange={setPackagePhotoKey} />
+                  </Field>
+
+                  <Field
+                    label="What is inside?"
+                    hint="Optional — a rider may open the package for a security check either way"
+                    htmlFor="package-description"
+                  >
+                    <Textarea
+                      id="package-description"
+                      rows={2}
+                      placeholder="e.g. A box of shoes"
+                      value={packageDescription}
+                      onChange={(event) => setPackageDescription(event.target.value)}
+                    />
+                  </Field>
+
+                  <details className="rounded-xl border border-ink-200 p-3">
+                    <summary className="cursor-pointer text-sm font-medium text-ink-800">Have a promo code?</summary>
+                    <div className="mt-3 flex gap-2">
+                      <Input
+                        placeholder="e.g. BENIN10"
+                        value={promoCode}
+                        onChange={(event) => setPromoCode(event.target.value.toUpperCase())}
+                      />
+                      <Button type="button" variant="secondary" onClick={applyPromo}>
+                        Apply
+                      </Button>
+                    </div>
                     {appliedPromo && (
                       <p className="mt-1.5 text-xs text-ink-500">
                         Applied <strong>{appliedPromo}</strong>
                         {quote?.promo ? ` — ${quote.promo.description}` : ''}
-                        {quoteError ? ' — could not be applied' : ''}
                       </p>
                     )}
-                  </div>
+                  </details>
                 </div>
               )}
 
               {step === 3 && (
                 <div className="space-y-4">
-                  <h3 className="text-base font-semibold text-ink-900">Check everything before you confirm</h3>
+                  <h3 className="text-base font-semibold text-ink-900">Your bill</h3>
+                  <p className="text-sm text-ink-500">
+                    Worked out from the distance and the size. Accept it and nearby riders are alerted straight away — or
+                    name your own price and they can take it, counter, or pass.
+                  </p>
 
                   <div className="grid gap-3 sm:grid-cols-2">
                     <SummaryBlock title="Collecting from" address={pickup.address} contact={`${pickup.contactName} · ${pickup.contactPhone}`} />
                     <SummaryBlock title="Delivering to" address={destination.address} contact={`${destination.contactName} · ${destination.contactPhone}`} />
                   </div>
 
-                  <div className="rounded-xl border border-ink-200 p-3 text-sm">
-                    <p className="font-medium text-ink-800">{packageDescription}</p>
-                    <p className="mt-0.5 text-xs text-ink-500">
-                      {packageCategory} · {DELIVERY_TYPES.find((t) => t.value === deliveryType)?.label}
-                      {isFragile ? ' · fragile' : ''}
-                      {packageWeightKg ? ` · ${packageWeightKg} kg` : ''}
-                    </p>
-                  </div>
-
-                  {quote?.promo && (
-                    <Alert tone="success" title={`Promo ${quote.promo.code} applied`}>
-                      {quote.promo.description} — you save {formatNaira(quote.promo.discountKobo)}.
-                    </Alert>
+                  {quote && (
+                    <div className="rounded-xl border border-brand-200 bg-brand-50/50 p-4">
+                      <PriceBreakdown
+                        lines={quote.lines}
+                        totalKobo={quote.totalKobo}
+                        meta={{
+                          distanceKm: quote.distanceKm,
+                          durationMinutes: quote.durationMinutes,
+                          routeSource: quote.routeSource,
+                          zoneName: quote.zone?.name,
+                        }}
+                      />
+                    </div>
                   )}
+
+                  {quote && (
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <button
+                        type="button"
+                        onClick={() => setDecision('ACCEPT')}
+                        className={cn(
+                          'rounded-xl border p-3 text-left transition-colors',
+                          decision === 'ACCEPT'
+                            ? 'border-brand-500 bg-brand-50 ring-1 ring-brand-500/30'
+                            : 'border-ink-200 hover:border-ink-300',
+                        )}
+                      >
+                        <p className="text-sm font-semibold text-ink-900">Accept the bill</p>
+                        <p className="text-xs text-ink-500">Riders see {formatNaira(quote.totalKobo)}</p>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDecision('NEGOTIATE');
+                          if (!offerNaira) setOfferNaira(String(nairaOf(quote.totalKobo)));
+                        }}
+                        className={cn(
+                          'rounded-xl border p-3 text-left transition-colors',
+                          decision === 'NEGOTIATE'
+                            ? 'border-brand-500 bg-brand-50 ring-1 ring-brand-500/30'
+                            : 'border-ink-200 hover:border-ink-300',
+                        )}
+                      >
+                        <p className="text-sm font-semibold text-ink-900">Negotiate</p>
+                        <p className="text-xs text-ink-500">Name the price you want to pay</p>
+                      </button>
+                    </div>
+                  )}
+
+                  {decision === 'NEGOTIATE' && quote && (
+                    <div className="space-y-2 rounded-xl border border-ink-200 p-3">
+                      <Field
+                        label="What do you want to pay?"
+                        required
+                        error={fieldErrors['askKobo']}
+                        hint={`Riders see this instead of the bill. Between ${formatNaira(Number(quote.totalKobo) / 2)} and ${formatNaira(Number(quote.totalKobo) * 3)}.`}
+                        htmlFor="ask-amount"
+                      >
+                        <Input
+                          id="ask-amount"
+                          type="number"
+                          inputMode="decimal"
+                          min={0}
+                          step="50"
+                          value={offerNaira}
+                          error={fieldErrors['askKobo']}
+                          onChange={(event) => setOfferNaira(event.target.value)}
+                        />
+                      </Field>
+                      <p className="text-xs text-ink-500">
+                        A rider may accept this, ask for more, or pass. You decide on any price they ask for — nothing is
+                        charged until a rider has the job.
+                      </p>
+                    </div>
+                  )}
+
+                  {fieldErrors['decision'] && <p className="text-xs font-medium text-danger-700">{fieldErrors['decision']}</p>}
 
                   <label className="flex items-start gap-2.5 rounded-xl border border-ink-200 p-3">
                     <input
@@ -453,11 +500,17 @@ export default function BookDeliveryPage() {
                   <Button onClick={next}>Continue</Button>
                 ) : (
                   <Button
-                    onClick={submit}
+                    onClick={() => {
+                      if (validateStep(3)) void submit();
+                    }}
                     isLoading={createDelivery.isPending}
-                    disabled={!quote || !acceptTerms}
+                    disabled={!quote || decision === 'NONE' || !acceptTerms}
                   >
-                    Confirm booking{quote ? ` — ${formatNaira(quote.totalKobo)}` : ''}
+                    {decision === 'NEGOTIATE'
+                      ? `Offer ${offerNaira ? `₦${Number(offerNaira.replace(/,/g, '')).toLocaleString('en-NG')}` : 'your price'} to riders`
+                      : quote
+                        ? `Accept and alert riders — ${formatNaira(quote.totalKobo)}`
+                        : 'Send to riders'}
                   </Button>
                 )}
               </div>

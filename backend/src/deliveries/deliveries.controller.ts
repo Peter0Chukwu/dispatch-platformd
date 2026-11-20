@@ -3,11 +3,13 @@ import {
   DeliveryStatus,
   cancelDeliverySchema,
   createDeliverySchema,
+  declineCounterSchema,
   packagePhotoSchema,
   quoteDeliverySchema,
   type CreateDeliveryInput,
   type PackagePhotoInput,
   type QuoteDeliveryInput,
+  type DeclineCounterInput,
 } from '@dispatch/shared';
 import type { z } from 'zod';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
@@ -16,6 +18,7 @@ import { RequireType } from '../auth/decorators/require-type.decorator';
 import { RateLimit } from '../common/rate-limit/rate-limit.decorator';
 import type { AuthPrincipal } from '../auth/auth.types';
 import { DeliveriesService } from './deliveries.service';
+import { DispatchService } from '../dispatch/dispatch.service';
 
 /**
  * Customer-facing delivery API.
@@ -26,7 +29,10 @@ import { DeliveriesService } from './deliveries.service';
 @Controller('deliveries')
 @RequireType('CUSTOMER')
 export class DeliveriesController {
-  constructor(private readonly deliveries: DeliveriesService) {}
+  constructor(
+    private readonly deliveries: DeliveriesService,
+    private readonly dispatch: DispatchService,
+  ) {}
 
   /** Price preview — deliberately cheap and repeatable: the UI calls it as the pin moves. */
   @Post('quote')
@@ -87,6 +93,45 @@ export class DeliveriesController {
     @Param('id', new ParseUUIDPipe()) id: string,
   ) {
     return this.deliveries.getMine(customerId, id);
+  }
+
+  /**
+   * THE BILL AND THE HAGGLING, on the customer's own page.
+   *
+   * `quotedKobo` is what the platform billed, `askKobo` is what the customer is
+   * asking riders to accept, and every rider who named a price of their own appears
+   * with it. Accepting one assigns that rider; declining leaves their offer open at
+   * the asking price, so a refusal never costs the customer a rider.
+   */
+  @Get(':id/offers')
+  offers(
+    @CurrentUser('customerId') customerId: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ) {
+    return this.dispatch.offersForCustomer(customerId, id);
+  }
+
+  @Post(':id/offers/:assignmentId/accept')
+  @RateLimit({ points: 30, windowSeconds: 60, keyBy: 'ip+route' })
+  acceptOfferPrice(
+    @CurrentUser('customerId') customerId: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('assignmentId', new ParseUUIDPipe()) assignmentId: string,
+  ) {
+    void id;
+    return this.dispatch.acceptCounter(customerId, assignmentId);
+  }
+
+  @Post(':id/offers/:assignmentId/decline')
+  @RateLimit({ points: 30, windowSeconds: 60, keyBy: 'ip+route' })
+  declineOfferPrice(
+    @CurrentUser('customerId') customerId: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('assignmentId', new ParseUUIDPipe()) assignmentId: string,
+    @Body(new ZodValidationPipe(declineCounterSchema)) input: DeclineCounterInput,
+  ) {
+    void id;
+    return this.dispatch.declineCounter(customerId, assignmentId, input.reason);
   }
 
   @Post(':id/cancel')

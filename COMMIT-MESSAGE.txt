@@ -1,18 +1,30 @@
-config: say out loud where email links point, and check it against CORS
+feat(booking): three questions, a bill, and a price both sides can argue with
 
-Two outages came from the same pair of variables, so the platform now states the
-answer instead of leaving it to be discovered in an inbox. At boot:
+Booking is now from, to and size. The platform prices it and shows the bill, and the
+customer answers it: accept it, or name their own number. Whichever they pick is what
+nearby online riders are alerted for — nothing is charged until somebody takes the job.
 
-  Email links will point at: https://traderswelfarelogistics.online
+On the rider's card the two numbers are both visible when they differ: the bill the
+customer was given, and what the customer is offering. A rider can take the asking
+price or ask for more, and that price goes to the customer, who accepts it (that
+rider gets the job at that number) or declines it (the offer stays open at the
+asking price, so a refusal never costs a customer a rider).
 
-and a warning if that address is not in CORS_ORIGINS — the case where the link
-opens fine but the page it lands on cannot sign anyone in. GET /health carries the
-same value as integrations.site, so it can be checked without logs.
+Acceptance now has exactly one path. A rider tapping Accept and a customer accepting a
+rider's price both go through DispatchService.conclude, so 'one winner per delivery',
+'commission frozen on the agreed number', 'losing riders told' and 'rider marked
+busy' are true once rather than true twice. chargeKobo is replaced with the agreed
+amount in that same transaction: the number agreed is the number charged.
 
-Underneath: FRONTEND_URL may hold a list by mistake, and only its first filled-in
-entry is used, both for email links and for the payment return URL. The existing
-frontendUrl getter returned the raw string, which is how a comma ended up in a
-link.
+Both bands are enforced server-side and explained in naira: a customer may offer
+between half and three times the bill, a rider may ask for between one kobo and three
+times the asking price. The rounding helper was wrong by a factor of 100 (50 kobo is
+not N50) and the test caught it.
 
-Five tests on the helper (104 total, no database); typecheck clean.
+Accepting sends both people to the thread for that delivery
+(/app/deliveries/:id/chat, /rider/deliveries/:id/chat) — the same ContactCard as
+before, no phone numbers, still no inbox.
+
+Migration 20261119120000_price_negotiation adds the money columns and CounterState.
+118 tests (13 files), typecheck clean both sides, production build clean.
 

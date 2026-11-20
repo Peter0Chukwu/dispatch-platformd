@@ -49,6 +49,17 @@ export interface Delivery {
   recipient: { name: string; phone: string };
   package: { category: string; description: string; weightKg: number | null; isFragile: boolean; specialInstructions: string | null };
   scheduledFor: string | null;
+  /** The bill, the customer's asking price, and what was finally agreed. */
+  pricing?: {
+    quotedKobo: string;
+    quotedFormatted: string;
+    askKobo: string;
+    askFormatted: string;
+    isNegotiated: boolean;
+    agreedKobo: string | null;
+    agreedFormatted: string | null;
+    agreedBasis: string | null;
+  };
   chargeKobo: string;
   discountKobo: string;
   codAmountKobo: string;
@@ -115,6 +126,76 @@ export function useCancelDelivery(id: string) {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['deliveries'] });
       void queryClient.invalidateQueries({ queryKey: ['delivery', id] });
+    },
+  });
+}
+
+
+/* ───────────────────────── the bill and the haggling ───────────────────────── */
+
+export interface DeliveryOffer {
+  assignmentId: string;
+  riderName: string;
+  riderCode: string;
+  status: string;
+  counterKobo: string | null;
+  counterState: 'NONE' | 'PENDING' | 'DECLINED' | 'ACCEPTED';
+  agreedKobo: string | null;
+  offeredAt: string;
+  expiresAt: string;
+}
+
+export interface DeliveryOffers {
+  deliveryId: string;
+  reference: string;
+  status: string;
+  quotedKobo: string;
+  askKobo: string;
+  isNegotiated: boolean;
+  chargeKobo: string;
+  agreedKobo: string | null;
+  agreedBasis: string | null;
+  ridersAsked: number;
+  pendingCount: number;
+  offers: DeliveryOffer[];
+}
+
+/** Who was asked, and who named a price. Polled while the job is on the board. */
+export function useDeliveryOffers(id: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: ['delivery', id, 'offers'],
+    queryFn: () => api.get<DeliveryOffers>(`/deliveries/${id}/offers`),
+    enabled: !!id && enabled,
+    refetchInterval: enabled ? 5000 : false,
+    staleTime: 0,
+  });
+}
+
+/** Accept a rider's price. That rider gets the job at that number. */
+export function useAcceptOfferPrice(id: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (assignmentId: string) =>
+      api.post<{ accepted: boolean; deliveryId: string; agreedKobo: string }>(
+        `/deliveries/${id}/offers/${assignmentId}/accept`,
+        {},
+      ),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['delivery', id] });
+      void queryClient.invalidateQueries({ queryKey: ['delivery', id, 'offers'] });
+      void queryClient.invalidateQueries({ queryKey: ['deliveries'] });
+    },
+  });
+}
+
+/** Turn a rider's price down. Their offer stays open at the price you asked. */
+export function useDeclineOfferPrice(id: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (assignmentId: string) =>
+      api.post<{ declined: boolean }>(`/deliveries/${id}/offers/${assignmentId}/decline`, {}),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['delivery', id, 'offers'] });
     },
   });
 }

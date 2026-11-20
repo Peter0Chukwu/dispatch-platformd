@@ -12,6 +12,7 @@ import { PrismaService } from '../infra/prisma/prisma.service';
 import { AppError } from '../common/errors/app-error';
 import { PricingService, type Quote } from '../pricing/pricing.service';
 import { DispatchService } from '../dispatch/dispatch.service';
+import { checkAsk, lowestAsk } from '../dispatch/price-bands';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { StorageService } from '../storage/storage.service';
 import type { AuthPrincipal } from '../auth/auth.types';
@@ -79,6 +80,11 @@ function toDeliveryDto(delivery: {
   isFragile: boolean;
   specialInstructions: string | null;
   scheduledFor: Date | null;
+  quotedKobo?: bigint | null;
+  askKobo?: bigint | null;
+  agreedKobo?: bigint | null;
+  agreedBasis?: string | null;
+  isNegotiated?: boolean;
   chargeKobo: bigint;
   discountKobo: bigint;
   codAmountKobo: bigint;
@@ -120,6 +126,21 @@ function toDeliveryDto(delivery: {
     },
     scheduledFor: delivery.scheduledFor,
     chargeKobo: delivery.chargeKobo.toString(),
+    /**
+     * The money conversation, in the open. `quoted` is the platform bill, `ask` is
+     * what the customer offered riders, `agreed` is what was finally accepted —
+     * null until a rider and the customer settled on a number.
+     */
+    pricing: {
+      quotedKobo: (delivery.quotedKobo ?? delivery.chargeKobo).toString(),
+      quotedFormatted: formatNaira(delivery.quotedKobo ?? delivery.chargeKobo),
+      askKobo: (delivery.askKobo ?? delivery.chargeKobo).toString(),
+      askFormatted: formatNaira(delivery.askKobo ?? delivery.chargeKobo),
+      isNegotiated: delivery.isNegotiated ?? false,
+      agreedKobo: delivery.agreedKobo?.toString() ?? null,
+      agreedFormatted: delivery.agreedKobo ? formatNaira(delivery.agreedKobo) : null,
+      agreedBasis: delivery.agreedBasis ?? null,
+    },
     discountKobo: delivery.discountKobo.toString(),
     codAmountKobo: delivery.codAmountKobo.toString(),
     chargeFormatted: formatNaira(delivery.chargeKobo),
@@ -227,6 +248,28 @@ export class DeliveriesService {
       customerId,
     });
 
+    // WHAT THE CUSTOMER DECIDED WHEN THE BILL APPEARED.
+    //
+    // The bill is always computed server-side. Accepting it means riders are asked
+    // for exactly that number. Negotiating means riders are asked for the customer's
+    // own figure — but only inside a band, because a customer asking ₦10 for a
+    // cross-town run is not a negotiation, it is a way to waste every rider's time.
+    const quotedKobo = BigInt(quote.totalKobo);
+    const negotiating = input.pricingDecision === 'NEGOTIATE' && !!input.askKobo;
+
+    if (negotiating) {
+      const band = checkAsk(quotedKobo, input.askKobo!);
+      if (!band.ok) {
+        throw AppError.rule(band.message, input.askKobo! < lowestAsk(quotedKobo) ? 'ASK_TOO_LOW' : 'ASK_TOO_HIGH');
+      }
+    }
+
+    const askKobo = negotiating ? input.askKobo! : quotedKobo;
+    // A description is optional now; the category still tells the rider what to
+    // expect, so an empty box never reaches the database empty.
+    const packageDescription =
+      input.packageDescription?.trim() || `${input.packageCategory.replace(/_/g, ' ').toLowerCase()} parcel`;
+
     const branchId = await this.pricing.defaultBranchId();
     const snapshot = toPriceSnapshot(quote);
     // The completion OTP is generated now and locked away hashed; the rider types
@@ -265,14 +308,20 @@ export class DeliveriesService {
           recipientName: input.destination.contactName,
           recipientPhone: input.destination.contactPhone,
           packageCategory: input.packageCategory,
-          packageDescription: input.packageDescription,
+          packageDescription,
           packageWeightKg: input.packageWeightKg,
           packagePhotoKey: input.packagePhotoKey,
           isFragile: input.isFragile,
           declaredValueKobo: input.declaredValueKobo,
           specialInstructions: input.specialInstructions,
           scheduledFor: input.scheduledFor,
-          chargeKobo: BigInt(quote.totalKobo),
+          // The amount payable starts as the asking price. It is replaced with the
+          // agreed figure the moment a deal is struck (see DispatchService.conclude),
+          // which is the only number that is ever charged.
+          chargeKobo: askKobo,
+          quotedKobo,
+          askKobo,
+          isNegotiated: negotiating,
           discountKobo: BigInt(quote.discountKobo),
           codAmountKobo: input.codAmountKobo,
           priceSnapshot: snapshot as unknown as Prisma.InputJsonObject,
@@ -280,7 +329,7 @@ export class DeliveriesService {
           otpExpiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
           items: {
             create: {
-              description: input.packageDescription,
+              description: packageDescription,
               quantity: 1,
               weightKg: input.packageWeightKg,
               declaredValueKobo: input.declaredValueKobo,
@@ -319,7 +368,9 @@ export class DeliveriesService {
     });
 
     this.logger.log(
-      `Delivery ${delivery.reference} created for ${formatNaira(delivery.chargeKobo)} (${quote.distanceKm} km)`,
+      `Delivery ${delivery.reference} created for ${formatNaira(delivery.chargeKobo)} (${quote.distanceKm} km)${
+        negotiating ? ` — customer offered ${formatNaira(askKobo)} against a ${formatNaira(quotedKobo)} bill` : ''
+      }`,
     );
 
     // The dispatch desk hears about it immediately, before any rider does.

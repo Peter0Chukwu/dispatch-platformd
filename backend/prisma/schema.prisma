@@ -115,6 +115,21 @@ enum DeliveryPaymentStatus {
   FAILED
 }
 
+/**
+ * What a rider did with the money on an offer.
+ *
+ * NONE      — they have not named a price.
+ * PENDING   — they asked for more; the customer has not answered yet.
+ * DECLINED  — the customer said no. The offer itself stays open, so the rider can
+ *             still take the job at the asking price.
+ */
+enum CounterState {
+  NONE
+  PENDING
+  DECLINED
+  ACCEPTED
+}
+
 enum AssignmentStatus {
   OFFERED
   ACCEPTED
@@ -768,6 +783,18 @@ model Delivery {
   specialInstructions String?
 
   scheduledFor       DateTime?
+  /// The bill the platform calculated for this route, before anybody haggled.
+  quotedKobo         BigInt?
+  /// What the customer is asking riders to accept: equal to quotedKobo when they
+  /// simply said yes, their own figure when they negotiated.
+  askKobo            BigInt?
+  /// True when the customer pushed back on the bill, so riders see two numbers.
+  isNegotiated       Boolean   @default(false)
+  /// What was finally agreed — the amount the customer pays and commission is cut
+  /// from. Null while the job is still on the board.
+  agreedKobo         BigInt?
+  /// Which number the deal was struck on: QUOTE | ASK | COUNTER.
+  agreedBasis        String?
   chargeKobo         BigInt
   discountKobo       BigInt    @default(0)
   codAmountKobo      BigInt    @default(0)
@@ -868,6 +895,15 @@ model DeliveryAssignment {
   offeredAt       DateTime         @default(now())
   expiresAt       DateTime
   respondedAt     DateTime?
+  /// The price this rider asked for, when they asked for more than the customer's
+  /// number. Kept after a refusal: the customer's page shows what was turned down,
+  /// and a re-offer must not look like a fresh demand.
+  counterKobo     BigInt?
+  counterState    CounterState     @default(NONE)
+  counteredAt     DateTime?
+  /// The amount this rider finally agreed to, and which of the three numbers it was.
+  agreedKobo      BigInt?
+  agreedBasis     String?
   rejectionReason String?
   assignedById    String?          @db.Uuid
   createdAt       DateTime         @default(now())

@@ -12,6 +12,11 @@ export type ErrorCode =
   | 'PROMO_INVALID'
   | 'OFFER_EXPIRED'
   | 'OFFER_TAKEN'
+  | 'ASK_TOO_LOW'
+  | 'ASK_TOO_HIGH'
+  | 'COUNTER_TOO_LOW'
+  | 'COUNTER_TOO_HIGH'
+  | 'COUNTER_GONE'
   | 'DELIVERY_TAKEN'
   | 'RIDER_BUSY'
   | 'RIDER_NOT_APPROVED'
@@ -72,6 +77,14 @@ export class AppError extends HttpException {
   }
   static conflict(message: string, code: ErrorCode = 'CONFLICT') {
     return new AppError(code, message, HttpStatus.CONFLICT);
+  }
+  /**
+   * A rule was broken by a request that was well-formed. The message is written for
+   * the person who broke it — "the lowest offer for this route is ₦1,200", not
+   * "validation failed".
+   */
+  static rule(message: string, code: ErrorCode = 'VALIDATION_FAILED') {
+    return new AppError(code, message, HttpStatus.UNPROCESSABLE_ENTITY);
   }
   static validation(details: ErrorDetail[]) {
     return new AppError('VALIDATION_FAILED', 'Some fields need your attention', HttpStatus.UNPROCESSABLE_ENTITY, details);

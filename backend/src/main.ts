@@ -10,6 +10,7 @@ import { AppConfig } from './config/app.config';
 import { registerIndexPage } from './common/api-index-page';
 import { decideCorsOrigin } from './common/cors';
 import { MessagingService } from './messaging/messaging.service';
+import { pageRedirectTarget } from './common/page-fallback';
 
 async function bootstrap(): Promise<void> {
   // `rawBody` is what makes payment webhook signature verification possible: the
@@ -77,6 +78,23 @@ async function bootstrap(): Promise<void> {
   // All request bodies/queries are validated by Zod schemas shared with the
   // frontend (see common/decorators/zod.decorators.ts). Zod strips unknown keys
   // by default, which gives us the same whitelist behaviour.
+
+  // A browser asking this service for a page has landed on the wrong host: the
+  // domain is attached to the API rather than to nginx. Answer with the page they
+  // wanted instead of a JSON 404. See common/page-fallback.ts.
+  const express = app.getHttpAdapter().getInstance();
+  express.use((req, res, next) => {
+    const target = pageRedirectTarget({
+      method: req.method,
+      accept: req.headers.accept,
+      path: req.originalUrl,
+      host: req.headers.host,
+      siteOrigin: config.frontendUrl,
+    });
+    if (!target) return next();
+    logger.warn(`${req.originalUrl} is a page, not an API route — sending the browser to ${config.frontendUrl}`);
+    return res.redirect(302, target);
+  });
 
   app.enableShutdownHooks();
 

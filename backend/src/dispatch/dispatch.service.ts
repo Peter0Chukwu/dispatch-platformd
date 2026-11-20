@@ -8,6 +8,7 @@ import { AppError } from '../common/errors/app-error';
 import { haversineKm } from '../pricing/distance';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { MessagingService } from '../messaging/messaging.service';
+import { checkCounter } from './price-bands';
 
 /** Ignore riders whose last location is older than this when ranking candidates. */
 /** How old a rider's last position may be before dispatch treats them as unlocatable. */
@@ -532,6 +533,9 @@ export class DispatchService {
             reference: true,
             deliveryType: true,
             chargeKobo: true,
+            quotedKobo: true,
+            askKobo: true,
+            isNegotiated: true,
             distanceKm: true,
             durationMinutes: true,
             pickupAddress: true,
@@ -554,7 +558,11 @@ export class DispatchService {
     const commissionPct = this.config.commissionPercent;
     return assignments.map((assignment) => {
       const delivery = assignment.delivery;
-      const commissionKobo = percentOfKobo(delivery.chargeKobo, commissionPct, 50);
+      // The number the rider is being asked to accept: the customer's asking price,
+      // which is the platform bill unless the customer negotiated it down.
+      const askKobo = delivery.askKobo ?? delivery.chargeKobo;
+      const quotedKobo = delivery.quotedKobo ?? delivery.chargeKobo;
+      const commissionKobo = percentOfKobo(askKobo, commissionPct, 50);
       return {
         assignmentId: assignment.id,
         offeredAt: assignment.offeredAt,
@@ -584,13 +592,27 @@ export class DispatchService {
           },
           recipientName: delivery.recipientName,
         },
+        /**
+         * The two numbers the rider needs to make a decision — and the third they
+         * can propose. `quotedKobo` is what the platform billed; `askKobo` is what
+         * the customer has offered. They differ only when the customer negotiated.
+         */
+        money: {
+          quotedKobo: quotedKobo.toString(),
+          quotedFormatted: formatNaira(quotedKobo),
+          askKobo: askKobo.toString(),
+          askFormatted: formatNaira(askKobo),
+          isNegotiated: delivery.isNegotiated,
+          counterKobo: assignment.counterKobo?.toString() ?? null,
+          counterState: assignment.counterState,
+        },
         pay: {
-          chargeKobo: delivery.chargeKobo.toString(),
+          chargeKobo: askKobo.toString(),
           commissionPct,
           commissionKobo: commissionKobo.toString(),
-          /** What the rider takes home. */
-          netKobo: (delivery.chargeKobo - commissionKobo).toString(),
-          netFormatted: formatNaira(delivery.chargeKobo - commissionKobo),
+          /** What the rider takes home if they accept the asking price. */
+          netKobo: (askKobo - commissionKobo).toString(),
+          netFormatted: formatNaira(askKobo - commissionKobo),
         },
       };
     });
@@ -598,8 +620,257 @@ export class DispatchService {
 
   /**
    * Accept an offer. Exactly one rider can win, no matter how many tap at once.
+   *
+   * The amount agreed is the number on the card the rider just tapped: the
+   * customer's asking price. A customer accepting a rider's own price comes through
+   * {@link acceptCounter} instead, and both share {@link conclude} — the rules that
+   * make an acceptance safe (one winner, frozen commission, rivals told, rider
+   * marked busy) exist once.
    */
   async accept(riderId: string, assignmentId: string) {
+    const assignment = await this.prisma.deliveryAssignment.findUnique({
+      where: { id: assignmentId },
+      select: {
+        riderId: true,
+        delivery: {
+          select: { quotedKobo: true, askKobo: true, chargeKobo: true, isNegotiated: true },
+        },
+      },
+    });
+    if (!assignment || assignment.riderId !== riderId) throw AppError.notFound('Offer');
+
+    const agreedKobo = assignment.delivery.askKobo ?? assignment.delivery.chargeKobo;
+    return this.conclude({
+      assignmentId,
+      agreedKobo,
+      basis: assignment.delivery.isNegotiated ? 'ASK' : 'QUOTE',
+      actor: 'RIDER',
+      expectedRiderId: riderId,
+      requireLiveOffer: true,
+    });
+  }
+
+  /**
+   * A rider asking for more than the number on the offer.
+   *
+   * Deliberately not an acceptance: nothing is charged and nobody is assigned. The
+   * customer is told, and answers with accept or decline. A rider who asks for less
+   * than the asking price is told to take the job instead — silently charging the
+   * customer less than they offered would be a bug dressed as a favour.
+   */
+  async counter(riderId: string, assignmentId: string, amountKobo: bigint) {
+    const assignment = await this.prisma.deliveryAssignment.findUnique({
+      where: { id: assignmentId },
+      include: {
+        delivery: {
+          select: {
+            id: true,
+            reference: true,
+            customerId: true,
+            status: true,
+            askKobo: true,
+            chargeKobo: true,
+            quotedKobo: true,
+            isNegotiated: true,
+          },
+        },
+        rider: { select: { riderCode: true, user: { select: { firstName: true, lastName: true } } } },
+      },
+    });
+    if (!assignment || assignment.riderId !== riderId) throw AppError.notFound('Offer');
+    if (assignment.status !== 'OFFERED') {
+      throw AppError.conflict('That offer is no longer open.', 'OFFER_EXPIRED');
+    }
+    if (assignment.delivery.status !== 'PENDING') {
+      throw AppError.conflict('That delivery already has a rider.', 'DELIVERY_TAKEN');
+    }
+    if (assignment.expiresAt.getTime() <= Date.now()) {
+      throw AppError.conflict('That offer has expired. New jobs will appear here.', 'OFFER_EXPIRED');
+    }
+
+    const ask = assignment.delivery.askKobo ?? assignment.delivery.chargeKobo;
+    const band = checkCounter(ask, amountKobo);
+    if (!band.ok) {
+      throw AppError.rule(
+        band.message,
+        amountKobo <= ask ? 'COUNTER_TOO_LOW' : 'COUNTER_TOO_HIGH',
+      );
+    }
+
+    await this.prisma.deliveryAssignment.update({
+      where: { id: assignmentId },
+      data: { counterKobo: amountKobo, counterState: 'PENDING', counteredAt: new Date() },
+    });
+
+    // The customer's phone is where this is answered, so tell it. The payload only
+    // says "something changed"; the page refetches and asks the server for the real
+    // number, so a stale socket can never invent a price.
+    this.realtime.counterOffered(assignment.delivery.customerId, {
+      deliveryId: assignment.delivery.id,
+      reference: assignment.delivery.reference,
+      assignmentId,
+      askFormatted: formatNaira(ask),
+      counterFormatted: formatNaira(amountKobo),
+      at: new Date().toISOString(),
+    });
+
+    this.logger.log(
+      `Rider ${assignment.rider.riderCode} countered ${assignment.delivery.reference} at ${formatNaira(amountKobo)} (asked ${formatNaira(ask)})`,
+    );
+
+    return {
+      countered: true,
+      askKobo: ask.toString(),
+      counterKobo: amountKobo.toString(),
+      askFormatted: formatNaira(ask),
+      counterFormatted: formatNaira(amountKobo),
+      message: 'The customer has been told. You will see their answer here.',
+    };
+  }
+
+  /**
+   * The customer accepting a rider's price. That rider gets the job at that number,
+   * and every other rider is told it is gone.
+   */
+  async acceptCounter(customerId: string, assignmentId: string) {
+    const assignment = await this.prisma.deliveryAssignment.findUnique({
+      where: { id: assignmentId },
+      include: {
+        delivery: { select: { customerId: true, quotedKobo: true, askKobo: true, chargeKobo: true } },
+      },
+    });
+    // A customer may only ever answer a counter on their own delivery, and a
+    // delivery that is not theirs must read as "not found" — not "forbidden",
+    // which would confirm the id exists.
+    if (!assignment || assignment.delivery.customerId !== customerId) {
+      throw AppError.notFound('Offer');
+    }
+    if (assignment.counterState !== 'PENDING' || assignment.counterKobo === null) {
+      throw AppError.conflict('That price is no longer on the table.', 'COUNTER_GONE');
+    }
+    if (assignment.status !== 'OFFERED') {
+      throw AppError.conflict('That rider is no longer available for this job.', 'OFFER_EXPIRED');
+    }
+
+    return this.conclude({
+      assignmentId,
+      agreedKobo: assignment.counterKobo,
+      basis: 'COUNTER',
+      actor: 'CUSTOMER',
+      expectedRiderId: assignment.riderId,
+      requireLiveOffer: false,
+    });
+  }
+
+  /**
+   * The customer turning a rider's price down. Nothing is assigned: the rider's
+   * offer stays open at the asking price, so they can still take the job at the
+   * number they were originally shown.
+   */
+  async declineCounter(customerId: string, assignmentId: string, reason?: string) {
+    const assignment = await this.prisma.deliveryAssignment.findUnique({
+      where: { id: assignmentId },
+      include: { delivery: { select: { customerId: true, id: true, reference: true } } },
+    });
+    if (!assignment || assignment.delivery.customerId !== customerId) {
+      throw AppError.notFound('Offer');
+    }
+    if (assignment.counterState !== 'PENDING') {
+      throw AppError.conflict('That price is no longer on the table.', 'COUNTER_GONE');
+    }
+
+    await this.prisma.deliveryAssignment.update({
+      where: { id: assignmentId },
+      data: { counterState: 'DECLINED', respondedAt: new Date(), rejectionReason: reason ?? null },
+    });
+
+    this.realtime.counterAnswered(assignment.riderId, {
+      deliveryId: assignment.delivery.id,
+      assignmentId,
+      answer: 'DECLINED',
+      at: new Date().toISOString(),
+    });
+
+    return {
+      declined: true,
+      message: 'Rider told. Their offer stays open at the price you asked.',
+    };
+  }
+
+  /**
+   * What the customer sees while riders are being asked: the bill, their asking
+   * price, and every rider who named a price of their own. Names and rider codes
+   * only — no phone numbers, ever.
+   */
+  async offersForCustomer(customerId: string, deliveryId: string) {
+    const delivery = await this.prisma.delivery.findFirst({
+      where: { id: deliveryId, customerId },
+      select: {
+        id: true,
+        reference: true,
+        status: true,
+        quotedKobo: true,
+        askKobo: true,
+        isNegotiated: true,
+        chargeKobo: true,
+        agreedKobo: true,
+        agreedBasis: true,
+        riderId: true,
+      },
+    });
+    if (!delivery) throw AppError.notFound('Delivery');
+
+    const rows = await this.prisma.deliveryAssignment.findMany({
+      where: { deliveryId },
+      orderBy: { offeredAt: 'desc' },
+      include: { rider: { select: { riderCode: true, user: { select: { firstName: true, lastName: true } } } } },
+    });
+
+    const pending = rows.filter((row) => row.counterState === 'PENDING' && row.status === 'OFFERED');
+    return {
+      deliveryId: delivery.id,
+      reference: delivery.reference,
+      status: delivery.status,
+      quotedKobo: (delivery.quotedKobo ?? delivery.chargeKobo).toString(),
+      askKobo: (delivery.askKobo ?? delivery.chargeKobo).toString(),
+      isNegotiated: delivery.isNegotiated,
+      chargeKobo: delivery.chargeKobo.toString(),
+      agreedKobo: delivery.agreedKobo?.toString() ?? null,
+      agreedBasis: delivery.agreedBasis,
+      ridersAsked: rows.filter((row) => row.status === 'OFFERED').length,
+      pendingCount: pending.length,
+      offers: rows
+        .filter((row) => row.status !== 'REJECTED')
+        .map((row) => ({
+          assignmentId: row.id,
+          riderName: `${row.rider.user.firstName} ${row.rider.user.lastName}`.trim(),
+          riderCode: row.rider.riderCode,
+          status: row.status,
+          counterKobo: row.counterKobo?.toString() ?? null,
+          counterState: row.counterState,
+          agreedKobo: row.agreedKobo?.toString() ?? null,
+          offeredAt: row.offeredAt,
+          expiresAt: row.expiresAt,
+        })),
+    };
+  }
+
+  /**
+   * The one place a delivery gets a rider.
+   *
+   * Both routes into it — a rider tapping Accept, a customer accepting a rider's
+   * price — pass through here, so "exactly one winner" and "the commission is
+   * frozen on the agreed number" are true for both rather than true twice.
+   */
+  private async conclude(input: {
+    assignmentId: string;
+    agreedKobo: bigint;
+    basis: 'QUOTE' | 'ASK' | 'COUNTER';
+    actor: 'RIDER' | 'CUSTOMER';
+    expectedRiderId: string;
+    requireLiveOffer: boolean;
+  }) {
+    const { assignmentId, agreedKobo, basis, actor, expectedRiderId, requireLiveOffer } = input;
     const lockKey = `dispatch:accept:${assignmentId}`;
     const lockToken = randomUUID();
     // 5 s is longer than any single acceptance can take; the token prevents a slow
@@ -610,13 +881,28 @@ export class DispatchService {
     }
 
     try {
-      await this.sweepExpired();
+      // A rider's acceptance has to beat the 20-second clock; a customer answering a
+      // price they were shown does not, so the sweep only runs for the rider path.
+      if (requireLiveOffer) await this.sweepExpired();
 
       const result = await this.prisma.$transaction(async (tx) => {
-        // 1. Claim the offer atomically.
+        // 1. Claim the offer atomically. The agreed number is written on this row, so
+        //    the rider's side of the deal is recorded where the rider is.
         const claim = await tx.deliveryAssignment.updateMany({
-          where: { id: assignmentId, riderId, status: 'OFFERED', expiresAt: { gt: new Date() } },
-          data: { status: 'ACCEPTED', respondedAt: new Date() },
+          where: {
+            id: assignmentId,
+            riderId: expectedRiderId,
+            status: 'OFFERED',
+            ...(requireLiveOffer ? { expiresAt: { gt: new Date() } } : {}),
+            ...(basis === 'COUNTER' ? { counterState: 'PENDING' as const } : {}),
+          },
+          data: {
+            status: 'ACCEPTED',
+            respondedAt: new Date(),
+            agreedKobo,
+            agreedBasis: basis,
+            ...(basis === 'COUNTER' ? { counterState: 'ACCEPTED' as const } : {}),
+          },
         });
         if (claim.count === 0) return { ok: false as const, reason: 'offer-gone' as const };
 
@@ -632,8 +918,13 @@ export class DispatchService {
             // The rider has explicitly accepted, so the delivery moves straight to
             // ACCEPTED. (ASSIGNED is for staff assignments the rider must confirm.)
             status: 'ACCEPTED',
-            riderId,
+            riderId: expectedRiderId,
             acceptedAt: new Date(),
+            // The price that was actually agreed is the price that gets charged, and
+            // the price the commission is cut from. Both are frozen together below.
+            chargeKobo: agreedKobo,
+            agreedKobo,
+            agreedBasis: basis,
           },
         });
         if (deliveryClaim.count === 0) {
@@ -649,21 +940,26 @@ export class DispatchService {
 
         // 4. Freeze the commission split onto the delivery so it can never drift.
         const commissionPct = this.config.commissionPercent;
-        const commissionKobo = percentOfKobo(assignment.delivery.chargeKobo, commissionPct, 50);
+        const commissionKobo = percentOfKobo(agreedKobo, commissionPct, 50);
         await tx.delivery.update({
           where: { id: assignment.deliveryId },
           data: {
             commissionSnapshot: {
               commissionPct,
               commissionKobo: commissionKobo.toString(),
-              riderNetKobo: (assignment.delivery.chargeKobo - commissionKobo).toString(),
+              riderNetKobo: (agreedKobo - commissionKobo).toString(),
+              agreedKobo: agreedKobo.toString(),
+              agreedBasis: basis,
               computedAt: new Date().toISOString(),
             },
           },
         });
 
         // 5. The rider is now busy — they must stop receiving new offers.
-        await tx.rider.update({ where: { id: riderId }, data: { availability: 'ON_DELIVERY' } });
+        await tx.rider.update({
+          where: { id: expectedRiderId },
+          data: { availability: 'ON_DELIVERY' },
+        });
 
         // 6. History.
         await tx.deliveryStatusHistory.create({
@@ -671,8 +967,11 @@ export class DispatchService {
             deliveryId: assignment.deliveryId,
             fromStatus: 'PENDING',
             toStatus: 'ACCEPTED',
-            actorType: 'RIDER',
-            reason: 'Offer accepted by rider',
+            actorType: actor,
+            reason:
+              actor === 'RIDER'
+                ? `Offer accepted by rider at ${formatNaira(agreedKobo)}`
+                : `Customer accepted the rider's price (${formatNaira(agreedKobo)})`,
           },
         });
 
@@ -685,7 +984,9 @@ export class DispatchService {
 
       if (!result.ok) {
         throw AppError.conflict(
-          'That offer has expired or was already taken. New jobs will appear here.',
+          actor === 'RIDER'
+            ? 'That offer has expired or was already taken. New jobs will appear here.'
+            : 'That price is no longer on the table.',
           'OFFER_EXPIRED',
         );
       }
@@ -705,7 +1006,7 @@ export class DispatchService {
       // Tell the riders who lost the race, so the offer disappears from their phone
       // instead of sitting there until it is tapped and refused.
       for (const rival of rivals) {
-        if (rival.riderId === riderId) continue;
+        if (rival.riderId === expectedRiderId) continue;
         this.realtime.offerRevoked(rival.riderId, {
           assignmentId: rival.id,
           deliveryId: result.deliveryId,
@@ -720,11 +1021,13 @@ export class DispatchService {
           status: 'ACCEPTED',
           at: new Date().toISOString(),
         },
-        { staff: true, riderIds: [riderId] },
+        { staff: true, riderIds: [expectedRiderId] },
       );
 
-      this.logger.log(`Rider ${riderId} accepted delivery ${result.reference}`);
-      return { accepted: true, deliveryId: result.deliveryId };
+      this.logger.log(
+        `${actor === 'RIDER' ? `Rider ${expectedRiderId}` : 'Customer'} accepted delivery ${result.reference} at ${formatNaira(agreedKobo)} (${basis})`,
+      );
+      return { accepted: true, deliveryId: result.deliveryId, agreedKobo: agreedKobo.toString() };
     } catch (error) {
       // Duck-typed on purpose: `instanceof` is unreliable when a bundled build can
       // load this module twice (the same trap that once turned Zod errors into 500s).

@@ -74,6 +74,19 @@ export interface Offer {
     package: { category: string; description: string; isFragile: boolean };
     recipientName: string;
   };
+  /**
+   * What the platform billed, what the customer asked for, and what this rider has
+   * already asked for (if anything). The two only differ when the customer haggled.
+   */
+  money: {
+    quotedKobo: string;
+    quotedFormatted: string;
+    askKobo: string;
+    askFormatted: string;
+    isNegotiated: boolean;
+    counterKobo: string | null;
+    counterState: 'NONE' | 'PENDING' | 'DECLINED' | 'ACCEPTED';
+  };
   pay: {
     chargeKobo: string;
     commissionPct: number;
@@ -201,6 +214,27 @@ export function useRejectOffer() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['rider', 'offers'] });
     },
+  });
+}
+
+/**
+ * Ask for more than the number on the offer.
+ *
+ * Returns the asking price and the rider's own, so the card can say what is now on
+ * the customer's screen instead of guessing.
+ */
+export function useCounterOffer() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ assignmentId, amountKobo }: { assignmentId: string; amountKobo: string }) =>
+      api.post<{ countered: boolean; counterFormatted: string; askFormatted: string; message: string }>(
+        `/rider/offers/${assignmentId}/counter`,
+        { amountKobo },
+      ),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['rider', 'offers'] });
+    },
+    retry: false,
   });
 }
 

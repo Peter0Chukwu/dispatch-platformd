@@ -5,6 +5,7 @@ import {
   Alert,
   Badge,
   Button,
+  Input,
   Card,
   CardBody,
   EmptyState,
@@ -19,6 +20,7 @@ import { RIDER_NAV } from './nav';
 import { useApiError } from '../../contexts/AuthContext';
 import {
   useAcceptOffer,
+  useCounterOffer,
   useOffers,
   useRejectOffer,
   useRiderProfile,
@@ -33,7 +35,11 @@ export default function OffersPage() {
   const offers = useOffers(online);
   const accept = useAcceptOffer();
   const reject = useRejectOffer();
+  const counter = useCounterOffer();
   const [busyId, setBusyId] = useState<string | null>(null);
+  // Which card has its "ask for more" box open, and what has been typed in it.
+  const [askingId, setAskingId] = useState<string | null>(null);
+  const [askAmount, setAskAmount] = useState('');
 
   /**
    * Live offers. The push only carries enough to announce the job; the list itself
@@ -62,12 +68,47 @@ export default function OffersPage() {
     setBusyId(offer.assignmentId);
     try {
       await accept.mutateAsync(offer.assignmentId);
-      notify({ tone: 'success', title: 'Job accepted', description: 'Head to the pickup address.' });
-      navigate(`/rider/active?job=${offer.delivery.id}`);
+      notify({ tone: 'success', title: 'Job accepted', description: 'Head to the pickup address — the customer is waiting in chat.' });
+      // Straight into the thread: the two of them can talk before either moves.
+      navigate(`/rider/deliveries/${offer.delivery.id}/chat`);
     } catch (error) {
       // Losing the race is expected behaviour, not a bug: another rider took it first.
       notify({ tone: 'error', title: 'Offer no longer available', description: useApiError(error) ?? 'It was taken by another rider or has expired.' });
       await offers.refetch();
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  /**
+   * Name a price. Naira in the box, kobo on the wire — the API never takes a
+   * decimal amount and the customer never sees one.
+   */
+  const askForMore = async (offer: Offer) => {
+    const naira = Number(askAmount.replace(/,/g, ''));
+    if (!Number.isFinite(naira) || naira <= 0) {
+      notify({ tone: 'error', title: 'Enter a price', description: 'Type the amount you want for this job.' });
+      return;
+    }
+    setBusyId(offer.assignmentId);
+    try {
+      const result = await counter.mutateAsync({
+        assignmentId: offer.assignmentId,
+        amountKobo: String(Math.round(naira * 100)),
+      });
+      setAskingId(null);
+      setAskAmount('');
+      notify({
+        tone: 'success',
+        title: `Asked for ${result.counterFormatted}`,
+        description: result.message,
+      });
+    } catch (error) {
+      notify({
+        tone: 'error',
+        title: 'That price was not sent',
+        description: useApiError(error) ?? 'Please try again.',
+      });
     } finally {
       setBusyId(null);
     }
@@ -191,15 +232,51 @@ export default function OffersPage() {
                   </div>
                 </div>
 
-                <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-ink-50 p-3">
-                  <div>
-                    <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">You earn</p>
-                    <p className="text-lg font-bold text-accent-700">{offer.pay.netFormatted}</p>
+                <div className="space-y-3 rounded-xl bg-ink-50 p-3">
+                  {offer.money.isNegotiated ? (
+                    <div className="space-y-1.5">
+                      <div className="flex items-baseline justify-between gap-3 text-xs">
+                        <span className="text-ink-500">Our bill</span>
+                        <span className="text-ink-400 line-through">{offer.money.quotedFormatted}</span>
+                      </div>
+                      <div className="flex items-baseline justify-between gap-3">
+                        <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">
+                          Customer is offering
+                        </span>
+                        <span className="text-lg font-bold text-brand-800">{offer.money.askFormatted}</span>
+                      </div>
+                      <p className="text-[11px] text-ink-500">
+                        They negotiated the bill down. Take it, or ask for a price of your own.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="flex items-baseline justify-between gap-3">
+                      <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">
+                        Customer is paying
+                      </span>
+                      <span className="text-lg font-bold text-brand-800">{offer.money.askFormatted}</span>
+                    </div>
+                  )}
+
+                  <div className="flex flex-wrap items-center justify-between gap-3 border-t border-ink-200 pt-2.5">
+                    <div>
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">You earn</p>
+                      <p className="text-lg font-bold text-accent-700">{offer.pay.netFormatted}</p>
+                    </div>
+                    <p className="text-right text-xs text-ink-500">Commission {offer.pay.commissionPct}%</p>
                   </div>
-                  <div className="text-right text-xs text-ink-500">
-                    <p>Customer pays {offer.pay.chargeKobo ? `₦${(Number(offer.pay.chargeKobo) / 100).toFixed(2)}` : '—'}</p>
-                    <p>Commission {offer.pay.commissionPct}%</p>
-                  </div>
+
+                  {offer.money.counterState === 'PENDING' && offer.money.counterKobo && (
+                    <p className="rounded-lg bg-warning-50 px-3 py-2 text-xs font-medium text-warning-800">
+                      You asked for ₦{(Number(offer.money.counterKobo) / 100).toLocaleString('en-NG')} — waiting for the
+                      customer. You can still take the job at {offer.money.askFormatted} meanwhile.
+                    </p>
+                  )}
+                  {offer.money.counterState === 'DECLINED' && (
+                    <p className="rounded-lg bg-ink-100 px-3 py-2 text-xs text-ink-600">
+                      Your price was turned down. The job is still here at {offer.money.askFormatted}.
+                    </p>
+                  )}
                 </div>
 
                 {offer.distanceToPickupKm !== null && (
@@ -208,24 +285,69 @@ export default function OffersPage() {
                   </p>
                 )}
 
-                <div className="flex flex-col gap-2 sm:flex-row">
-                  <Button
-                    className="flex-1"
-                    onClick={() => void take(offer)}
-                    isLoading={busyId === offer.assignmentId && accept.isPending}
-                    disabled={busyId !== null && busyId !== offer.assignmentId}
-                  >
-                    Accept job
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    className="sm:w-32"
-                    onClick={() => void pass(offer)}
-                    disabled={busyId !== null}
-                  >
-                    Pass
-                  </Button>
-                </div>
+                {askingId === offer.assignmentId ? (
+                  <div className="space-y-2 rounded-xl border border-brand-200 bg-brand-50/60 p-3">
+                    <label className="text-xs font-semibold text-ink-700" htmlFor={`ask-${offer.assignmentId}`}>
+                      What should the customer pay?
+                    </label>
+                    <Input
+                      id={`ask-${offer.assignmentId}`}
+                      type="number"
+                      inputMode="decimal"
+                      min={0}
+                      step="50"
+                      placeholder={`More than ${offer.money.askFormatted.replace('₦', '')}`}
+                      value={askAmount}
+                      onChange={(event) => setAskAmount(event.target.value)}
+                    />
+                    <p className="text-[11px] text-ink-500">
+                      Your asking price. The customer decides — nothing is charged until they say yes.
+                    </p>
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        className="flex-1"
+                        isLoading={counter.isPending}
+                        onClick={() => void askForMore(offer)}
+                      >
+                        Send my price
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => setAskingId(null)}>
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <Button
+                      className="flex-1"
+                      onClick={() => void take(offer)}
+                      isLoading={busyId === offer.assignmentId && accept.isPending}
+                      disabled={busyId !== null && busyId !== offer.assignmentId}
+                    >
+                      Accept {offer.money.askFormatted}
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      className="sm:w-36"
+                      onClick={() => {
+                        setAskingId(offer.assignmentId);
+                        setAskAmount('');
+                      }}
+                      disabled={busyId !== null}
+                    >
+                      Ask for more
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      className="sm:w-24"
+                      onClick={() => void pass(offer)}
+                      disabled={busyId !== null}
+                    >
+                      Pass
+                    </Button>
+                  </div>
+                )}
               </CardBody>
             </Card>
           ))}

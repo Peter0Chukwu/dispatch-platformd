@@ -286,6 +286,16 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
     this.toRider(riderId, RT.OFFER_REVOKED, revoked);
   }
 
+  /** A rider asked for more: the customer's page shows the new number. */
+  counterOffered(customerId: string, payload: Record<string, unknown>): void {
+    this.toCustomer(customerId, RT.OFFER_COUNTERED, payload);
+  }
+
+  /** The customer answered that price, so the rider's card can stop waiting. */
+  counterAnswered(riderId: string, payload: Record<string, unknown>): void {
+    this.toRider(riderId, RT.COUNTER_ANSWERED, payload);
+  }
+
   deliveryPush(push: DeliveryPush, audience: { staff?: boolean; customerId?: string | null; riderIds?: string[] }): void {
     if (audience.staff) this.toStaff(RT.DELIVERY_UPDATED, push);
     if (audience.customerId) this.toCustomer(audience.customerId, RT.DELIVERY_UPDATED, push);

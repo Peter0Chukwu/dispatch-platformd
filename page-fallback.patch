@@ -1,0 +1,219 @@
+From 816fe88fdf00bf15c473eafedfe235e449a4b270 Mon Sep 17 00:00:00 2001
+From: TWL Build <build@twl.local>
+Date: Thu, 19 Nov 2026 10:31:40 +0000
+Subject: [PATCH] api: send a browser to the site instead of answering a page
+ with JSON
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A domain attached to the API service rather than to nginx turns every emailed
+link into {"error":{"code":"NOT_FOUND","message":"Cannot GET /reset-password"}}.
+That is what happened on www: the link was right, the routing was wrong, and the
+person clicking it had no way to know.
+
+The API now recognises the shape of that mistake — an HTML request from a host
+that is not the site, for a path outside /api and /socket.io — and redirects to
+the same path and query string on the site. Narrow by design: JSON clients, the
+mobile app and curl still get their 404, and nothing redirects when the API and
+the site are the same host (which would loop).
+
+Six tests (110 total, no database); typecheck clean.
+---
+ backend/src/common/page-fallback.ts | 53 ++++++++++++++++++
+ backend/src/main.ts                 | 18 ++++++
+ backend/test/page-fallback.spec.ts  | 86 +++++++++++++++++++++++++++++
+ 3 files changed, 157 insertions(+)
+ create mode 100644 backend/src/common/page-fallback.ts
+ create mode 100644 backend/test/page-fallback.spec.ts
+
+diff --git a/backend/src/common/page-fallback.ts b/backend/src/common/page-fallback.ts
+new file mode 100644
+index 0000000..5d06427
+--- /dev/null
++++ b/backend/src/common/page-fallback.ts
+@@ -0,0 +1,53 @@
++/**
++ * WHEN A PAGE IS ASKED OF THE API
++ *
++ * The public site and the API are two services behind one domain: nginx serves the
++ * app and proxies `/api/` to Nest. If a domain is ever attached to the API service
++ * by mistake — or an old email link points at a host that is not the site — then a
++ * person clicking a link in their inbox gets JSON:
++ *
++ *   {"error":{"code":"NOT_FOUND","message":"Cannot GET /reset-password?token=…"}}
++ *
++ * That message is useless to them: the link was fine, the routing was not. This
++ * recognises the shape of that mistake — a browser asking for an HTML page from a
++ * host that is not the site — and sends the person to the page they wanted, with
++ * the query string intact, instead of answering with a machine-readable 404.
++ *
++ * Deliberately narrow:
++ *   • only GET/HEAD (a POST means an API client, not a browser);
++ *   • only when the browser asked for HTML (`Accept: text/html`), so SDKs, curl and
++ *     the mobile app still receive JSON errors;
++ *   • never for a path under `/api` (the API's namespace) or `/socket.io`;
++ *   • never when the site is the same host as the API, which would be a redirect
++ *     loop.
++ */
++export function pageRedirectTarget(input: {
++  method: string;
++  accept?: string | null;
++  path: string;
++  host?: string | null;
++  siteOrigin: string;
++}): string | null {
++  const { method, accept, path, host, siteOrigin } = input;
++
++  if (method !== 'GET' && method !== 'HEAD') return null;
++  if (!accept || !accept.toLowerCase().includes('text/html')) return null;
++  if (!path.startsWith('/')) return null;
++  if (path === '/api' || path.startsWith('/api/')) return null;
++  // The socket handshake is not a page, whatever the client claims to accept.
++  if (path === '/socket.io' || path.startsWith('/socket.io/')) return null;
++
++  let site: URL;
++  try {
++    site = new URL(siteOrigin);
++  } catch {
++    return null;
++  }
++  if (!site.host) return null;
++
++  // Same host: the site *is* this service, so there is nowhere to send them.
++  const hostName = (host ?? '').split(':')[0]?.toLowerCase();
++  if (hostName && hostName === site.host.toLowerCase()) return null;
++
++  return `${site.origin}${path}`;
++}
+diff --git a/backend/src/main.ts b/backend/src/main.ts
+index 5ae1210..e2dd09d 100644
+--- a/backend/src/main.ts
++++ b/backend/src/main.ts
+@@ -10,6 +10,7 @@ import { AppConfig } from './config/app.config';
+ import { registerIndexPage } from './common/api-index-page';
+ import { decideCorsOrigin } from './common/cors';
+ import { MessagingService } from './messaging/messaging.service';
++import { pageRedirectTarget } from './common/page-fallback';
+ 
+ async function bootstrap(): Promise<void> {
+   // `rawBody` is what makes payment webhook signature verification possible: the
+@@ -78,6 +79,23 @@ async function bootstrap(): Promise<void> {
+   // frontend (see common/decorators/zod.decorators.ts). Zod strips unknown keys
+   // by default, which gives us the same whitelist behaviour.
+ 
++  // A browser asking this service for a page has landed on the wrong host: the
++  // domain is attached to the API rather than to nginx. Answer with the page they
++  // wanted instead of a JSON 404. See common/page-fallback.ts.
++  const express = app.getHttpAdapter().getInstance();
++  express.use((req, res, next) => {
++    const target = pageRedirectTarget({
++      method: req.method,
++      accept: req.headers.accept,
++      path: req.originalUrl,
++      host: req.headers.host,
++      siteOrigin: config.frontendUrl,
++    });
++    if (!target) return next();
++    logger.warn(`${req.originalUrl} is a page, not an API route — sending the browser to ${config.frontendUrl}`);
++    return res.redirect(302, target);
++  });
++
+   app.enableShutdownHooks();
+ 
+   // ── The API root gets a real page: the API is JSON-only, and opening the host
+diff --git a/backend/test/page-fallback.spec.ts b/backend/test/page-fallback.spec.ts
+new file mode 100644
+index 0000000..f899868
+--- /dev/null
++++ b/backend/test/page-fallback.spec.ts
+@@ -0,0 +1,86 @@
++import { pageRedirectTarget } from '../src/common/page-fallback';
++
++const SITE = 'https://traderswelfarelogistics.online';
++
++describe('a page request that reached the API', () => {
++  it('is sent to the same path on the site, query string intact', () => {
++    expect(
++      pageRedirectTarget({
++        method: 'GET',
++        accept: 'text/html,application/xhtml+xml',
++        path: '/reset-password?token=abc123',
++        host: 'www.traderswelfarelogistics.online',
++        siteOrigin: SITE,
++      }),
++    ).toBe('https://traderswelfarelogistics.online/reset-password?token=abc123');
++  });
++
++  it('is left alone when the API itself is the site', () => {
++    expect(
++      pageRedirectTarget({
++        method: 'GET',
++        accept: 'text/html',
++        path: '/reset-password',
++        host: 'traderswelfarelogistics.online',
++        siteOrigin: SITE,
++      }),
++    ).toBeNull();
++  });
++
++  it('never redirects the API namespace', () => {
++    expect(
++      pageRedirectTarget({
++        method: 'GET',
++        accept: 'text/html',
++        path: '/api/v1/chat/unread',
++        host: 'www.example.com',
++        siteOrigin: SITE,
++      }),
++    ).toBeNull();
++  });
++
++  it('never redirects the socket handshake', () => {
++    expect(
++      pageRedirectTarget({
++        method: 'GET',
++        accept: 'text/html',
++        path: '/socket.io/?EIO=4&transport=polling',
++        host: 'www.example.com',
++        siteOrigin: SITE,
++      }),
++    ).toBeNull();
++  });
++
++  it('leaves JSON clients with a JSON 404', () => {
++    expect(
++      pageRedirectTarget({
++        method: 'GET',
++        accept: 'application/json',
++        path: '/reset-password',
++        host: 'www.example.com',
++        siteOrigin: SITE,
++      }),
++    ).toBeNull();
++    expect(
++      pageRedirectTarget({
++        method: 'POST',
++        accept: 'text/html',
++        path: '/reset-password',
++        host: 'www.example.com',
++        siteOrigin: SITE,
++      }),
++    ).toBeNull();
++  });
++
++  it('does nothing when the site address is unparseable', () => {
++    expect(
++      pageRedirectTarget({
++        method: 'GET',
++        accept: 'text/html',
++        path: '/login',
++        host: 'www.example.com',
++        siteOrigin: 'not a url',
++      }),
++    ).toBeNull();
++  });
++});
+-- 
+2.47.3
+
