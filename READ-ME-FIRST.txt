@@ -1,111 +1,90 @@
-TWL — request a rider, see the bill, argue about the price
-==========================================================
+TWL — the build failed on a file your repo does not have
+=======================================================
 
-Commit: 6dd5a1f   (previous: 816fe88)
-118 tests, typecheck clean, production build clean.
+FOUND IT
+--------
+    Could not resolve "./components/MessageNotifier" from "src/App.tsx"
 
-THE NEW BOOKING FLOW
---------------------
-    From  ->  To  ->  Size  ->  Bill
+Your App.tsx imports that component; the file does not exist in your copy. Vite stops
+at the first missing import, so this is not necessarily the only one — and the history
+says it almost certainly is not.
 
-Size is the only package question now. The photo and the description are still there
-and are both OPTIONAL — the size is what prices the job.
-
-When the bill appears the customer answers it, and that answer is what riders get:
-
-    Accept the bill   ->  riders are alerted for exactly the bill
-    Negotiate         ->  riders are alerted for the customer's number instead
-
-Nothing is charged at this point. Payment happens AFTER a rider has the job, on the
-delivery page, as you chose.
-
-WHAT THE RIDER SEES
--------------------
-If the customer accepted the bill: the amount, and two buttons — Accept, or Ask for
-more. If the customer negotiated: BOTH numbers on the card (the bill, struck through,
-and what the customer is offering), and the same two buttons. "Ask for more" opens a
-box for the rider's own price and sends it to the customer.
-
-WHAT THE CUSTOMER SEES WHEN A RIDER ASKS FOR MORE
--------------------------------------------------
-The delivery page lists the rider, their price, and Accept / Decline.
-  Accept  -> that rider gets the job at their price. Everyone else is told it is gone.
-  Decline -> the rider's offer stays open at the customer's price. A refusal never
-             costs the customer a rider.
-
-THE RULES (enforced on the server, stated in naira)
----------------------------------------------------
-  Customer may offer   between half the bill and three times the bill
-  Rider may ask        anything above the asking price, up to three times it
-  Anything outside     is refused with a plain message, not an error code
-
-Accepting routes through ONE place, so a delivery can never be given to two riders,
-and the agreed price is the price charged and the price commission is cut from.
-
-BOTH END UP IN THE CHAT
------------------------
-Accepting sends the customer to /app/deliveries/<id>/chat and the rider to
-/rider/deliveries/<id>/chat — the same Contact card as before, chat and in-app
-calling, no phone numbers, no inbox list. The thread is for that one job.
-
->>> BEFORE YOU TEST: THE DATABASE NEEDS A NEW MIGRATION  <<<
--------------------------------------------------------------
-This version stores five new money columns on deliveries and five on offers. The API
-WILL FAIL on booking until the migration runs. In your Windows terminal:
-
-    cd C:\Users\USER\Documents\dispatch-platform\backend
-    set DATABASE_URL=<your production database URL from the hosting dashboard>
-    npx prisma migrate deploy
-    set DATABASE_URL=
-
-Copy DATABASE_URL from the Northflank dashboard (the API service's environment
-variables) — never from chat, and clear it from the terminal afterwards as shown.
-
-A better long-term fix: run `npx prisma migrate deploy` as a Northflank *job* in the
-same image at deploy time, so a release can never outrun the schema. Say the word and
-I will write that job's exact settings.
-
-TO APPLY THIS BUILD
--------------------
-1. Copy the files in this zip over your clone (they keep their paths).
-2. Run the migration above.
-3. Commit and push, then deploy. The web service needs a rebuild too — the booking
-   form, the rider's offer card and the new chat route are all front-end changes.
-4. Check the deploy log for: "Email links will point at: ..." (from the last build).
-
-HOW TO TRY IT (demo data)
--------------------------
-  Customer   register a new customer at /register, or use any customer account you have
-  Staff      admin@dispatch.test / Admin@12345 via /staff
-  Rider      demo.rider@dispatch.test / Rider@12345 — go ONLINE on the rider overview
-
-Then: book from any Benin City pickup to a drop-off, choose a size, and on the Bill
-step pick "Negotiate" and type a lower number. The rider account (online) sees the
-bill struck through and your offer. Ask for more from the rider side, then accept or
-decline it on the customer's delivery page.
-
-WHAT CHANGED, FILE BY FILE
+THE CAUSE, IN ONE SENTENCE
 --------------------------
-  backend/prisma/migrations/20261119120000_price_negotiation/migration.sql   new columns
-  backend/prisma/schema.prisma                    quotedKobo, askKobo, isNegotiated,
-                                                  agreedKobo, agreedBasis, CounterState
-  backend/src/delivery*...                        pricingDecision + askKobo on create
-  backend/src/dispatch/price-bands.ts             the two bands, as plain functions
-  backend/src/dispatch/dispatch.service.ts        accept / counter / acceptCounter /
-                                                  declineCounter / offersForCustomer,
-                                                  and one `conclude` for every acceptance
-  backend/src/deliveries/deliveries.controller.ts customer routes for offers
-  backend/src/dispatch/dispatch.controller.ts     rider route for countering
-  backend/src/realtime/*                          offer:countered, offer:counter-answered
-  frontend/src/pages/customer/BookDeliveryPage.tsx     From -> To -> Size -> Bill
-  frontend/src/components/OffersPanel.tsx         the bill and the counters, on the
-                                                  customer's delivery page
-  frontend/src/pages/rider/OffersPage.tsx         both numbers, Accept / Ask for more
-  frontend/src/pages/DeliveryChatPage.tsx         the thread both people land in
-  frontend/src/App.tsx                            the two chat routes
-  documentation/PRICE-NEGOTIATION.md              the whole flow, written down
-  negotiation.patch, COMMIT-MESSAGE.txt
+Your working copy is missing files. Not modified files — absent ones. `MessageNotifier`
+arrived with the chat-badge work, and now that I know to look, that same gap explains
+the loose end I flagged days ago: /api/v1/chat/unread answers 404 on your live API while
+routes from newer commits answer normally. Two symptoms, one cause: parts of that commit
+never reached your machine.
 
-Tests: backend/test/price-bands.spec.ts. Writing them caught a real bug — the
-rounding helper used 50 kobo where it meant N50, which would have made the floor
-meaningless for every offer.
+WHY THIS IS THE RIGHT FIX AND NOT ANOTHER PATCH
+-----------------------------------------------
+Last time it was deploy/nginx-snippets. Now it is a component. If I send you one file
+at a time, we will do this again in an hour with the next one. So this zip is the
+COMPLETE source tree at commit 1ddfdb4 — 372 files, every .ts/.tsx/.json/.sql/.css/
+.html/.conf/.md in the project — with the same paths it has in the repo.
+
+WHAT IS NOT IN THE ZIP (on purpose)
+-----------------------------------
+  · your .env files  — they are gitignored and were never tracked, so nothing secret
+                        is replaced or exposed
+  · node_modules, dist, .git
+  · backups/ and the screenshot folders
+  · documentation/BUILD-REPORT.html (5.5 MB of generated HTML)
+
+HOW TO APPLY IT — THEN PROVE IT BEFORE YOU PUSH
+-----------------------------------------------
+1. Close any open editor tabs on the project.
+
+2. Extract this zip into:
+       C:\Users\USER\Documents\dispatch-platform
+   Say yes to replacing files. The folder structure inside the zip already matches.
+
+3. TEST IT LOCALLY. This is the step that turns a guess into certainty:
+
+       cd C:\Users\USER\Documents\dispatch-platform\frontend
+       npx vite build
+
+   It must end with  "built in X.XXs"  and produce frontend\dist\.
+
+   If it fails, stop and send me the error — it will name another missing file, and I
+   will include it. Do not push a build you have not seen work.
+
+4. Then commit and push. In VS Code Source Control you will see a long list of added
+   and modified files — that is expected: the zip restores everything that was missing
+   plus the commits since. Commit them all.
+
+5. Check the file count matches:
+
+       cd C:\Users\USER\Documents\dispatch-platform
+       git ls-files | find /c /v ""
+
+   It should read 467. Anything lower means files still did not make it into the repo.
+
+6. Deploy the web service. This time the Dockerfile build has the files it was looking
+   for, so it should complete and the bundle name on the live site should change from
+   index-BrOVvYWS.js to index-ex1SW8n1.js (Ctrl+U on the site, search for index-).
+
+7. Run the migration, which nothing so far has done:
+
+       cd C:\Users\USER\Documents\dispatch-platform\backend
+       set DATABASE_URL=<production URL from the hosting dashboard>
+       npx prisma migrate deploy
+       set DATABASE_URL=
+
+8. Confirm the two checks that prove the whole deploy is current:
+       /api/v1/chat/unread  -> 401   (not 404 — that is the gap this zip closes)
+       /api/v1/health       -> "email":"RESEND", "site":"https://traderswelfarelogistics.online"
+
+WHAT TO EXPECT AFTERWARDS
+-------------------------
+  · Booking page: From -> To -> Size -> Bill, with Accept or Negotiate.
+  · Rider offer card: both numbers when the customer haggled, Accept / Ask for more.
+  · Customer delivery page: riders asking for more, with Accept / Decline.
+  · Accepting sends both people to that delivery's chat.
+
+If the web build still fails on the platform after a LOCAL build succeeds, tell me —
+that would mean the platform's build settings differ from what the Dockerfile expects,
+and Dockerfile.web-prebuilt (included) sidesteps it.
+
+Files included: 372, listed one per line in FILES-INCLUDED.txt

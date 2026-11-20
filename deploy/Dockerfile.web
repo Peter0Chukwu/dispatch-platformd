@@ -7,11 +7,24 @@
 # ─────────────────────────────────────────────────────────────────────────────
 FROM node:22-bookworm-slim AS build
 WORKDIR /app
+
+# ── Two things that make this build fail in ways that read like the code's fault ──
+#
+# 1. NODE_ENV. vite, the React plugin, Tailwind, PostCSS and TypeScript are all
+#    devDependencies of the web workspace. If the platform's build environment ever
+#    carries NODE_ENV=production, `npm ci` skips every one of them and the failure
+#    surfaces later as "Cannot find module" from a step that looks unrelated. Naming
+#    it here means the build does not depend on what the host happens to export.
+# 2. Memory. A production Vite build of this app is small, but a constrained builder
+#    can still be killed mid-transform, and an OOM kill shows up as a plain exit
+#    code 1 with no useful message. This gives the build room before that happens.
+ENV NODE_ENV=development \
+    NODE_OPTIONS=--max-old-space-size=2048
 COPY package.json package-lock.json tsconfig.base.json ./
 COPY packages/shared/package.json packages/shared/
 COPY backend/package.json backend/
 COPY frontend/package.json frontend/
-RUN npm ci --workspace @dispatch/web --workspace @dispatch/shared --include-workspace-root
+RUN npm ci --include=dev --workspace @dispatch/web --workspace @dispatch/shared --include-workspace-root
 
 COPY packages/shared ./packages/shared
 COPY frontend ./frontend
@@ -23,7 +36,21 @@ ARG VITE_APP_NAME="Dispatch"
 ENV VITE_GEOAPIFY_API_KEY=$VITE_GEOAPIFY_API_KEY \
     VITE_GOOGLE_MAPS_API_KEY=$VITE_GOOGLE_MAPS_API_KEY \
     VITE_APP_NAME=$VITE_APP_NAME
-RUN cd frontend && npx vite build
+# A typecheck that REPORTS but does not gate the build. It costs a few seconds and
+# turns "vite exited 1" into "src/pages/x.tsx(12,8): Cannot find module './y'" in the
+# log — which is the difference between a five-minute fix and a guessing game.
+RUN cd frontend && (npx tsc --noEmit || echo 'TYPECHECK REPORTED ERRORS (see above) — continuing to the build')
+
+# The local binary, not `npx`: npx will happily download a different Vite when the
+# local one is missing, and then the failure is about the wrong version of the wrong
+# tool instead of the missing dependency that caused it.
+RUN cd frontend && node -v && ../node_modules/.bin/vite --version && ../node_modules/.bin/vite build
+
+# If the build was killed rather than failed, there is no error message to read and
+# the platform reports only an exit code. This turns that silence into one sentence
+# in the log, because the next step (COPY --from=build) would otherwise report a
+# missing folder without saying why.
+RUN test -f frontend/dist/index.html || (echo 'BUILD PRODUCED NO index.html — if the step above ended without an error, the process was killed (memory), not rejected.' && exit 1)
 
 FROM nginx:1.27-alpine AS runtime
 # Where the API lives. The default keeps `docker compose up` working unchanged;

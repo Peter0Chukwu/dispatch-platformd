@@ -236,6 +236,8 @@ When that account exists, set `VOICE_MODE=TERMII` and implement `requestCall()` 
 
 Verification links, receipts, report delivery.
 
+0. You need a domain you own — `traderswelfarelogistics.online` is the one. The
+   step-by-step for both the site and email lives in [CUSTOM-DOMAIN.md](CUSTOM-DOMAIN.md).
 1. Sign up at <https://resend.com> (3,000 emails/month free).
 2. **Domains → Add domain**, then add the DNS records it gives you (SPF/DKIM). Verification is usually
    minutes once DNS propagates.
@@ -244,8 +246,12 @@ Verification links, receipts, report delivery.
 ```dotenv
 EMAIL_MODE=RESEND
 RESEND_API_KEY="re_..."
-EMAIL_FROM="no-reply@yourdomain.com"
+EMAIL_FROM="Traders Welfare Logistics <no-reply@traderswelfarelogistics.online>"
 ```
+
+Also add a `_dmarc` TXT record (`v=DMARC1; p=none; rua=mailto:dmarc@…`). Without it a
+domain with no sending history lands in spam far more often — see
+[CUSTOM-DOMAIN.md](CUSTOM-DOMAIN.md) §2c.
 
 ---
 

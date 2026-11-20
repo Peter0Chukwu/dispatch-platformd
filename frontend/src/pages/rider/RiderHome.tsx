@@ -19,6 +19,7 @@ import { useAuth, useApiError } from '../../contexts/AuthContext';
 import { RIDER_NAV } from './nav';
 import { useActiveJob, useOffers, useRiderProfile, useSetAvailability } from '../../hooks/useRider';
 import { LocationReporter } from '../../components/LocationReporter';
+import { useUnreadMessages } from '../../hooks/useChat';
 
 export default function RiderHome() {
   const { user } = useAuth();
@@ -35,6 +36,8 @@ export default function RiderHome() {
   const offers = useOffers(online);
   const activeJob = useActiveJob();
   const offerCount = offers.data?.length ?? 0;
+  const unread = useUnreadMessages();
+  const unreadOnJob = activeJob.data ? (unread.byDelivery.get(activeJob.data.id) ?? 0) : 0;
 
   const toggle = async () => {
     setToggling(true);
@@ -168,7 +171,11 @@ export default function RiderHome() {
 
         {activeJob.data && (
           <Card>
-            <CardHeader title="Current job" subtitle={activeJob.data.reference} />
+            <CardHeader
+              title="Current job"
+              subtitle={activeJob.data.reference}
+              action={unreadOnJob ? <Badge tone="info">{unreadOnJob} new message{unreadOnJob === 1 ? '' : 's'}</Badge> : undefined}
+            />
             <CardBody className="space-y-3">
               <div className="flex items-center justify-between gap-3">
                 <StatusPill label={activeJob.data.statusLabel} tone="info" />

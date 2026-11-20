@@ -339,8 +339,15 @@ function RiderReview({
                     disabled={!rider.canApprove}
                     isLoading={setApproval.isPending}
                     onClick={() => void decideRider("APPROVE")}
+                    title={
+                      rider.canApprove
+                        ? "Approve this rider so they can receive jobs"
+                        : `${rider.missingDocuments.length} document(s) still need approval first`
+                    }
                   >
-                    Approve rider
+                    {rider.canApprove
+                      ? "Approve rider"
+                      : `Approve rider · ${rider.missingDocuments.length} document(s) left`}
                   </Button>
                 )}
                 {rider.approvalStatus === "APPROVED" && (
@@ -422,20 +429,59 @@ function RiderReview({
           </div>
 
           {!rider.canApprove && rider.missingDocuments.length > 0 && (
-            <Alert tone="warning" title="Not ready to approve">
-              These documents are still not approved:{" "}
-              {rider.missingDocuments
-                .join(", ")
-                .replace(/_/g, " ")
-                .toLowerCase()}
-              . The API refuses approval until every one is in order.
+            <Alert
+              tone="warning"
+              title={
+                rider.documents.length === 0
+                  ? "Nothing to review yet"
+                  : `${rider.missingDocuments.length} of ${rider.requiredDocuments.length} documents still to review`
+              }
+            >
+              {rider.documents.length === 0 ? (
+                <>
+                  {/* The two stages, said plainly: staff cannot upload a rider's
+                      identity documents for them, so "Approve rider" being refused
+                      here is the rule working, not a fault to fix. */}
+                  This rider has not uploaded any documents. They upload their own,
+                  from their side: sign in at the rider portal, open{" "}
+                  <strong>Documents</strong>, and add their NIN, driver&apos;s licence
+                  and vehicle registration. Once they are in, review each one below and
+                  this rider becomes approvable. Needed:{" "}
+                  <strong>
+                    {rider.missingDocuments
+                      .join(", ")
+                      .replace(/_/g, " ")
+                      .toLowerCase()}
+                  </strong>
+                  .
+                </>
+              ) : (
+                <>
+                  Approve each document below and this rider becomes approvable — the
+                  account cannot be approved until every one is in order. Still open:{" "}
+                  <strong>
+                    {rider.missingDocuments
+                      .join(", ")
+                      .replace(/_/g, " ")
+                      .toLowerCase()}
+                  </strong>
+                  .
+                </>
+              )}
             </Alert>
           )}
 
           <div>
             <h3 className="text-sm font-semibold text-ink-900">Documents</h3>
             <ul className="mt-2 space-y-2">
-              {rider.documents.map((document) => (
+              {[...rider.documents]
+                .sort((a, b) => {
+                  // Anything not yet approved floats to the top: that is the work.
+                  const rank = (status: string) =>
+                    status === "PENDING" ? 0 : status === "REJECTED" ? 1 : 2;
+                  return rank(a.status) - rank(b.status);
+                })
+                .map((document) => (
                 <li
                   key={document.id}
                   className="rounded-xl border border-ink-200 p-3"
@@ -498,7 +544,17 @@ function RiderReview({
                 </li>
               ))}
               {rider.documents.length === 0 && (
-                <li className="text-sm text-ink-500">Nothing uploaded yet.</li>
+                <li className="space-y-1 text-sm text-ink-500">
+                  <p>Nothing uploaded yet.</p>
+                  <ul className="space-y-0.5 text-xs">
+                    {rider.missingDocuments.map((doc) => (
+                      <li key={doc}>
+                        {doc.replace(/_/g, " ").toLowerCase()} —{" "}
+                        <span className="text-ink-400">waiting for the rider</span>
+                      </li>
+                    ))}
+                  </ul>
+                </li>
               )}
             </ul>
           </div>

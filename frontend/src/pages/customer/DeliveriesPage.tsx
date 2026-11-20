@@ -5,6 +5,7 @@ import { PortalShell } from '../../layouts/PortalShell';
 import { Badge, Button, Card, CardBody, EmptyState, StatusPill } from '../../components/ui';
 import { CUSTOMER_NAV } from './nav';
 import { useDeliveries } from '../../hooks/useDeliveries';
+import { useUnreadMessages } from '../../hooks/useChat';
 
 const FILTERS = [
   { value: '', label: 'All' },
@@ -19,6 +20,9 @@ export default function DeliveriesPage() {
   const [page, setPage] = useState(1);
   const [status, setStatus] = useState('');
   const { data, isLoading, isError, refetch } = useDeliveries(page, status || undefined);
+  // A rider's message shows on the delivery it belongs to, so nothing has to be
+  // discovered inside the thread before the customer knows it is there.
+  const unread = useUnreadMessages();
 
   return (
     <PortalShell portal="Customer" nav={CUSTOMER_NAV}>
@@ -96,12 +100,18 @@ export default function DeliveriesPage() {
                 >
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <span className="font-mono text-xs font-semibold text-ink-500">{delivery.reference}</span>
                         <StatusPill
                           label={DELIVERY_STATUS_LABELS[delivery.status as keyof typeof DELIVERY_STATUS_LABELS] ?? delivery.status}
                           tone={DELIVERY_STATUS_TONE[delivery.status as keyof typeof DELIVERY_STATUS_TONE] ?? 'neutral'}
                         />
+                        {unread.byDelivery.get(delivery.id) ? (
+                          <Badge tone="info">
+                            {unread.byDelivery.get(delivery.id)} new message
+                            {unread.byDelivery.get(delivery.id) === 1 ? '' : 's'}
+                          </Badge>
+                        ) : null}
                       </div>
                       <p className="mt-1.5 truncate text-sm font-medium text-ink-900">{delivery.destination.address}</p>
                       <p className="mt-0.5 truncate text-xs text-ink-500">from {delivery.pickup.address}</p>

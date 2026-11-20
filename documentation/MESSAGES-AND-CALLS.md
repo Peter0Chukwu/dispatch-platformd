@@ -6,6 +6,22 @@ whoever is running this deployment, not for a developer reading code.
 
 ---
 
+## 0. Three different things, often confused
+
+They are separate on purpose, and only the third one costs money.
+
+| | What it is | Needs a provider? |
+|---|---|---|
+| **Chat** | Customer ↔ rider text, per delivery, inside the app | **No** — built, free |
+| **Calling** | A voice call inside the app, no phone numbers on either side | **No** — built, free |
+| **SMS** | A text message to a real handset: verification codes, alerts | **Yes — that is all Termii does** |
+
+Termii is a text-messaging company. It sends "123456 is your code" to a phone. It
+cannot host a conversation and nothing in the chat depends on it. Turning SMS off
+(`SMS_MODE=CONSOLE`) leaves chat, calling, email verification and the map working
+exactly as they are; the only loss is automatic verification of phone numbers, and
+alerts reaching a phone whose app is closed.
+
 ## 1. The verification screen
 
 Sign-up creates the account and immediately tries to send **two** things:
@@ -41,7 +57,9 @@ itself (no typing), then the six digits confirm the phone.
 
 ### Turning on real email (Resend)
 
-1. Sign up at <https://resend.com> (3,000 emails/month on the free tier).
+1. Sign up at <https://resend.com> (3,000 emails/month on the free tier). The
+   domain-specific walk-through — including DMARC, which is what gets a young domain
+   out of the spam folder — is in [CUSTOM-DOMAIN.md](CUSTOM-DOMAIN.md).
 2. **Domains → Add domain**, then add the DNS records Resend shows you. Until the
    domain is verified, Resend will only deliver to your own address.
 3. **API Keys → Create**, and copy the key.
@@ -83,6 +101,32 @@ TERMII_CHANNEL=dnd
   `console only`).
 - End to end: register a new account with a real address and a real number. The
   email arrives within seconds; the SMS usually within 10.
+
+---
+
+## 1b. Chat: where it lives, and how you know there is a message
+
+The chat sits where the conversation belongs — **inside the delivery**:
+
+- the **customer** opens *My deliveries → a delivery → Contact*;
+- the **rider** opens *Current job → Contact*;
+- it opens when a rider accepts the job and closes for new messages once the job
+  ends. The history stays readable, and it cannot be reopened — that is the "no
+  contact after the job" rule, enforced by the server.
+
+There is no separate inbox screen, by choice. Instead, nothing has to be hunted for:
+
+- the delivery row in **My deliveries** carries a **"2 new messages"** badge;
+- the rider's **Current job** card carries the same badge;
+- a message that arrives while that thread is *not* on screen raises a small toast
+  with the first line of the message;
+- opening the thread is what marks it read — there is no separate "seen" button for
+  a client to forget.
+
+A message that looks like a phone number is refused before it is stored, so chat
+cannot be used to swap numbers. The count comes from `GET /api/v1/chat/unread`,
+which reports the other side's unread messages per delivery for the signed-in party
+and never marks anything read by itself.
 
 ---
 
@@ -191,6 +235,8 @@ staff invitations, and payments in **sandbox** mode (real flows, test cards).
 | The call itself, in the browser | `frontend/src/lib/call.ts` |
 | The call panel | `frontend/src/components/CallOverlay.tsx` |
 | The verification screen | `frontend/src/pages/auth/VerifyPage.tsx` |
+| Unread counts (the badge) | `backend/src/messaging/chat.service.ts` (`unread`), `GET /chat/unread` |
+| The message nudge | `frontend/src/components/MessageNotifier.tsx` |
 
-Tests: `backend/test/messaging.spec.ts` and `backend/test/call-signaling.spec.ts`
-(23 tests between them, no database needed).
+Tests: `backend/test/messaging.spec.ts`, `backend/test/call-signaling.spec.ts` and
+`backend/test/chat-unread.spec.ts` (28 tests between them, no database needed).

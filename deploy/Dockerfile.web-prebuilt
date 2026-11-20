@@ -1,0 +1,23 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Web image — from an ALREADY BUILT dist
+#
+# Use this only if the normal web build keeps dying on the platform. It is the same
+# nginx image as deploy/Dockerfile.web, except the SPA is not compiled here: it is
+# taken from `frontend/dist`, which you build once on your own machine and commit.
+#
+# Why this exists: `vite build` needs somewhere north of 700 MB of memory for this
+# app. A build machine that is smaller than that kills the process, and a killed
+# process prints no error — the platform reports an exit code and nothing else, which
+# is a miserable thing to debug. Compiling on a laptop and shipping the output removes
+# the build machine from the equation entirely.
+#
+# The trade is honest and worth stating: the compiled JavaScript is now in git, so
+# every deploy must be preceded by a local build, and the diff of a release includes
+# minified files. Prefer Dockerfile.web the moment the platform can build it.
+FROM nginx:1.27-alpine AS runtime
+ENV API_UPSTREAM=api:4000
+COPY deploy/nginx-templates/ /etc/nginx/templates/
+COPY deploy/nginx-snippets/ /etc/nginx/snippets/
+COPY frontend/dist /usr/share/nginx/html
+EXPOSE 80
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD wget -qO- http://127.0.0.1/ >/dev/null || exit 1

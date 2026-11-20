@@ -39,5 +39,20 @@ export default defineConfig({
     },
   },
   preview: { host: '0.0.0.0', port: 4173, allowedHosts: true },
-  build: { sourcemap: true, outDir: 'dist' },
+  build: {
+    /**
+     * Source maps were ON, which is three costs for one benefit nobody wanted:
+     * Rollup spends a large slice of its render phase building them (the phase a
+     * small build machine dies in), the build takes longer, and the complete
+     * front-end source ships to anyone who opens devtools on the live site.
+     */
+    sourcemap: false,
+    /**
+     * Render one file at a time. Rollup holds every in-flight chunk in memory at
+     * once; on a builder with 1 GB this is the difference between a finished build
+     * and a process that is silently killed.
+     */
+    rollupOptions: { maxParallelFileOps: 1 },
+    outDir: 'dist',
+  },
 });

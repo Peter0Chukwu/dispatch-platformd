@@ -383,6 +383,28 @@ that reference it. If the ledger does not balance, that is a **P1** — stop and
 because something bypassed the service layer. If it balances and the rider disagrees, it is a
 policy question (commission, hold period), answerable from `rider_earnings`.
 
+### "I cannot approve a rider application"
+
+Approval is **two steps, in this order**, and the API enforces both:
+
+1. **The rider uploads their documents — from their own portal, not yours.** They sign in at
+   `/login?portal=rider` and open **Documents**: NIN, driver's licence, vehicle registration
+   (images or PDF, under 5 MB each, three required). Nothing on the admin side can substitute for
+   this, by design — an administrator must never be able to approve an identity they have not been
+   shown.
+2. **You review each document** in the application modal (approve or reject with a note), and only
+   once all three read *approved* does **Approve rider** enable. Trying earlier returns
+   `409 DOCUMENTS_INCOMPLETE` naming what is missing.
+
+So "Nothing uploaded yet" means the rider has not opened their Documents page — it is not a fault
+in the dashboard. If they say they cannot sign in, that is a separate problem: sign-in does **not**
+require a verified email or phone (those matter for SMS and for password resets), so check the
+password, and remember five wrong attempts locks the account for 15 minutes.
+
+Verified contact details are **not** part of approval. A rider with unverified email and phone can
+upload, be reviewed and be approved — decide deliberately whether you want to require it before
+they take jobs.
+
 ### "A customer says the verification link does not work"
 
 1. Open `GET /api/v1/health` and look at `integrations.email`. `CONSOLE` means nothing was ever

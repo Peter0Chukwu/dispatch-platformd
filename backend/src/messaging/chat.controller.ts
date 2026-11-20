@@ -9,6 +9,24 @@ import { ChatService } from './chat.service';
 import { VoiceService } from './voice.service';
 
 /**
+ * Unread messages, across the deliveries this person is party to.
+ *
+ * Its own controller so the path is `/chat/unread` — a first segment under
+ * `/deliveries` would have to fight the `:id` routes for the same word.
+ */
+@Controller('chat')
+@RequireType('CUSTOMER', 'RIDER')
+export class ChatInboxController {
+  constructor(private readonly chat: ChatService) {}
+
+  @Get('unread')
+  @RateLimit({ points: 120, windowSeconds: 60, keyBy: 'ip+route' })
+  async unread(@CurrentUser() user: AuthPrincipal) {
+    return this.chat.unread(user);
+  }
+}
+
+/**
  * The customer ↔ rider thread for one delivery.
  *
  * One controller for both portals because it is the same conversation seen from

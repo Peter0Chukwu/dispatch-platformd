@@ -3,7 +3,13 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Badge, Button, Card, CardBody, CardHeader, Input, useToast } from './ui';
 import { LIVE_EVENTS, useLiveEvent } from '../lib/live';
 import { useApiError } from '../contexts/AuthContext';
-import { useContactStatus, useMessages, useRequestCall, useSendMessage } from '../hooks/useChat';
+import {
+  setOpenThread,
+  useContactStatus,
+  useMessages,
+  useRequestCall,
+  useSendMessage,
+} from '../hooks/useChat';
 import { startCall } from '../lib/call';
 
 /**
@@ -43,6 +49,13 @@ export function ContactCard({
   const call = useRequestCall(deliveryId);
   const sendError = useApiError(send.error);
   const callError = useApiError(call.error);
+
+  // Tell the app-wide nudge which thread is on screen, so it does not announce a
+  // message the person is already looking at.
+  useEffect(() => {
+    setOpenThread(deliveryId);
+    return () => setOpenThread(null);
+  }, [deliveryId]);
 
   // A message that arrives while the panel is open refetches the thread.
   useLiveEvent(LIVE_EVENTS.MESSAGE_NEW, () => {

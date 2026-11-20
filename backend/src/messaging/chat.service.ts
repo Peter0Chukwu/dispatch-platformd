@@ -98,6 +98,41 @@ export class ChatService {
     return { messages: rows.map((row) => this.toDto(row)) };
   }
 
+  /**
+   * How many messages are waiting for me, and on which delivery.
+   *
+   * This is what makes an unread badge possible without a separate inbox screen:
+   * the delivery the person already looks at carries the mark. Messages are not
+   * marked read here — opening the thread does that, and only that.
+   */
+  async unread(user: AuthPrincipal): Promise<{
+    total: number;
+    byDelivery: { deliveryId: string; count: number; lastAt: Date | null }[];
+  }> {
+    const senderType = await this.resolve(user);
+    // The other side's messages only: your own reply is never "unread" to you.
+    const scope =
+      senderType === 'CUSTOMER' ? { customerId: user.customerId } : { riderId: user.riderId };
+    // A customer with no customer record (or a rider not yet linked) has no threads
+    // to be behind on — no query needed.
+    if (!scope.customerId && !scope.riderId) return { total: 0, byDelivery: [] };
+
+    const rows = await this.prisma.message.groupBy({
+      by: ['deliveryId'],
+      where: { readAt: null, senderType: { not: senderType }, delivery: scope },
+      _count: { _all: true },
+      _max: { createdAt: true },
+    });
+
+    const byDelivery = rows.map((row) => ({
+      deliveryId: row.deliveryId,
+      count: row._count._all,
+      lastAt: row._max.createdAt,
+    }));
+
+    return { total: byDelivery.reduce((sum, row) => sum + row.count, 0), byDelivery };
+  }
+
   async send(user: AuthPrincipal, deliveryId: string, input: { body: string }): Promise<ChatMessageDto> {
     const { senderType, delivery } = await this.thread(user, deliveryId);
 
