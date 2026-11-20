@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createHash, randomBytes, randomInt } from 'node:crypto';
 import { PrismaService } from '../infra/prisma/prisma.service';
@@ -178,6 +178,24 @@ export class VerificationService {
     firstName: string;
   }): Promise<{ devCode?: string; expiresInSeconds: number; delivered: boolean; deliveryReason?: string }> {
     if (!user.phone) throw AppError.validation([{ field: 'phone', message: 'No phone number on this account' }]);
+
+    /**
+     * No SMS driver means this code cannot reach anyone.
+     *
+     * Outside production the code is returned to the caller and shown on screen, so
+     * the flow still completes. In production it is not, and the old behaviour was to
+     * say "we sent a 6-digit code" anyway and leave the customer typing nothing at a
+     * dead end. Saying so is better than pretending: phone confirmation is optional,
+     * email is what the account actually stands on.
+     */
+    if (!this.messaging.smsDelivers && !this.exposeCodes) {
+      throw new AppError(
+        'SMS_UNAVAILABLE',
+        'Phone confirmation is not switched on yet, so nothing was sent. It is optional — your email address is enough to book.',
+        HttpStatus.SERVICE_UNAVAILABLE,
+      );
+    }
+
     const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
     await this.issue(user.id, 'PHONE_OTP', `${user.id}:${code}`, user.phone, TTL.PHONE_OTP);
     const delivery = await this.messaging.sendSms({

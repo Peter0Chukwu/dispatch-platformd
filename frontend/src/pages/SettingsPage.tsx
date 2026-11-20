@@ -20,6 +20,8 @@ import { api } from '../lib/api';
 import { CUSTOMER_NAV } from './customer/nav';
 import { RIDER_NAV } from './rider/nav';
 import { adminNav } from './admin/nav';
+import { MessagingTestPanel } from '../components/MessagingTestPanel';
+import { useSmsReady } from '../hooks/useHealth';
 
 const MAX_AVATAR_BYTES = 5 * 1024 * 1024;
 const ACCEPTED_AVATAR_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
@@ -43,6 +45,7 @@ interface SessionRow {
  * would be a privilege escalation with a friendly face.
  */
 export default function SettingsPage({ portal }: { portal: 'Customer' | 'Rider' | 'Admin' }) {
+  const smsReady = useSmsReady();
   const { user, hasPermission, updateUser } = useAuth();
   const { notify } = useToast();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -223,6 +226,8 @@ export default function SettingsPage({ portal }: { portal: 'Customer' | 'Rider' 
           </p>
         </div>
 
+        {portal === 'Admin' && <MessagingTestPanel />}
+
         {/* Picture */}
         <Card>
           <CardHeader title="Display picture" subtitle="Shown in the top bar, on your profile and to colleagues." />
@@ -306,6 +311,10 @@ export default function SettingsPage({ portal }: { portal: 'Customer' | 'Rider' 
                 {user?.phone ?? '—'}
                 {user?.phoneVerified ? (
                   <Badge tone="brand">Verified</Badge>
+                ) : smsReady === false ? (
+                  <span className="text-xs text-ink-400" title="Phone confirmation needs an SMS provider.">
+                    Not confirmed
+                  </span>
                 ) : (
                   <Link to="/verify" className="text-xs font-semibold text-brand-700 underline">
                     Verify now

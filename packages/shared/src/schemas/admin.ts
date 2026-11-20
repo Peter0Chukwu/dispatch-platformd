@@ -141,3 +141,29 @@ export const acceptStaffInviteSchema = z.object({
   acceptTerms: z.literal(true),
 });
 export type AcceptStaffInviteInput = z.infer<typeof acceptStaffInviteSchema>;
+
+/**
+ * Send a test message from the admin console.
+ *
+ * Exists because "SMS is broken" is almost never the code: it is a missing key, a
+ * sender ID the provider has not approved, the wrong route, or an empty wallet. A
+ * one-button test that reports the provider's own answer turns a guess into a fact —
+ * and it has to be a button, because reading the API log is not something the owner
+ * of a logistics company should have to do to know whether a customer got their code.
+ */
+export const testMessageSchema = z
+  .object({
+    channel: z.enum(['SMS', 'EMAIL']),
+    /** A phone number for SMS, an address for email. Validated per channel below. */
+    to: z.string().trim().min(6, 'Enter where the test should go').max(120),
+  })
+  .superRefine((value, ctx) => {
+    const digits = value.to.replace(/[\s-]/g, '');
+    if (value.channel === 'SMS' && !/^(\+?234|0)[789][01]\d{8}$/.test(digits)) {
+      ctx.addIssue({ code: 'custom', path: ['to'], message: 'Enter a Nigerian mobile number, e.g. 0803 123 4567' });
+    }
+    if (value.channel === 'EMAIL' && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(value.to)) {
+      ctx.addIssue({ code: 'custom', path: ['to'], message: 'Enter a valid email address' });
+    }
+  });
+export type TestMessageInput = z.infer<typeof testMessageSchema>;

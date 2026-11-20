@@ -16,6 +16,7 @@ import {
   AdminInvitesController,
   StaffInviteAcceptController,
 } from "./admin-invites.controller";
+import { AdminMessagingController } from "./admin-messaging.controller";
 import { PaymentsModule } from "../payments/payments.module";
 import { WithdrawalsModule } from "../withdrawals/withdrawals.module";
 
@@ -31,6 +32,7 @@ import { WithdrawalsModule } from "../withdrawals/withdrawals.module";
     AdminOpsController,
     AdminFinanceController,
     AdminInvitesController,
+    AdminMessagingController,
     // Public: the invitee has no account yet.
     StaffInviteAcceptController,
   ],

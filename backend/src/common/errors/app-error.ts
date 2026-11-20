@@ -36,6 +36,8 @@ export type ErrorCode =
   | 'DUPLICATE_REQUEST'
   | 'RATE_LIMITED'
   | 'PROVIDER_ERROR'
+  /** The code would have had to travel by text, and texting is not switched on. */
+  | 'SMS_UNAVAILABLE'
   | 'LEDGER_ACCOUNT_MISSING'
   | 'PAYMENT_PROVIDER_ERROR'
   | 'PAYMENT_SIMULATED'

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { MessagingService, toTermiiNumber } from '../src/messaging/messaging.service';
+import { MessagingService, summariseProviderReply, toTermiiNumber } from '../src/messaging/messaging.service';
 
 /**
  * Outbound SMS and email.
@@ -205,5 +205,88 @@ describe('phase 7 — outbound messages', () => {
     it('describes itself in one line for the boot log', () => {
       expect(new MessagingService(consoleConfig).describe()).toBe('SMS: console only · Email: console only');
     });
+  });
+});
+
+/**
+ * "IS SMS WORKING?" — the admin console's test button.
+ *
+ * Every real-world SMS failure this platform has had was a configuration one: no key,
+ * a sender ID not yet approved, the wrong route, an empty wallet. Each of those arrives
+ * from Termii as an HTTP 200 with an explanation buried in the body, which is why the
+ * result now carries the provider's own sentence instead of "Termii responded 200".
+ */
+describe('the messaging test button', () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('reports the provider sentence when Termii rejects a send inside a 200', async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ code: '400', message: 'Sender ID not found' }),
+    });
+
+    const service = new MessagingService(
+      configWith({
+        SMS_MODE: 'TERMII',
+        TERMII_API_KEY: 'key',
+        TERMII_SENDER_ID: 'TWL',
+        TERMII_CHANNEL: 'dnd',
+      }) as never,
+    );
+
+    const result = await service.sendTest('SMS', '08031234567');
+    expect(result.delivered).toBe(false);
+    expect(result.providerMessage).toBe('Sender ID not found');
+  });
+
+  it('says plainly that nothing leaves the building in console mode', async () => {
+    const service = new MessagingService(configWith({ SMS_MODE: 'CONSOLE', EMAIL_MODE: 'CONSOLE' }) as never);
+    const result = await service.sendTest('SMS', '08031234567');
+    expect(result.delivered).toBe(false);
+    expect(result.reason).toContain('CONSOLE');
+    // No request was attempted: printing to a log is not a delivery.
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('tells the console exactly what is misconfigured, without leaking the key', () => {
+    const service = new MessagingService(
+      configWith({
+        SMS_MODE: 'TERMII',
+        TERMII_API_KEY: '',
+        TERMII_SENDER_ID: 'TWL',
+        TERMII_CHANNEL: 'dnd',
+        EMAIL_MODE: 'RESEND',
+        RESEND_API_KEY: 're_abc',
+        EMAIL_FROM: 'TWL <no-reply@example.com>',
+      }) as never,
+    );
+
+    const status = service.status();
+    expect(status.sms.ready).toBe(false);
+    expect(status.sms.problem).toContain('TERMII_API_KEY');
+    expect(status.email.ready).toBe(true);
+    expect(JSON.stringify(status)).not.toContain('re_abc');
+  });
+});
+
+describe('reading a provider error', () => {
+  it('pulls out the message field', () => {
+    expect(summariseProviderReply('{"code":"400","message":"Sender ID not found"}')).toBe('Sender ID not found');
+    expect(summariseProviderReply('{"message":"domain is not verified"}')).toBe('domain is not verified');
+  });
+
+  it('falls back to the raw text when the body is not JSON', () => {
+    expect(summariseProviderReply('  Bad Gateway  ')).toBe('Bad Gateway');
   });
 });

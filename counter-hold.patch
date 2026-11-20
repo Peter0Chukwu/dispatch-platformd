@@ -1,0 +1,67 @@
+From a50e390d2b6acb0cf9cfd3b198b4075bbbcb9ec9 Mon Sep 17 00:00:00 2001
+From: TWL Build <build@twl.local>
+Date: Fri, 20 Nov 2026 16:55:21 +0000
+Subject: [PATCH] fix(dispatch): an offer a rider has haggled on does not
+ expire under the customer
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Two clocks were running on the same row. The rider has twenty seconds to answer an
+offer; when they name their own price, the wait moves to the customer — who may take a
+couple of minutes to look at their phone. The sweeper was still expiring those rows, so:
+
+  - the question vanished from the customer's screen mid-read;
+  - their Accept failed with "that price is no longer on the table";
+  - the rider's own card disappeared while they were waiting for an answer.
+
+Now the sweeper leaves a PENDING counter alone, and the rider's list keeps an offer
+while it is being answered rather than only while the twenty-second clock lasts. The
+customer-side claim already tolerated an expired offer; this stops it becoming expired
+in the first place.
+
+118 tests, typecheck clean.
+---
+ backend/src/dispatch/dispatch.service.ts | 19 +++++++++++++++++--
+ 1 file changed, 17 insertions(+), 2 deletions(-)
+
+diff --git a/backend/src/dispatch/dispatch.service.ts b/backend/src/dispatch/dispatch.service.ts
+index f565085..268216d 100644
+--- a/backend/src/dispatch/dispatch.service.ts
++++ b/backend/src/dispatch/dispatch.service.ts
+@@ -72,7 +72,15 @@ export class DispatchService {
+   /** Expire offers nobody answered. Cheap, idempotent, called by the scheduler and before every read/write. */
+   async sweepExpired(): Promise<number> {
+     const result = await this.prisma.deliveryAssignment.updateMany({
+-      where: { status: 'OFFERED', expiresAt: { lt: new Date() } },
++      where: {
++        status: 'OFFERED',
++        expiresAt: { lt: new Date() },
++        // A rider who has named their price is not an unanswered offer: the clock
++        // has stopped being theirs and started being the customer's. Sweeping it
++        // away would delete a question from the customer's screen while they were
++        // reading it, and their Accept would then fail with "that price is gone".
++        counterState: { not: 'PENDING' },
++      },
+       data: { status: 'EXPIRED', respondedAt: new Date() },
+     });
+     if (result.count > 0) this.logger.log(`Expired ${result.count} unanswered offer(s)`);
+@@ -524,7 +532,14 @@ export class DispatchService {
+     await this.sweepExpired();
+ 
+     const assignments = await this.prisma.deliveryAssignment.findMany({
+-      where: { riderId, status: 'OFFERED', expiresAt: { gt: new Date() } },
++      where: {
++        riderId,
++        status: 'OFFERED',
++        // Still live, or still being answered: a counter of this rider's own stays on
++        // their screen past the twenty-second offer clock, because the wait is now on
++        // the other person.
++        OR: [{ expiresAt: { gt: new Date() } }, { counterState: 'PENDING' }],
++      },
+       orderBy: { offeredAt: 'asc' },
+       include: {
+         delivery: {
+-- 
+2.47.3
+

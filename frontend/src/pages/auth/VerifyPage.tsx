@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-do
 import { AuthLayout } from '../../layouts/AuthLayout';
 import { Alert, Button, Input } from '../../components/ui';
 import { api, ApiError } from '../../lib/api';
+import { useSmsReady } from '../../hooks/useHealth';
 
 /**
  * One screen covering both verification steps:
@@ -38,6 +39,15 @@ export default function VerifyPage() {
    */
   const emailFailed = state.verification?.emailDelivered === false;
   const smsFailed = state.verification?.smsDelivered === false;
+
+  /**
+   * Phone confirmation is optional. If this deployment has no SMS provider the code
+   * cannot reach the handset, and in production the API does not return it either —
+   * so the section is replaced with one honest line instead of a code box nobody can
+   * fill. Outside production the code is shown on screen and the flow still completes.
+   */
+  const smsReady = useSmsReady();
+  const showPhone = smsReady !== false || Boolean(state.verification?.devCode);
 
   const [emailToken, setEmailToken] = useState(params.get('token') ?? state.verification?.devToken ?? '');
   const [code, setCode] = useState(state.verification?.devCode ?? '');
@@ -154,11 +164,15 @@ export default function VerifyPage() {
     <AuthLayout
       title="Verify your account"
       subtitle={
-        emailFailed || smsFailed
-          ? 'Confirm your email and phone number. One of the messages below did not go out — you can send it again.'
-          : state.email
-            ? `We sent a link to ${state.email} and a code to your phone.`
-            : 'Confirm your email and phone number.'
+        !showPhone
+          ? state.email
+            ? `We sent a confirmation link to ${state.email}. Phone confirmation is switched off for now and is not needed.`
+            : 'Confirm your email address. Phone confirmation is switched off for now and is not needed.'
+          : emailFailed || smsFailed
+            ? 'Confirm your email and phone number. One of the messages below did not go out — you can send it again.'
+            : state.email
+              ? `We sent a link to ${state.email} and a code to your phone.`
+              : 'Confirm your email and phone number.'
       }
       footer={
         <>
@@ -218,6 +232,7 @@ export default function VerifyPage() {
           </div>
         </section>
 
+        {showPhone ? (
         <section className="card-surface p-4">
           <h2 className="text-sm font-semibold text-ink-900">2. Phone number</h2>
           <p className="mt-0.5 text-xs text-ink-500">Enter the 6-digit code we sent by SMS.</p>
@@ -241,6 +256,19 @@ export default function VerifyPage() {
             </div>
           </div>
         </section>
+        ) : (
+          <section className="card-surface p-4">
+            <h2 className="text-sm font-semibold text-ink-900">2. Phone number</h2>
+            <p className="mt-1 text-xs leading-relaxed text-ink-500">
+              We cannot send text messages yet, so this step is switched off. It is completely optional — a confirmed
+              email address is all your account needs, and you can book as soon as step 1 is done.
+            </p>
+            <p className="mt-2 text-xs leading-relaxed text-ink-400">
+              Your number is still used to reach you about a delivery, and drivers call it through the app so it is
+              never shown to them.
+            </p>
+          </section>
+        )}
 
         {state.verification?.devCode && (
           <Alert tone="warning" title="Text messages are not switched on yet">

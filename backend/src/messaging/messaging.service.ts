@@ -14,7 +14,10 @@ export interface OutboundMessage {
     | 'WELCOME'
     | 'SECURITY_ALERT'
     /** A dispatch offer, sent because a rider may not have the app open. */
-    | 'DISPATCH_OFFER';
+    | 'DISPATCH_OFFER'
+    /** Sent from the admin console's messaging test. */
+    | 'SMS_TEST'
+    | 'EMAIL_TEST';
 }
 
 /**
@@ -31,6 +34,14 @@ export interface DeliveryResult {
   driver: string;
   /** Safe to log, never contains a key. */
   reason?: string;
+  /**
+   * What the provider actually said, when it said anything. "Termii responded 400"
+   * is not an explanation; "Sender ID not found" is, and it is the difference between
+   * a five-minute fix and an evening of guessing. Truncated and never includes the
+   * key, because the request body is never echoed back.
+   */
+  providerStatus?: number;
+  providerMessage?: string;
 }
 
 /**
@@ -114,13 +125,25 @@ export class MessagingService {
       const body = (await response.text()).slice(0, 500);
       if (!response.ok) {
         this.logger.error(`Termii refused an SMS (${response.status}): ${body}`);
-        return { delivered: false, driver: 'termii', reason: `Termii responded ${response.status}` };
+        return {
+          delivered: false,
+          driver: 'termii',
+          reason: `Termii responded ${response.status}`,
+          providerStatus: response.status,
+          providerMessage: summariseProviderReply(body),
+        };
       }
       // Termii answers 200 with an error body for some failures, so the payload is
       // read rather than trusting the status code alone.
       if (/"code"\s*:\s*"?(4\d\d|5\d\d)/.test(body) || /invalid|not found|insufficient/i.test(body)) {
         this.logger.error(`Termii returned an error for an SMS: ${body}`);
-        return { delivered: false, driver: 'termii', reason: 'Termii rejected the message' };
+        return {
+          delivered: false,
+          driver: 'termii',
+          reason: 'Termii rejected the message',
+          providerStatus: response.status,
+          providerMessage: summariseProviderReply(body),
+        };
       }
       this.logger.log(`📱 SMS sent to ${maskPhone(message.to)} [${message.kind}]`);
       return { delivered: true, driver: 'termii' };
@@ -163,7 +186,13 @@ export class MessagingService {
       const body = (await response.text()).slice(0, 500);
       if (!response.ok) {
         this.logger.error(`Resend refused an email (${response.status}): ${body}`);
-        return { delivered: false, driver: 'resend', reason: `Resend responded ${response.status}` };
+        return {
+          delivered: false,
+          driver: 'resend',
+          reason: `Resend responded ${response.status}`,
+          providerStatus: response.status,
+          providerMessage: summariseProviderReply(body),
+        };
       }
       this.logger.log(`✉️  Email sent to ${maskEmail(message.to)} [${message.kind}]`);
       return { delivered: true, driver: 'resend' };
@@ -171,6 +200,75 @@ export class MessagingService {
       this.logger.error(`Resend email failed: ${(error as Error).message}`);
       return { delivered: false, driver: 'resend', reason: (error as Error).message };
     }
+  }
+
+  /**
+   * What the admin console needs to show: which driver is configured for each
+   * channel, and — the honest part — whether it can actually deliver anything.
+   *
+   * No secret is ever returned. The API key is not read here at all: "configured"
+   * means the key is present, not what it is.
+   */
+  status() {
+    const smsMode = this.config.get('SMS_MODE', { infer: true });
+    const emailMode = this.config.get('EMAIL_MODE', { infer: true });
+    const termiiKey = !!this.config.get('TERMII_API_KEY', { infer: true })?.trim();
+    const resendKey = !!this.config.get('RESEND_API_KEY', { infer: true })?.trim();
+
+    return {
+      sms: {
+        mode: smsMode,
+        ready: smsMode === 'TERMII' && termiiKey,
+        senderId: this.config.get('TERMII_SENDER_ID', { infer: true }),
+        /**
+         * The route matters more than anything else on this screen: the generic route
+         * does not reach numbers with do-not-disturb active, which in Nigeria is most
+         * of them, so an OTP sent on `generic` looks delivered and is never seen.
+         */
+        route: this.config.get('TERMII_CHANNEL', { infer: true }),
+        problem: !termiiKey
+          ? 'TERMII_API_KEY is empty. SMS can only be printed to the server log until a key is added.'
+          : smsMode !== 'TERMII'
+            ? 'SMS_MODE is CONSOLE. Codes are printed to the server log, not sent.'
+            : null,
+      },
+      email: {
+        mode: emailMode,
+        ready: emailMode === 'RESEND' && resendKey,
+        from: this.config.get('EMAIL_FROM', { infer: true }),
+        problem: !resendKey
+          ? 'RESEND_API_KEY is empty. Email can only be printed to the server log.'
+          : emailMode !== 'RESEND'
+            ? 'EMAIL_MODE is CONSOLE. Emails are printed to the server log, not sent.'
+            : null,
+      },
+    };
+  }
+
+  /**
+   * Send one real message, on demand, and report exactly what happened.
+   *
+   * This is the answer to "is SMS working?" — a question that otherwise gets answered
+   * by registering a test account and waiting, or by reading a server log. The message
+   * says what it is, so a customer who receives it by mistake is not confused.
+   */
+  async sendTest(channel: 'SMS' | 'EMAIL', to: string): Promise<DeliveryResult & { to: string }> {
+    const body =
+      channel === 'SMS'
+        ? 'Traders Welfare Logistics test message. If you received this, SMS is working. No action needed.'
+        : 'This is a test message from Traders Welfare Logistics. If you received it, email is working. No action needed.';
+
+    const result =
+      channel === 'SMS'
+        ? await this.sendSms({ to, body, kind: 'SMS_TEST' })
+        : await this.sendEmail({ to, subject: 'TWL test message', body, kind: 'EMAIL_TEST' });
+
+    this.logger.log(
+      `Messaging test (${channel}) → ${channel === 'SMS' ? maskPhone(to) : maskEmail(to)}: ${
+        result.delivered ? 'delivered' : `not delivered (${result.reason ?? 'unknown'})`
+      }`,
+    );
+    return { ...result, to };
   }
 }
 
@@ -182,6 +280,28 @@ export function toTermiiNumber(phone: string): string {
   if (digits.startsWith('234')) return digits;
   if (digits.startsWith('0')) return `234${digits.slice(1)}`;
   return digits;
+}
+
+/**
+ * A provider's error body, cut down to something a person can act on.
+ *
+ * Termii answers with JSON like {"code":"400","message":"Sender ID not found"} and
+ * Resend with {"message":"domain is not verified"}. The `message` field is the only
+ * part worth showing; everything else is noise, and the request (which holds the key)
+ * is never included.
+ */
+export function summariseProviderReply(raw: string): string {
+  const trimmed = raw.trim();
+  try {
+    const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+    for (const field of ['message', 'error', 'detail', 'description']) {
+      const value = parsed[field];
+      if (typeof value === 'string' && value.trim()) return value.trim().slice(0, 240);
+    }
+    return trimmed.slice(0, 240);
+  } catch {
+    return trimmed.replace(/\s+/g, ' ').slice(0, 240);
+  }
 }
 
 /** Never log a whole phone number. */

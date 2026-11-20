@@ -1,90 +1,80 @@
-TWL — the build failed on a file your repo does not have
-=======================================================
+SMS — you do not have to sign up for anything
+===============================================================================
 
-FOUND IT
---------
-    Could not resolve "./components/MessageNotifier" from "src/App.tsx"
+Good. Don't. I went back through the product and checked what actually depends on a
+text message leaving the server. The answer is: nothing.
 
-Your App.tsx imports that component; the file does not exist in your copy. Vite stops
-at the first missing import, so this is not necessarily the only one — and the history
-says it almost certainly is not.
+  · signing up completes on the emailed link (Resend is live and working)
+  · booking a rider, offers, counters, chat, masked calls — all in-app, no SMS
+  · a rider who is offline misses the offer SMS, but the offer is still in their app
 
-THE CAUSE, IN ONE SENTENCE
---------------------------
-Your working copy is missing files. Not modified files — absent ones. `MessageNotifier`
-arrived with the chat-badge work, and now that I know to look, that same gap explains
-the loose end I flagged days ago: /api/v1/chat/unread answers 404 on your live API while
-routes from newer commits answer normally. Two symptoms, one cause: parts of that commit
-never reached your machine.
+So SMS is a nice-to-have sitting on top of a working product, not a hole in it. Leave
+it off. That is a legitimate answer, not a shortcut.
 
-WHY THIS IS THE RIGHT FIX AND NOT ANOTHER PATCH
------------------------------------------------
-Last time it was deploy/nginx-snippets. Now it is a component. If I send you one file
-at a time, we will do this again in an hour with the next one. So this zip is the
-COMPLETE source tree at commit 1ddfdb4 — 372 files, every .ts/.tsx/.json/.sql/.css/
-.html/.conf/.md in the project — with the same paths it has in the repo.
+BUT I FOUND SOMETHING WHILE CHECKING, AND IT WAS REAL
+-------------------------------------------------------------------------------
+The app was still OFFERING phone confirmation on a deployment that cannot send texts.
+Three places:
 
-WHAT IS NOT IN THE ZIP (on purpose)
------------------------------------
-  · your .env files  — they are gitignored and were never tracked, so nothing secret
-                        is replaced or exposed
-  · node_modules, dist, .git
-  · backups/ and the screenshot folders
-  · documentation/BUILD-REPORT.html (5.5 MB of generated HTML)
+  · Settings: a "Verify now" link
+  · every portal: a "Your phone number is not verified" banner that could never be
+    cleared, no matter what the customer did
+  · the verification screen: a 6-digit code box under the words "we sent a 6-digit
+    code" — and in production the API deliberately does not return the code, so the
+    customer sat there with nothing to type
 
-HOW TO APPLY IT — THEN PROVE IT BEFORE YOU PUSH
------------------------------------------------
-1. Close any open editor tabs on the project.
+In development the code is shown on screen, so this never bit you. In production it is
+a dead end that quietly says the product is broken.
 
-2. Extract this zip into:
-       C:\Users\USER\Documents\dispatch-platform
-   Say yes to replacing files. The folder structure inside the zip already matches.
+That is fixed now:
 
-3. TEST IT LOCALLY. This is the step that turns a guess into certainty:
+  · the API refuses out loud (503, "nothing was sent, and it is optional")
+  · Settings says "Not confirmed" instead of a link that goes nowhere
+  · the banner stays quiet
+  · step 2 of verification explains, in two sentences, that the step is off and that
+    email is all the account needs
+  · the customer home badge says "Phone on file", not a warning that never clears
 
-       cd C:\Users\USER\Documents\dispatch-platform\frontend
-       npx vite build
+The moment you DO add a provider, all of it turns itself back on — the browser reads
+the API's own health block, which has always said whether SMS is really configured.
 
-   It must end with  "built in X.XXs"  and produce frontend\dist\.
+-------------------------------------------------------------------------------
+ON TERMII, HONESTLY
 
-   If it fails, stop and send me the error — it will name another missing file, and I
-   will include it. Do not push a build you have not seen work.
+Email cost you a DNS records afternoon. SMS will cost you more, because it is not a
+technical step at all: it is a business-verification step. An account, a sender ID a
+human approves, and the DND route that Termii switches on by hand after you email
+support. Days, sometimes weeks. There is no self-serve way to reach every network —
+anyone who tells you otherwise is selling the generic route, which silently fails on
+do-not-disturb numbers, which in Nigeria is most of them.
 
-4. Then commit and push. In VS Code Source Control you will see a long list of added
-   and modified files — that is expected: the zip restores everything that was missing
-   plus the commits since. Commit them all.
+So: do it when a customer asks for texts, or before you run a paid-marketing push.
+Not before launch. I have written it all down in documentation/SMS-SETUP.md so it is a
+checklist when that day comes rather than a research project.
 
-5. Check the file count matches:
+If you ever want it faster than Termii's review, say so and I will add a second driver
+for a provider that issues OTP sender names at sign-up (Robase, Arkesel, Sendar). That
+is roughly forty lines in one file — worth doing the day you decide, not before.
 
-       cd C:\Users\USER\Documents\dispatch-platform
-       git ls-files | find /c /v ""
+-------------------------------------------------------------------------------
+HOW TO APPLY  (two commits: 4135791 then bbcb11b)
 
-   It should read 467. Anything lower means files still did not make it into the repo.
+  Option A   git fetch && git checkout bbcb11b
+             then: npm ci
+                   npm run build --workspace @dispatch/shared
 
-6. Deploy the web service. This time the Dockerfile build has the files it was looking
-   for, so it should complete and the bundle name on the live site should change from
-   index-BrOVvYWS.js to index-ex1SW8n1.js (Ctrl+U on the site, search for index-).
+  Option B   git apply last-two.patch
 
-7. Run the migration, which nothing so far has done:
+  Then push and deploy BOTH services — the web bundle changed.
 
-       cd C:\Users\USER\Documents\dispatch-platform\backend
-       set DATABASE_URL=<production URL from the hosting dashboard>
-       npx prisma migrate deploy
-       set DATABASE_URL=
+CHECKED HERE, NOT ASSUMED
+  · backend typecheck clean · frontend typecheck clean · production build completed
+  · 14 test files, 125 passing (2 new: the API refuses in production, and still
+    completes in development where the code is shown on screen)
 
-8. Confirm the two checks that prove the whole deploy is current:
-       /api/v1/chat/unread  -> 401   (not 404 — that is the gap this zip closes)
-       /api/v1/health       -> "email":"RESEND", "site":"https://traderswelfarelogistics.online"
-
-WHAT TO EXPECT AFTERWARDS
--------------------------
-  · Booking page: From -> To -> Size -> Bill, with Accept or Negotiate.
-  · Rider offer card: both numbers when the customer haggled, Accept / Ask for more.
-  · Customer delivery page: riders asking for more, with Accept / Decline.
-  · Accepting sends both people to that delivery's chat.
-
-If the web build still fails on the platform after a LOCAL build succeeds, tell me —
-that would mean the platform's build settings differ from what the Dockerfile expects,
-and Dockerfile.web-prebuilt (included) sidesteps it.
-
-Files included: 372, listed one per line in FILES-INCLUDED.txt
+WHAT TO LOOK AT AFTER DEPLOY  (two minutes, no sign-up needed)
+  1. /staff → Settings → the Messaging card says SMS "not sending" and names
+     TERMII_API_KEY as the missing thing. That is the truth, on purpose.
+  2. Settings → the Phone row reads "Not confirmed" — no dead link.
+  3. Sign out, register a customer, and you land on verification: step 1 is the email
+     link, step 2 says the phone step is off. No banner nagging you afterwards.

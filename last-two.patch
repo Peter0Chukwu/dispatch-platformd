@@ -1,0 +1,1136 @@
+From 41357914c8ea0455c76d0099e18f61cece97cce3 Mon Sep 17 00:00:00 2001
+From: TWL Build <build@twl.local>
+Date: Fri, 20 Nov 2026 19:55:21 +0000
+Subject: [PATCH 1/2] feat(messaging): a button that says whether SMS and email
+ actually work
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The last four messaging failures were configuration, not code: no key, an unapproved
+sender ID, the wrong route, an empty wallet — and every one of them was discovered by
+registering a test account and waiting, or by reading a server log the owner of the
+business should not have to read.
+
+Admin -> Settings -> Messaging now shows both drivers and their real state, and sends
+one real message on demand. The result panel prints the provider's own sentence
+("Sender ID not found", "Insufficient balance") because "Termii responded 200" is not
+an explanation — Termii answers 200 with an error body, which is precisely why the
+generic route silently fails to reach DND numbers.
+
+Behind it: DeliveryResult carries providerStatus and providerMessage (truncated, never
+the key), summariseProviderReply() turns a provider body into the one sentence worth
+showing, and MessagingService.status() reports readiness per channel without ever
+reading a secret out loud.
+
+documentation/SMS-SETUP.md writes down what "turning SMS on" actually requires — sender
+ID approval, DND route activation, per-message cost — and what each provider error means.
+
+5 new tests (123 total), typecheck and production build clean.
+---
+ .../src/admin/admin-messaging.controller.ts   |  42 +++++
+ backend/src/admin/admin.module.ts             |   2 +
+ backend/src/messaging/messaging.service.ts    | 128 +++++++++++++-
+ backend/test/messaging.spec.ts                |  85 +++++++++-
+ documentation/SMS-SETUP.md                    | 107 ++++++++++++
+ .../src/components/MessagingTestPanel.tsx     | 160 ++++++++++++++++++
+ frontend/src/pages/SettingsPage.tsx           |   3 +
+ packages/shared/src/schemas/admin.ts          |  26 +++
+ 8 files changed, 548 insertions(+), 5 deletions(-)
+ create mode 100644 backend/src/admin/admin-messaging.controller.ts
+ create mode 100644 documentation/SMS-SETUP.md
+ create mode 100644 frontend/src/components/MessagingTestPanel.tsx
+
+diff --git a/backend/src/admin/admin-messaging.controller.ts b/backend/src/admin/admin-messaging.controller.ts
+new file mode 100644
+index 0000000..7f9dff5
+--- /dev/null
++++ b/backend/src/admin/admin-messaging.controller.ts
+@@ -0,0 +1,42 @@
++import { Body, Controller, Get, Post } from '@nestjs/common';
++import { testMessageSchema, type TestMessageInput } from '@dispatch/shared';
++import { RequireType } from '../auth/decorators/require-type.decorator';
++import { RateLimit } from '../common/rate-limit/rate-limit.decorator';
++import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
++import { MessagingService } from '../messaging/messaging.service';
++
++/**
++ * IS MESSAGING ACTUALLY WORKING?
++ *
++ * The question comes up every time a customer says "I never got the code", and the
++ * honest answer is usually one of: no API key, a sender ID the provider has not
++ * approved, the wrong route, or an empty wallet. None of those are visible from the
++ * app, all of them are visible from here.
++ *
++ * STAFF only, and no extra permission is required on purpose: sending one test
++ * message to your own phone is not a privileged act, and gating it behind a
++ * fine-grained right would mean the one person who needs it (the owner) cannot use it.
++ */
++@Controller('admin/messaging')
++@RequireType('STAFF')
++export class AdminMessagingController {
++  constructor(private readonly messaging: MessagingService) {}
++
++  /** Which driver is configured for each channel, and whether it can deliver. */
++  @Get('status')
++  status() {
++    return this.messaging.status();
++  }
++
++  /**
++   * Send one real message and report the provider's own answer.
++   *
++   * Rate-limited hard: this costs money per send when SMS is live, and the button is
++   * in a browser that someone might lean on.
++   */
++  @Post('test')
++  @RateLimit({ points: 5, windowSeconds: 60, keyBy: 'ip+route' })
++  test(@Body(new ZodValidationPipe(testMessageSchema)) input: TestMessageInput) {
++    return this.messaging.sendTest(input.channel, input.to);
++  }
++}
+diff --git a/backend/src/admin/admin.module.ts b/backend/src/admin/admin.module.ts
+index d7c1653..ddcadf1 100644
+--- a/backend/src/admin/admin.module.ts
++++ b/backend/src/admin/admin.module.ts
+@@ -16,6 +16,7 @@ import {
+   AdminInvitesController,
+   StaffInviteAcceptController,
+ } from "./admin-invites.controller";
++import { AdminMessagingController } from "./admin-messaging.controller";
+ import { PaymentsModule } from "../payments/payments.module";
+ import { WithdrawalsModule } from "../withdrawals/withdrawals.module";
+ 
+@@ -31,6 +32,7 @@ import { WithdrawalsModule } from "../withdrawals/withdrawals.module";
+     AdminOpsController,
+     AdminFinanceController,
+     AdminInvitesController,
++    AdminMessagingController,
+     // Public: the invitee has no account yet.
+     StaffInviteAcceptController,
+   ],
+diff --git a/backend/src/messaging/messaging.service.ts b/backend/src/messaging/messaging.service.ts
+index 2f99884..06990d3 100644
+--- a/backend/src/messaging/messaging.service.ts
++++ b/backend/src/messaging/messaging.service.ts
+@@ -14,7 +14,10 @@ export interface OutboundMessage {
+     | 'WELCOME'
+     | 'SECURITY_ALERT'
+     /** A dispatch offer, sent because a rider may not have the app open. */
+-    | 'DISPATCH_OFFER';
++    | 'DISPATCH_OFFER'
++    /** Sent from the admin console's messaging test. */
++    | 'SMS_TEST'
++    | 'EMAIL_TEST';
+ }
+ 
+ /**
+@@ -31,6 +34,14 @@ export interface DeliveryResult {
+   driver: string;
+   /** Safe to log, never contains a key. */
+   reason?: string;
++  /**
++   * What the provider actually said, when it said anything. "Termii responded 400"
++   * is not an explanation; "Sender ID not found" is, and it is the difference between
++   * a five-minute fix and an evening of guessing. Truncated and never includes the
++   * key, because the request body is never echoed back.
++   */
++  providerStatus?: number;
++  providerMessage?: string;
+ }
+ 
+ /**
+@@ -114,13 +125,25 @@ export class MessagingService {
+       const body = (await response.text()).slice(0, 500);
+       if (!response.ok) {
+         this.logger.error(`Termii refused an SMS (${response.status}): ${body}`);
+-        return { delivered: false, driver: 'termii', reason: `Termii responded ${response.status}` };
++        return {
++          delivered: false,
++          driver: 'termii',
++          reason: `Termii responded ${response.status}`,
++          providerStatus: response.status,
++          providerMessage: summariseProviderReply(body),
++        };
+       }
+       // Termii answers 200 with an error body for some failures, so the payload is
+       // read rather than trusting the status code alone.
+       if (/"code"\s*:\s*"?(4\d\d|5\d\d)/.test(body) || /invalid|not found|insufficient/i.test(body)) {
+         this.logger.error(`Termii returned an error for an SMS: ${body}`);
+-        return { delivered: false, driver: 'termii', reason: 'Termii rejected the message' };
++        return {
++          delivered: false,
++          driver: 'termii',
++          reason: 'Termii rejected the message',
++          providerStatus: response.status,
++          providerMessage: summariseProviderReply(body),
++        };
+       }
+       this.logger.log(`📱 SMS sent to ${maskPhone(message.to)} [${message.kind}]`);
+       return { delivered: true, driver: 'termii' };
+@@ -163,7 +186,13 @@ export class MessagingService {
+       const body = (await response.text()).slice(0, 500);
+       if (!response.ok) {
+         this.logger.error(`Resend refused an email (${response.status}): ${body}`);
+-        return { delivered: false, driver: 'resend', reason: `Resend responded ${response.status}` };
++        return {
++          delivered: false,
++          driver: 'resend',
++          reason: `Resend responded ${response.status}`,
++          providerStatus: response.status,
++          providerMessage: summariseProviderReply(body),
++        };
+       }
+       this.logger.log(`✉️  Email sent to ${maskEmail(message.to)} [${message.kind}]`);
+       return { delivered: true, driver: 'resend' };
+@@ -172,6 +201,75 @@ export class MessagingService {
+       return { delivered: false, driver: 'resend', reason: (error as Error).message };
+     }
+   }
++
++  /**
++   * What the admin console needs to show: which driver is configured for each
++   * channel, and — the honest part — whether it can actually deliver anything.
++   *
++   * No secret is ever returned. The API key is not read here at all: "configured"
++   * means the key is present, not what it is.
++   */
++  status() {
++    const smsMode = this.config.get('SMS_MODE', { infer: true });
++    const emailMode = this.config.get('EMAIL_MODE', { infer: true });
++    const termiiKey = !!this.config.get('TERMII_API_KEY', { infer: true })?.trim();
++    const resendKey = !!this.config.get('RESEND_API_KEY', { infer: true })?.trim();
++
++    return {
++      sms: {
++        mode: smsMode,
++        ready: smsMode === 'TERMII' && termiiKey,
++        senderId: this.config.get('TERMII_SENDER_ID', { infer: true }),
++        /**
++         * The route matters more than anything else on this screen: the generic route
++         * does not reach numbers with do-not-disturb active, which in Nigeria is most
++         * of them, so an OTP sent on `generic` looks delivered and is never seen.
++         */
++        route: this.config.get('TERMII_CHANNEL', { infer: true }),
++        problem: !termiiKey
++          ? 'TERMII_API_KEY is empty. SMS can only be printed to the server log until a key is added.'
++          : smsMode !== 'TERMII'
++            ? 'SMS_MODE is CONSOLE. Codes are printed to the server log, not sent.'
++            : null,
++      },
++      email: {
++        mode: emailMode,
++        ready: emailMode === 'RESEND' && resendKey,
++        from: this.config.get('EMAIL_FROM', { infer: true }),
++        problem: !resendKey
++          ? 'RESEND_API_KEY is empty. Email can only be printed to the server log.'
++          : emailMode !== 'RESEND'
++            ? 'EMAIL_MODE is CONSOLE. Emails are printed to the server log, not sent.'
++            : null,
++      },
++    };
++  }
++
++  /**
++   * Send one real message, on demand, and report exactly what happened.
++   *
++   * This is the answer to "is SMS working?" — a question that otherwise gets answered
++   * by registering a test account and waiting, or by reading a server log. The message
++   * says what it is, so a customer who receives it by mistake is not confused.
++   */
++  async sendTest(channel: 'SMS' | 'EMAIL', to: string): Promise<DeliveryResult & { to: string }> {
++    const body =
++      channel === 'SMS'
++        ? 'Traders Welfare Logistics test message. If you received this, SMS is working. No action needed.'
++        : 'This is a test message from Traders Welfare Logistics. If you received it, email is working. No action needed.';
++
++    const result =
++      channel === 'SMS'
++        ? await this.sendSms({ to, body, kind: 'SMS_TEST' })
++        : await this.sendEmail({ to, subject: 'TWL test message', body, kind: 'EMAIL_TEST' });
++
++    this.logger.log(
++      `Messaging test (${channel}) → ${channel === 'SMS' ? maskPhone(to) : maskEmail(to)}: ${
++        result.delivered ? 'delivered' : `not delivered (${result.reason ?? 'unknown'})`
++      }`,
++    );
++    return { ...result, to };
++  }
+ }
+ 
+ /* ─────────────────────────────── helpers ─────────────────────────────── */
+@@ -184,6 +282,28 @@ export function toTermiiNumber(phone: string): string {
+   return digits;
+ }
+ 
++/**
++ * A provider's error body, cut down to something a person can act on.
++ *
++ * Termii answers with JSON like {"code":"400","message":"Sender ID not found"} and
++ * Resend with {"message":"domain is not verified"}. The `message` field is the only
++ * part worth showing; everything else is noise, and the request (which holds the key)
++ * is never included.
++ */
++export function summariseProviderReply(raw: string): string {
++  const trimmed = raw.trim();
++  try {
++    const parsed = JSON.parse(trimmed) as Record<string, unknown>;
++    for (const field of ['message', 'error', 'detail', 'description']) {
++      const value = parsed[field];
++      if (typeof value === 'string' && value.trim()) return value.trim().slice(0, 240);
++    }
++    return trimmed.slice(0, 240);
++  } catch {
++    return trimmed.replace(/\s+/g, ' ').slice(0, 240);
++  }
++}
++
+ /** Never log a whole phone number. */
+ function maskPhone(phone: string): string {
+   const digits = phone.replace(/[^\d]/g, '');
+diff --git a/backend/test/messaging.spec.ts b/backend/test/messaging.spec.ts
+index 92a4658..003bd1a 100644
+--- a/backend/test/messaging.spec.ts
++++ b/backend/test/messaging.spec.ts
+@@ -1,5 +1,5 @@
+ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+-import { MessagingService, toTermiiNumber } from '../src/messaging/messaging.service';
++import { MessagingService, summariseProviderReply, toTermiiNumber } from '../src/messaging/messaging.service';
+ 
+ /**
+  * Outbound SMS and email.
+@@ -207,3 +207,86 @@ describe('phase 7 — outbound messages', () => {
+     });
+   });
+ });
++
++/**
++ * "IS SMS WORKING?" — the admin console's test button.
++ *
++ * Every real-world SMS failure this platform has had was a configuration one: no key,
++ * a sender ID not yet approved, the wrong route, an empty wallet. Each of those arrives
++ * from Termii as an HTTP 200 with an explanation buried in the body, which is why the
++ * result now carries the provider's own sentence instead of "Termii responded 200".
++ */
++describe('the messaging test button', () => {
++  let fetchMock: ReturnType<typeof vi.fn>;
++
++  beforeEach(() => {
++    fetchMock = vi.fn();
++    vi.stubGlobal('fetch', fetchMock);
++  });
++
++  afterEach(() => {
++    vi.unstubAllGlobals();
++    vi.restoreAllMocks();
++  });
++
++  it('reports the provider sentence when Termii rejects a send inside a 200', async () => {
++    fetchMock.mockResolvedValue({
++      ok: true,
++      status: 200,
++      text: async () => JSON.stringify({ code: '400', message: 'Sender ID not found' }),
++    });
++
++    const service = new MessagingService(
++      configWith({
++        SMS_MODE: 'TERMII',
++        TERMII_API_KEY: 'key',
++        TERMII_SENDER_ID: 'TWL',
++        TERMII_CHANNEL: 'dnd',
++      }) as never,
++    );
++
++    const result = await service.sendTest('SMS', '08031234567');
++    expect(result.delivered).toBe(false);
++    expect(result.providerMessage).toBe('Sender ID not found');
++  });
++
++  it('says plainly that nothing leaves the building in console mode', async () => {
++    const service = new MessagingService(configWith({ SMS_MODE: 'CONSOLE', EMAIL_MODE: 'CONSOLE' }) as never);
++    const result = await service.sendTest('SMS', '08031234567');
++    expect(result.delivered).toBe(false);
++    expect(result.reason).toContain('CONSOLE');
++    // No request was attempted: printing to a log is not a delivery.
++    expect(fetchMock).not.toHaveBeenCalled();
++  });
++
++  it('tells the console exactly what is misconfigured, without leaking the key', () => {
++    const service = new MessagingService(
++      configWith({
++        SMS_MODE: 'TERMII',
++        TERMII_API_KEY: '',
++        TERMII_SENDER_ID: 'TWL',
++        TERMII_CHANNEL: 'dnd',
++        EMAIL_MODE: 'RESEND',
++        RESEND_API_KEY: 're_abc',
++        EMAIL_FROM: 'TWL <no-reply@example.com>',
++      }) as never,
++    );
++
++    const status = service.status();
++    expect(status.sms.ready).toBe(false);
++    expect(status.sms.problem).toContain('TERMII_API_KEY');
++    expect(status.email.ready).toBe(true);
++    expect(JSON.stringify(status)).not.toContain('re_abc');
++  });
++});
++
++describe('reading a provider error', () => {
++  it('pulls out the message field', () => {
++    expect(summariseProviderReply('{"code":"400","message":"Sender ID not found"}')).toBe('Sender ID not found');
++    expect(summariseProviderReply('{"message":"domain is not verified"}')).toBe('domain is not verified');
++  });
++
++  it('falls back to the raw text when the body is not JSON', () => {
++    expect(summariseProviderReply('  Bad Gateway  ')).toBe('Bad Gateway');
++  });
++});
+diff --git a/documentation/SMS-SETUP.md b/documentation/SMS-SETUP.md
+new file mode 100644
+index 0000000..d8d9c2b
+--- /dev/null
++++ b/documentation/SMS-SETUP.md
+@@ -0,0 +1,107 @@
++# Turning SMS on
++
++The driver is already written. `MessagingService.sendSms` posts to Termii with the
++DND channel, reads the reply rather than trusting HTTP 200, and returns the provider's
++own words on failure. What is missing is not code — it is an account.
++
++## What "not working" has always meant
++
++Every SMS failure on this platform has been one of four things, and none of them are
++visible from the app:
++
++| Symptom | Real cause |
++| --- | --- |
++| Code printed in the server log | `SMS_MODE=CONSOLE` — nothing is being sent |
++| "TERMII_API_KEY is not set" | the key was never pasted into the host |
++| "Sender ID not found" | the sender ID is not approved yet, or is spelled differently |
++| "Insufficient balance" | the Termii wallet is empty |
++| Delivered, never received | the message went on the **generic** route to a DND number |
++
++That last one is the quiet killer. In Nigeria most numbers have do-not-disturb active.
++The generic route does not reach them, and Termii still accepts the message.
++
++## What you need from Termii
++
++1. **Account** — termii.com, business details.
++2. **API key** — Settings → API Keys → create. Shown once; copy it to Notepad.
++3. **Sender ID** — Settings → Sender IDs. Up to 11 alphanumeric characters, e.g.
++   `TWL`. Approval is manual and typically takes **24 hours to a few days**.
++4. **DND route** — request it from Termii support. The DND (transactional) route is
++   what delivers OTPs to numbers that have do-not-disturb active. Without it, OTPs
++   appear to send and never arrive. Activation is manual and can take longer than the
++   sender ID.
++5. **Credit** — SMS is prepaid. Expect roughly **₦3.50–₦5.00** per message on the
++   generic route and **₦5.50–₦8.00** on the DND route. At ₦7, a thousand verification
++   codes is about ₦7,000. Check the current price in your Termii dashboard before you
++   top up — these move.
++
++## What you set on the host (never in chat, never in the frontend)
++
++On the **API** service in Northflank:
++
++```dotenv
++SMS_MODE=TERMII
++TERMII_API_KEY=<the key you copied to Notepad>
++TERMII_SENDER_ID=TWL
++TERMII_CHANNEL=dnd
++```
++
++`TERMII_CHANNEL` accepts `dnd`, `generic` or `whatsapp`. Use `dnd` for OTPs. `generic`
++is for promotional traffic and will not reach DND numbers.
++
++Then restart the API. The boot log states the truth in one line:
++
++```
++SMS: console only · Email: Resend
++SMS: Termii (dnd) · Email: Resend
++```
++
++and `/api/v1/health` reports `"sms": "TERMII"` — or `"TERMII_NO_KEY"`, which is the
++case that used to be invisible.
++
++## Proving it works — the button
++
++**Admin → Settings → Messaging.** Two cards (the configuration) and two buttons
++(send a real message). The result panel prints the provider's own sentence, so:
++
++| What the panel says | What to do |
++| --- | --- |
++| `Accepted by the provider` | wait a minute, then check the handset |
++| `Sender ID not found` | the sender ID is not approved — check its status in Termii |
++| `Insufficient balance` | top up the Termii wallet |
++| `Invalid API key` | the key was pasted with a space, or is from another account |
++| `Nothing was delivered` with no provider message | the key is missing entirely — the config card above says the same thing |
++
++Send to your own phone first. Then send to a phone you know is on DND — that is the
++one that tells you whether the DND route is really active, and it is the only test that
++matters.
++
++If SMS is not live yet, the panel says exactly why, in words, rather than showing a
++button that quietly does nothing.
++
++## While you wait for approval
++
++`SMS_MODE=CONSOLE` (the default) prints the code to the API log. It is honest about it:
++the verification screen tells the user the code could not be sent, and the delivery
++result carries `driver: 'console'`. Nothing pretends.
++
++Phone verification is not required to sign in or to book, so a demo works without SMS.
++Email is already live through Resend.
++
++## If Termii's DND approval is too slow
++
++Other Nigerian providers issue OTP sender names on sign-up rather than after manual
++review, and route DND numbers automatically — Arkesel, Robase, Sendar and BulkSMS
++Nigeria all advertise this, at roughly ₦6–₦8 per message. Adding one is a second
++driver in `MessagingService.sendSms` (about forty lines, same shape as the Termii one)
++plus an env flag. Say the word and I will add it; there is no reason to do it
++speculatively.
++
++## What this does not cover
++
++- **A2P registration with the carriers.** Termii handles it as part of sender-ID
++  approval; you are not dealing with MTN directly.
++- **WhatsApp.** `TERMII_CHANNEL=whatsapp` exists in the code, but it needs a Meta
++  business account and its own templates — a separate piece of work.
++- **Two-way SMS.** Not implemented: replies to the sender ID go nowhere by design.
++  Customers reply in the app, which is the point of the masked-number rule.
+diff --git a/frontend/src/components/MessagingTestPanel.tsx b/frontend/src/components/MessagingTestPanel.tsx
+new file mode 100644
+index 0000000..611c5dd
+--- /dev/null
++++ b/frontend/src/components/MessagingTestPanel.tsx
+@@ -0,0 +1,160 @@
++import { useState } from 'react';
++import { useQuery, useMutation } from '@tanstack/react-query';
++import { Badge, Button, Card, CardBody, CardHeader, Field, Input, useToast } from './ui';
++import { api } from '../lib/api';
++import { useApiError } from '../contexts/AuthContext';
++
++interface MessagingStatus {
++  sms: { mode: string; ready: boolean; senderId: string; route: string; problem: string | null };
++  email: { mode: string; ready: boolean; from: string; problem: string | null };
++}
++
++interface TestResult {
++  delivered: boolean;
++  driver: string;
++  reason?: string;
++  providerMessage?: string;
++  to: string;
++}
++
++/**
++ * IS MESSAGING WORKING?
++ *
++ * One button, two channels, and the provider's own answer printed on the screen.
++ *
++ * Without this, the only way to find out whether a customer's verification code left
++ * the building is to register an account and wait — which is how a missing API key
++ * survives for weeks. The panel states the configuration too, because the usual cause
++ * is not the code: it is a key that was never pasted into the host, a sender ID the
++ * provider has not approved, or the wrong route for a do-not-disturb number.
++ */
++export function MessagingTestPanel() {
++  const { notify } = useToast();
++  const [phone, setPhone] = useState('');
++  const [email, setEmail] = useState('');
++  const [result, setResult] = useState<TestResult | null>(null);
++
++  const status = useQuery({
++    queryKey: ['admin', 'messaging', 'status'],
++    queryFn: () => api.get<MessagingStatus>('/admin/messaging/status'),
++  });
++
++  const send = useMutation({
++    mutationFn: (input: { channel: 'SMS' | 'EMAIL'; to: string }) =>
++      api.post<TestResult>('/admin/messaging/test', input),
++    onSuccess: (data) => {
++      setResult(data);
++      notify({
++        tone: data.delivered ? 'success' : 'error',
++        title: data.delivered ? 'The provider accepted it' : 'Nothing was delivered',
++        description: data.delivered
++          ? `Handed to ${data.driver}. Check the phone or inbox.`
++          : (data.providerMessage ?? data.reason ?? 'See the panel for the reason.'),
++      });
++    },
++  });
++
++  const error = useApiError(send.error);
++  const sms = status.data?.sms;
++  const mail = status.data?.email;
++
++  return (
++    <Card>
++      <CardHeader
++        title="Messaging"
++        subtitle="Whether codes and emails actually leave this server, and a way to prove it."
++      />
++      <CardBody className="space-y-4">
++        <div className="grid gap-3 sm:grid-cols-2">
++          <div className="rounded-xl border border-ink-200 p-3">
++            <div className="flex items-center justify-between gap-2">
++              <p className="text-sm font-semibold text-ink-900">SMS</p>
++              <Badge tone={sms?.ready ? 'success' : 'warning'}>{sms?.ready ? 'live' : 'not sending'}</Badge>
++            </div>
++            <p className="mt-1 text-xs text-ink-500">
++              {sms ? `${sms.mode} · route ${sms.route} · sender ${sms.senderId || 'unset'}` : 'Checking…'}
++            </p>
++            {sms?.problem && <p className="mt-1.5 text-xs text-warning-800">{sms.problem}</p>}
++          </div>
++          <div className="rounded-xl border border-ink-200 p-3">
++            <div className="flex items-center justify-between gap-2">
++              <p className="text-sm font-semibold text-ink-900">Email</p>
++              <Badge tone={mail?.ready ? 'success' : 'warning'}>{mail?.ready ? 'live' : 'not sending'}</Badge>
++            </div>
++            <p className="mt-1 truncate text-xs text-ink-500" title={mail?.from ?? ''}>
++              {mail ? `${mail.mode} · ${mail.from}` : 'Checking…'}
++            </p>
++            {mail?.problem && <p className="mt-1.5 text-xs text-warning-800">{mail.problem}</p>}
++          </div>
++        </div>
++
++        <div className="grid gap-4 sm:grid-cols-2">
++          <div className="space-y-2">
++            <Field label="Send a test SMS to" htmlFor="test-phone" hint="Your own phone. Costs one message when live.">
++              <Input
++                id="test-phone"
++                inputMode="tel"
++                placeholder="0803 123 4567"
++                value={phone}
++                onChange={(event) => setPhone(event.target.value)}
++              />
++            </Field>
++            <Button
++              className="w-full"
++              isLoading={send.isPending && send.variables?.channel === 'SMS'}
++              disabled={phone.trim().length < 6}
++              onClick={() => send.mutate({ channel: 'SMS', to: phone.trim() })}
++            >
++              Send test SMS
++            </Button>
++          </div>
++          <div className="space-y-2">
++            <Field label="Send a test email to" htmlFor="test-email" hint="Your own inbox.">
++              <Input
++                id="test-email"
++                type="email"
++                placeholder="you@example.com"
++                value={email}
++                onChange={(event) => setEmail(event.target.value)}
++              />
++            </Field>
++            <Button
++              variant="secondary"
++              className="w-full"
++              isLoading={send.isPending && send.variables?.channel === 'EMAIL'}
++              disabled={email.trim().length < 5}
++              onClick={() => send.mutate({ channel: 'EMAIL', to: email.trim() })}
++            >
++              Send test email
++            </Button>
++          </div>
++        </div>
++
++        {error && <p className="text-xs font-medium text-danger-700">{error}</p>}
++
++        {result && (
++          <div
++            className={
++              result.delivered
++                ? 'rounded-xl border border-success-200 bg-success-50 p-3 text-xs text-ink-700'
++                : 'rounded-xl border border-warning-200 bg-warning-50 p-3 text-xs text-ink-700'
++            }
++          >
++            <p className="font-semibold text-ink-900">
++              {result.delivered ? 'Accepted by the provider' : 'Not delivered'}
++              <span className="ml-1 font-normal text-ink-500">via {result.driver}</span>
++            </p>
++            {(result.providerMessage || result.reason) && (
++              <p className="mt-1 font-mono text-[11px] leading-relaxed">{result.providerMessage ?? result.reason}</p>
++            )}
++            <p className="mt-1.5 text-ink-500">
++              {result.delivered
++                ? 'Accepted means the provider took it — not that a handset buzzed. Give it a minute.'
++                : 'Nothing left this server. The message above is the provider\'s own words.'}
++            </p>
++          </div>
++        )}
++      </CardBody>
++    </Card>
++  );
++}
+diff --git a/frontend/src/pages/SettingsPage.tsx b/frontend/src/pages/SettingsPage.tsx
+index 05a38a5..1b3c86d 100644
+--- a/frontend/src/pages/SettingsPage.tsx
++++ b/frontend/src/pages/SettingsPage.tsx
+@@ -20,6 +20,7 @@ import { api } from '../lib/api';
+ import { CUSTOMER_NAV } from './customer/nav';
+ import { RIDER_NAV } from './rider/nav';
+ import { adminNav } from './admin/nav';
++import { MessagingTestPanel } from '../components/MessagingTestPanel';
+ 
+ const MAX_AVATAR_BYTES = 5 * 1024 * 1024;
+ const ACCEPTED_AVATAR_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+@@ -223,6 +224,8 @@ export default function SettingsPage({ portal }: { portal: 'Customer' | 'Rider'
+           </p>
+         </div>
+ 
++        {portal === 'Admin' && <MessagingTestPanel />}
++
+         {/* Picture */}
+         <Card>
+           <CardHeader title="Display picture" subtitle="Shown in the top bar, on your profile and to colleagues." />
+diff --git a/packages/shared/src/schemas/admin.ts b/packages/shared/src/schemas/admin.ts
+index dda6db8..3423275 100644
+--- a/packages/shared/src/schemas/admin.ts
++++ b/packages/shared/src/schemas/admin.ts
+@@ -141,3 +141,29 @@ export const acceptStaffInviteSchema = z.object({
+   acceptTerms: z.literal(true),
+ });
+ export type AcceptStaffInviteInput = z.infer<typeof acceptStaffInviteSchema>;
++
++/**
++ * Send a test message from the admin console.
++ *
++ * Exists because "SMS is broken" is almost never the code: it is a missing key, a
++ * sender ID the provider has not approved, the wrong route, or an empty wallet. A
++ * one-button test that reports the provider's own answer turns a guess into a fact —
++ * and it has to be a button, because reading the API log is not something the owner
++ * of a logistics company should have to do to know whether a customer got their code.
++ */
++export const testMessageSchema = z
++  .object({
++    channel: z.enum(['SMS', 'EMAIL']),
++    /** A phone number for SMS, an address for email. Validated per channel below. */
++    to: z.string().trim().min(6, 'Enter where the test should go').max(120),
++  })
++  .superRefine((value, ctx) => {
++    const digits = value.to.replace(/[\s-]/g, '');
++    if (value.channel === 'SMS' && !/^(\+?234|0)[789][01]\d{8}$/.test(digits)) {
++      ctx.addIssue({ code: 'custom', path: ['to'], message: 'Enter a Nigerian mobile number, e.g. 0803 123 4567' });
++    }
++    if (value.channel === 'EMAIL' && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(value.to)) {
++      ctx.addIssue({ code: 'custom', path: ['to'], message: 'Enter a valid email address' });
++    }
++  });
++export type TestMessageInput = z.infer<typeof testMessageSchema>;
+-- 
+2.47.3
+
+
+From bbcb11ba76ffd79e9599536f81d8eb1c0686b4de Mon Sep 17 00:00:00 2001
+From: TWL Build <build@twl.local>
+Date: Fri, 20 Nov 2026 20:05:47 +0000
+Subject: [PATCH 2/2] fix(auth): stop offering phone confirmation that cannot
+ happen
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Phone confirmation is optional — booking needs an email address, not a handset — but a
+deployment with no SMS provider was still advertising it: a "Verify now" link on the
+settings page, a permanent "Your phone number is not verified" banner nobody could
+clear, and, on the verification screen itself, a code box under the words "we sent you
+a 6-digit code".
+
+Outside production the API hands the code back and shows it on screen, so the flow
+completes honestly. In production it does not, so that screen was a dead end with a
+false statement on top of it.
+
+Now the API refuses the request out loud when there is no driver and no code to show
+(503 SMS_UNAVAILABLE, "nothing was sent"), and the browser reads the public health
+block — which has always said whether SMS is really configured — to decide what to
+offer: the settings row reads "Not confirmed" instead of a link that cannot work, the
+banner stays quiet, and step 2 of verification explains in two sentences that the step
+is off and unneeded. The customer home badge reads "Phone on file" rather than a
+warning that will never clear.
+
+2 new tests (125 total), typecheck and production build clean.
+---
+ backend/src/auth/verification.service.ts     | 20 +++++-
+ backend/src/common/errors/app-error.ts       |  2 +
+ backend/test/phone-verification.spec.ts      | 72 ++++++++++++++++++++
+ documentation/SMS-SETUP.md                   | 14 ++++
+ frontend/src/hooks/useHealth.ts              | 20 ++++++
+ frontend/src/layouts/PortalShell.tsx         | 11 ++-
+ frontend/src/pages/SettingsPage.tsx          |  6 ++
+ frontend/src/pages/auth/VerifyPage.tsx       | 38 +++++++++--
+ frontend/src/pages/customer/CustomerHome.tsx | 13 +++-
+ 9 files changed, 185 insertions(+), 11 deletions(-)
+ create mode 100644 backend/test/phone-verification.spec.ts
+
+diff --git a/backend/src/auth/verification.service.ts b/backend/src/auth/verification.service.ts
+index 82d96d7..040d63c 100644
+--- a/backend/src/auth/verification.service.ts
++++ b/backend/src/auth/verification.service.ts
+@@ -1,4 +1,4 @@
+-import { Injectable, Logger } from '@nestjs/common';
++import { HttpStatus, Injectable, Logger } from '@nestjs/common';
+ import { ConfigService } from '@nestjs/config';
+ import { createHash, randomBytes, randomInt } from 'node:crypto';
+ import { PrismaService } from '../infra/prisma/prisma.service';
+@@ -178,6 +178,24 @@ export class VerificationService {
+     firstName: string;
+   }): Promise<{ devCode?: string; expiresInSeconds: number; delivered: boolean; deliveryReason?: string }> {
+     if (!user.phone) throw AppError.validation([{ field: 'phone', message: 'No phone number on this account' }]);
++
++    /**
++     * No SMS driver means this code cannot reach anyone.
++     *
++     * Outside production the code is returned to the caller and shown on screen, so
++     * the flow still completes. In production it is not, and the old behaviour was to
++     * say "we sent a 6-digit code" anyway and leave the customer typing nothing at a
++     * dead end. Saying so is better than pretending: phone confirmation is optional,
++     * email is what the account actually stands on.
++     */
++    if (!this.messaging.smsDelivers && !this.exposeCodes) {
++      throw new AppError(
++        'SMS_UNAVAILABLE',
++        'Phone confirmation is not switched on yet, so nothing was sent. It is optional — your email address is enough to book.',
++        HttpStatus.SERVICE_UNAVAILABLE,
++      );
++    }
++
+     const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
+     await this.issue(user.id, 'PHONE_OTP', `${user.id}:${code}`, user.phone, TTL.PHONE_OTP);
+     const delivery = await this.messaging.sendSms({
+diff --git a/backend/src/common/errors/app-error.ts b/backend/src/common/errors/app-error.ts
+index cda208c..c943000 100644
+--- a/backend/src/common/errors/app-error.ts
++++ b/backend/src/common/errors/app-error.ts
+@@ -36,6 +36,8 @@ export type ErrorCode =
+   | 'DUPLICATE_REQUEST'
+   | 'RATE_LIMITED'
+   | 'PROVIDER_ERROR'
++  /** The code would have had to travel by text, and texting is not switched on. */
++  | 'SMS_UNAVAILABLE'
+   | 'LEDGER_ACCOUNT_MISSING'
+   | 'PAYMENT_PROVIDER_ERROR'
+   | 'PAYMENT_SIMULATED'
+diff --git a/backend/test/phone-verification.spec.ts b/backend/test/phone-verification.spec.ts
+new file mode 100644
+index 0000000..c44a2e5
+--- /dev/null
++++ b/backend/test/phone-verification.spec.ts
+@@ -0,0 +1,72 @@
++import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
++import { VerificationService } from '../src/auth/verification.service';
++import { MessagingService } from '../src/messaging/messaging.service';
++
++/**
++ * PHONE CONFIRMATION WITH NO SMS PROVIDER
++ *
++ * Phone confirmation is optional: booking needs an email address, not a handset. The
++ * failure this guards against is a screen that says "we sent you a 6-digit code" when
++ * no code was sent and none can be — in production the API does not hand the code back
++ * either, so the customer types nothing at a dead end and concludes the product is
++ * broken. Refusing out loud is the honest behaviour.
++ */
++
++const configWith = (values: Record<string, unknown>) =>
++  ({
++    get: (key: string, _opts?: unknown) => values[key],
++  }) as never;
++
++const user = { id: 'user-1', phone: '+2348031234567', firstName: 'Ada' };
++
++describe('phone confirmation when texting is switched off', () => {
++  let messaging: MessagingService;
++
++  beforeEach(() => {
++    vi.stubGlobal(
++      'fetch',
++      vi.fn().mockResolvedValue({ ok: true, status: 200, text: async () => '{}' }),
++    );
++  });
++
++  afterEach(() => {
++    vi.unstubAllGlobals();
++    vi.restoreAllMocks();
++  });
++
++  it('says so in production instead of pretending a code went out', async () => {
++    messaging = new MessagingService(configWith({ SMS_MODE: 'CONSOLE' }) as never);
++    const prisma = { verificationToken: { updateMany: vi.fn(), create: vi.fn() } };
++    const service = new VerificationService(
++      prisma as never,
++      messaging,
++      {} as never,
++      configWith({ NODE_ENV: 'production' }) as never,
++    );
++
++    await expect(service.sendPhoneOtp(user)).rejects.toMatchObject({ code: 'SMS_UNAVAILABLE' });
++    // Nothing was written and nothing was attempted: there is no code to leak.
++    expect(prisma.verificationToken.create).not.toHaveBeenCalled();
++  });
++
++  it('still completes outside production, where the code is shown on screen', async () => {
++    messaging = new MessagingService(configWith({ SMS_MODE: 'CONSOLE' }) as never);
++    const prisma = {
++      verificationToken: {
++        updateMany: vi.fn().mockResolvedValue({ count: 0 }),
++        create: vi.fn().mockResolvedValue({ id: 'tok-1' }),
++      },
++    };
++    const service = new VerificationService(
++      prisma as never,
++      messaging,
++      {} as never,
++      configWith({ NODE_ENV: 'development' }) as never,
++    );
++
++    const result = await service.sendPhoneOtp(user);
++    expect(result.devCode).toMatch(/^\d{6}$/);
++    // CONSOLE mode is honest about not delivering.
++    expect(result.delivered).toBe(false);
++  });
++});
+diff --git a/documentation/SMS-SETUP.md b/documentation/SMS-SETUP.md
+index d8d9c2b..4bdd958 100644
+--- a/documentation/SMS-SETUP.md
++++ b/documentation/SMS-SETUP.md
+@@ -1,5 +1,11 @@
+ # Turning SMS on
+ 
++**You do not need any of this to launch.** Nothing in the product requires a text
++message: sign-up completes on the emailed link, booking and dispatch run on the app's
++own sockets, and phone confirmation is optional — it is switched off, and said to be
++switched off, wherever a provider is missing. Read this when someone asks for texts,
++not before.
++
+ The driver is already written. `MessagingService.sendSms` posts to Termii with the
+ DND channel, reads the reply rather than trusting HTTP 200, and returns the provider's
+ own words on failure. What is missing is not code — it is an account.
+@@ -20,6 +26,14 @@ visible from the app:
+ That last one is the quiet killer. In Nigeria most numbers have do-not-disturb active.
+ The generic route does not reach them, and Termii still accepts the message.
+ 
++## Why this is not a five-minute job
++
++Email was one DNS record set and a key. SMS in Nigeria is a business-verification
++process: an account, a sender ID that a human approves, and — the part nobody mentions
++up front — the DND route, which Termii switches on by hand after you ask support. There
++is no self-serve equivalent for a sender ID that reaches every network. Plan for days,
++start it early, and do not wait for it to launch.
++
+ ## What you need from Termii
+ 
+ 1. **Account** — termii.com, business details.
+diff --git a/frontend/src/hooks/useHealth.ts b/frontend/src/hooks/useHealth.ts
+index 14cb1de..810988b 100644
+--- a/frontend/src/hooks/useHealth.ts
++++ b/frontend/src/hooks/useHealth.ts
+@@ -24,3 +24,23 @@ export function useHealth() {
+     staleTime: 10_000,
+   });
+ }
++
++/**
++ * Can this deployment actually send a text message?
++ *
++ * The API already answers this in its public health block (`integrations.sms` is
++ * `TERMII` only when there is a key to send with). The browser needs it because
++ * phone confirmation is optional and, with no SMS provider, it is also impossible —
++ * offering a "Verify now" button that cannot work is worse than not offering it.
++ *
++ * `undefined` means we have not heard back yet, which is not the same as "no".
++ */
++export function useSmsReady(): boolean | undefined {
++  const { data } = useQuery({
++    queryKey: ['health'],
++    queryFn: () => api.get<HealthResponse>('/health'),
++    staleTime: 5 * 60_000,
++    retry: 1,
++  });
++  return data ? data.integrations.sms === 'TERMII' : undefined;
++}
+diff --git a/frontend/src/layouts/PortalShell.tsx b/frontend/src/layouts/PortalShell.tsx
+index 2d3443d..415aa9d 100644
+--- a/frontend/src/layouts/PortalShell.tsx
++++ b/frontend/src/layouts/PortalShell.tsx
+@@ -1,5 +1,6 @@
+ import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
+ import { useEffect, useRef, useState } from 'react';
++import { useSmsReady } from '../hooks/useHealth';
+ import { useAuth } from '../contexts/AuthContext';
+ import { Avatar, Badge, Button, ConfirmDialog } from '../components/ui';
+ import { BrandMark } from '../components/BrandMark';
+@@ -32,7 +33,13 @@ export function PortalShell({
+   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+   const openerRef = useRef<HTMLButtonElement | null>(null);
+ 
+-  const needsVerification = user && (!user.emailVerified || !user.phoneVerified);
++  /**
++   * Phone confirmation only counts as outstanding when texts can be sent. Nagging
++   * someone to confirm a phone number on a deployment with no SMS provider is a
++   * permanent banner they can never clear — and it reads as a broken product.
++   */
++  const smsReady = useSmsReady();
++  const needsVerification = user && (!user.emailVerified || (!user.phoneVerified && smsReady === true));
+   const fullName = `${user?.firstName ?? ''} ${user?.lastName ?? ''}`.trim();
+ 
+   /**
+@@ -241,7 +248,7 @@ export function PortalShell({
+         {needsVerification && (
+           <div className="border-b border-warning-200 bg-warning-50 px-4 py-2.5 text-center text-[13px] font-medium text-warning-800 sm:px-6">
+             {!user?.emailVerified && 'Your email address is not verified. '}
+-            {!user?.phoneVerified && 'Your phone number is not verified. '}
++            {!user?.phoneVerified && smsReady === true && 'Your phone number is not verified. '}
+             <Link to="/verify" className="font-semibold underline">
+               Verify now
+             </Link>
+diff --git a/frontend/src/pages/SettingsPage.tsx b/frontend/src/pages/SettingsPage.tsx
+index 1b3c86d..f467245 100644
+--- a/frontend/src/pages/SettingsPage.tsx
++++ b/frontend/src/pages/SettingsPage.tsx
+@@ -21,6 +21,7 @@ import { CUSTOMER_NAV } from './customer/nav';
+ import { RIDER_NAV } from './rider/nav';
+ import { adminNav } from './admin/nav';
+ import { MessagingTestPanel } from '../components/MessagingTestPanel';
++import { useSmsReady } from '../hooks/useHealth';
+ 
+ const MAX_AVATAR_BYTES = 5 * 1024 * 1024;
+ const ACCEPTED_AVATAR_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+@@ -44,6 +45,7 @@ interface SessionRow {
+  * would be a privilege escalation with a friendly face.
+  */
+ export default function SettingsPage({ portal }: { portal: 'Customer' | 'Rider' | 'Admin' }) {
++  const smsReady = useSmsReady();
+   const { user, hasPermission, updateUser } = useAuth();
+   const { notify } = useToast();
+   const fileInputRef = useRef<HTMLInputElement | null>(null);
+@@ -309,6 +311,10 @@ export default function SettingsPage({ portal }: { portal: 'Customer' | 'Rider'
+                 {user?.phone ?? '—'}
+                 {user?.phoneVerified ? (
+                   <Badge tone="brand">Verified</Badge>
++                ) : smsReady === false ? (
++                  <span className="text-xs text-ink-400" title="Phone confirmation needs an SMS provider.">
++                    Not confirmed
++                  </span>
+                 ) : (
+                   <Link to="/verify" className="text-xs font-semibold text-brand-700 underline">
+                     Verify now
+diff --git a/frontend/src/pages/auth/VerifyPage.tsx b/frontend/src/pages/auth/VerifyPage.tsx
+index 07308f3..6a9f74c 100644
+--- a/frontend/src/pages/auth/VerifyPage.tsx
++++ b/frontend/src/pages/auth/VerifyPage.tsx
+@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-do
+ import { AuthLayout } from '../../layouts/AuthLayout';
+ import { Alert, Button, Input } from '../../components/ui';
+ import { api, ApiError } from '../../lib/api';
++import { useSmsReady } from '../../hooks/useHealth';
+ 
+ /**
+  * One screen covering both verification steps:
+@@ -39,6 +40,15 @@ export default function VerifyPage() {
+   const emailFailed = state.verification?.emailDelivered === false;
+   const smsFailed = state.verification?.smsDelivered === false;
+ 
++  /**
++   * Phone confirmation is optional. If this deployment has no SMS provider the code
++   * cannot reach the handset, and in production the API does not return it either —
++   * so the section is replaced with one honest line instead of a code box nobody can
++   * fill. Outside production the code is shown on screen and the flow still completes.
++   */
++  const smsReady = useSmsReady();
++  const showPhone = smsReady !== false || Boolean(state.verification?.devCode);
++
+   const [emailToken, setEmailToken] = useState(params.get('token') ?? state.verification?.devToken ?? '');
+   const [code, setCode] = useState(state.verification?.devCode ?? '');
+   const [phone, setPhone] = useState(state.phone ?? '');
+@@ -154,11 +164,15 @@ export default function VerifyPage() {
+     <AuthLayout
+       title="Verify your account"
+       subtitle={
+-        emailFailed || smsFailed
+-          ? 'Confirm your email and phone number. One of the messages below did not go out — you can send it again.'
+-          : state.email
+-            ? `We sent a link to ${state.email} and a code to your phone.`
+-            : 'Confirm your email and phone number.'
++        !showPhone
++          ? state.email
++            ? `We sent a confirmation link to ${state.email}. Phone confirmation is switched off for now and is not needed.`
++            : 'Confirm your email address. Phone confirmation is switched off for now and is not needed.'
++          : emailFailed || smsFailed
++            ? 'Confirm your email and phone number. One of the messages below did not go out — you can send it again.'
++            : state.email
++              ? `We sent a link to ${state.email} and a code to your phone.`
++              : 'Confirm your email and phone number.'
+       }
+       footer={
+         <>
+@@ -218,6 +232,7 @@ export default function VerifyPage() {
+           </div>
+         </section>
+ 
++        {showPhone ? (
+         <section className="card-surface p-4">
+           <h2 className="text-sm font-semibold text-ink-900">2. Phone number</h2>
+           <p className="mt-0.5 text-xs text-ink-500">Enter the 6-digit code we sent by SMS.</p>
+@@ -241,6 +256,19 @@ export default function VerifyPage() {
+             </div>
+           </div>
+         </section>
++        ) : (
++          <section className="card-surface p-4">
++            <h2 className="text-sm font-semibold text-ink-900">2. Phone number</h2>
++            <p className="mt-1 text-xs leading-relaxed text-ink-500">
++              We cannot send text messages yet, so this step is switched off. It is completely optional — a confirmed
++              email address is all your account needs, and you can book as soon as step 1 is done.
++            </p>
++            <p className="mt-2 text-xs leading-relaxed text-ink-400">
++              Your number is still used to reach you about a delivery, and drivers call it through the app so it is
++              never shown to them.
++            </p>
++          </section>
++        )}
+ 
+         {state.verification?.devCode && (
+           <Alert tone="warning" title="Text messages are not switched on yet">
+diff --git a/frontend/src/pages/customer/CustomerHome.tsx b/frontend/src/pages/customer/CustomerHome.tsx
+index 01f7018..3ca0fcd 100644
+--- a/frontend/src/pages/customer/CustomerHome.tsx
++++ b/frontend/src/pages/customer/CustomerHome.tsx
+@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom';
+ import { useQuery } from '@tanstack/react-query';
+ import { PortalShell } from '../../layouts/PortalShell';
+ import { Alert, Badge, Card, CardBody, CardHeader, StatCard, StatusPill } from '../../components/ui';
++import { useSmsReady } from '../../hooks/useHealth';
+ import { api } from '../../lib/api';
+ import { useAuth } from '../../contexts/AuthContext';
+ import { formatNaira, formatNgPhone } from '@dispatch/shared';
+@@ -28,6 +29,7 @@ interface ProfileResponse {
+ 
+ export default function CustomerHome() {
+   const { user } = useAuth();
++  const smsReady = useSmsReady();
+   const { data } = useQuery({
+     queryKey: ['me'],
+     queryFn: () => api.get<ProfileResponse>('/auth/me'),
+@@ -118,9 +120,14 @@ export default function CustomerHome() {
+ 
+         <div className="flex flex-wrap items-center gap-2 text-xs text-ink-500">
+           <Badge tone="success">Email {data?.user.emailVerified ? 'verified' : 'pending'}</Badge>
+-          <Badge tone={data?.user.phoneVerified ? 'success' : 'warning'}>
+-            Phone {data?.user.phoneVerified ? 'verified' : 'pending'}
+-          </Badge>
++          {/* A pending phone number is only worth a warning when there is a way to clear it. */}
++          {data?.user.phoneVerified ? (
++            <Badge tone="success">Phone verified</Badge>
++          ) : smsReady === true ? (
++            <Badge tone="warning">Phone pending</Badge>
++          ) : (
++            <Badge tone="neutral">Phone on file</Badge>
++          )}
+           <Link to="/verify" className="font-medium text-brand-700 hover:underline">
+             Manage verification →
+           </Link>
+-- 
+2.47.3
+

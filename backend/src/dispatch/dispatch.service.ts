@@ -72,7 +72,15 @@ export class DispatchService {
   /** Expire offers nobody answered. Cheap, idempotent, called by the scheduler and before every read/write. */
   async sweepExpired(): Promise<number> {
     const result = await this.prisma.deliveryAssignment.updateMany({
-      where: { status: 'OFFERED', expiresAt: { lt: new Date() } },
+      where: {
+        status: 'OFFERED',
+        expiresAt: { lt: new Date() },
+        // A rider who has named their price is not an unanswered offer: the clock
+        // has stopped being theirs and started being the customer's. Sweeping it
+        // away would delete a question from the customer's screen while they were
+        // reading it, and their Accept would then fail with "that price is gone".
+        counterState: { not: 'PENDING' },
+      },
       data: { status: 'EXPIRED', respondedAt: new Date() },
     });
     if (result.count > 0) this.logger.log(`Expired ${result.count} unanswered offer(s)`);
@@ -524,7 +532,14 @@ export class DispatchService {
     await this.sweepExpired();
 
     const assignments = await this.prisma.deliveryAssignment.findMany({
-      where: { riderId, status: 'OFFERED', expiresAt: { gt: new Date() } },
+      where: {
+        riderId,
+        status: 'OFFERED',
+        // Still live, or still being answered: a counter of this rider's own stays on
+        // their screen past the twenty-second offer clock, because the wait is now on
+        // the other person.
+        OR: [{ expiresAt: { gt: new Date() } }, { counterState: 'PENDING' }],
+      },
       orderBy: { offeredAt: 'asc' },
       include: {
         delivery: {

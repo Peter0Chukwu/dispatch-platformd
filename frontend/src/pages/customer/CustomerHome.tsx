@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { PortalShell } from '../../layouts/PortalShell';
 import { Alert, Badge, Card, CardBody, CardHeader, StatCard, StatusPill } from '../../components/ui';
+import { useSmsReady } from '../../hooks/useHealth';
 import { api } from '../../lib/api';
 import { useAuth } from '../../contexts/AuthContext';
 import { formatNaira, formatNgPhone } from '@dispatch/shared';
@@ -28,6 +29,7 @@ interface ProfileResponse {
 
 export default function CustomerHome() {
   const { user } = useAuth();
+  const smsReady = useSmsReady();
   const { data } = useQuery({
     queryKey: ['me'],
     queryFn: () => api.get<ProfileResponse>('/auth/me'),
@@ -118,9 +120,14 @@ export default function CustomerHome() {
 
         <div className="flex flex-wrap items-center gap-2 text-xs text-ink-500">
           <Badge tone="success">Email {data?.user.emailVerified ? 'verified' : 'pending'}</Badge>
-          <Badge tone={data?.user.phoneVerified ? 'success' : 'warning'}>
-            Phone {data?.user.phoneVerified ? 'verified' : 'pending'}
-          </Badge>
+          {/* A pending phone number is only worth a warning when there is a way to clear it. */}
+          {data?.user.phoneVerified ? (
+            <Badge tone="success">Phone verified</Badge>
+          ) : smsReady === true ? (
+            <Badge tone="warning">Phone pending</Badge>
+          ) : (
+            <Badge tone="neutral">Phone on file</Badge>
+          )}
           <Link to="/verify" className="font-medium text-brand-700 hover:underline">
             Manage verification →
           </Link>

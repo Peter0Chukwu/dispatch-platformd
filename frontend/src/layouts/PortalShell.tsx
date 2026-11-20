@@ -1,5 +1,6 @@
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useEffect, useRef, useState } from 'react';
+import { useSmsReady } from '../hooks/useHealth';
 import { useAuth } from '../contexts/AuthContext';
 import { Avatar, Badge, Button, ConfirmDialog } from '../components/ui';
 import { BrandMark } from '../components/BrandMark';
@@ -32,7 +33,13 @@ export function PortalShell({
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const openerRef = useRef<HTMLButtonElement | null>(null);
 
-  const needsVerification = user && (!user.emailVerified || !user.phoneVerified);
+  /**
+   * Phone confirmation only counts as outstanding when texts can be sent. Nagging
+   * someone to confirm a phone number on a deployment with no SMS provider is a
+   * permanent banner they can never clear — and it reads as a broken product.
+   */
+  const smsReady = useSmsReady();
+  const needsVerification = user && (!user.emailVerified || (!user.phoneVerified && smsReady === true));
   const fullName = `${user?.firstName ?? ''} ${user?.lastName ?? ''}`.trim();
 
   /**
@@ -241,7 +248,7 @@ export function PortalShell({
         {needsVerification && (
           <div className="border-b border-warning-200 bg-warning-50 px-4 py-2.5 text-center text-[13px] font-medium text-warning-800 sm:px-6">
             {!user?.emailVerified && 'Your email address is not verified. '}
-            {!user?.phoneVerified && 'Your phone number is not verified. '}
+            {!user?.phoneVerified && smsReady === true && 'Your phone number is not verified. '}
             <Link to="/verify" className="font-semibold underline">
               Verify now
             </Link>
